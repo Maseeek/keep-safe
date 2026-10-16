@@ -13,7 +13,9 @@ async function fixture() {
       if (request.headers.cookie?.includes('fixture=authenticated')) response.end('<h1>Authenticated on reload</h1>');
       else { response.setHeader('Set-Cookie', 'fixture=authenticated; HttpOnly; Path=/'); response.end('<h1>Authenticated</h1>'); }
     }
-    else response.end('<h1>Login fixture</h1><input type="password" id="password"><a href="/done">Complete sign in</a>');
+    else if (request.url === '/popup1') response.end('<h1>Popup 1</h1><input type="password" id="pop1-pass"><a href="/popup2" target="_blank">Open popup 2</a>');
+    else if (request.url === '/popup2') response.end('<h1>Popup 2</h1><input type="password" id="pop2-pass">');
+    else response.end('<h1>Login fixture</h1><input type="password" id="password"><a href="/done">Complete sign in</a><a href="/popup1" target="_blank">Open popup 1</a>');
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -36,7 +38,7 @@ it.skipIf(!installed)('disconnects from an external Chromium without closing its
   const session = await openBrowser({ url, cdpUrl: `http://127.0.0.1:${port}`, allowLocalUrls: true });
   expect((await session.frame()).width).toBeGreaterThan(0);
   await page.getByRole('link', { name: 'Complete sign in' }).click();
-  expect(session.pageUrl).toContain('/done');
+  await expect.poll(() => session.pageUrl).toContain('/done');
   await session.close();
   expect(browser.isConnected()).toBe(true);
   expect(await page.title()).toBe('');
@@ -66,4 +68,29 @@ it.skipIf(!installed)('exposes a managed incognito page for agent resumption and
   await session.close();
   await new Promise(resolve => setTimeout(resolve, 30));
   expect(agent.isConnected()).toBe(false);
+});
+
+it.skipIf(!installed)('recovers from multi-hop popups and clears passwords across touched external pages', async () => {
+  const url = await fixture();
+  const port = await unusedPort();
+  const browser = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${port}`], ...(process.env.KEEP_SAFE_CHROMIUM_PATH ? { executablePath: process.env.KEEP_SAFE_CHROMIUM_PATH } : {}) });
+  cleanup.push(() => browser.close());
+  const context = await browser.newContext(); const page0 = await context.newPage();
+  await page0.goto(url);
+  await page0.locator('#password').fill('initial-secret');
+  const session = await openBrowser({ url, cdpUrl: `http://127.0.0.1:${port}`, allowLocalUrls: true });
+  cleanup.push(() => session.close());
+  const [popup1] = await Promise.all([context.waitForEvent('page'), page0.getByRole('link', { name: 'Open popup 1' }).click()]);
+  await popup1.waitForLoadState();
+  await expect.poll(() => session.pageUrl).toContain('/popup1');
+  const [popup2] = await Promise.all([context.waitForEvent('page'), popup1.getByRole('link', { name: 'Open popup 2' }).click()]);
+  await popup2.waitForLoadState();
+  await expect.poll(() => session.pageUrl).toContain('/popup2');
+  await popup2.locator('#pop2-pass').fill('popup-secret');
+  // Close intermediate popup1 first, then popup2; session must fall back to page0.
+  await popup1.close();
+  await popup2.close();
+  await expect.poll(() => session.pageUrl).toBe(url);
+  await session.prepareHandoff!();
+  expect(await page0.locator('#password').inputValue()).toBe('');
 });

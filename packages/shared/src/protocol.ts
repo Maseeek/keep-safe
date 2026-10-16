@@ -31,6 +31,21 @@ export interface BridgeInfo {
   vapidPublicKey?: string;
 }
 
+export interface PairedDevice {
+  id: string;
+  name: string;
+  createdAt: string;
+  expiresAt: string;
+  lastSeenAt: string;
+  current?: boolean;
+}
+
+export interface DevicePairResult {
+  device: PairedDevice;
+  /** Returned once; only the digest is retained by the bridge. */
+  token: string;
+}
+
 export type ClientMessage =
   | { type: 'auth'; token: string }
   | { type: 'watch'; requestId: string }

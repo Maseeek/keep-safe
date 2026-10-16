@@ -1,11 +1,12 @@
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat, writeFile, realpath } from 'node:fs/promises';
+import { readFile, stat, realpath } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
 import type { BridgeInfo, CreateRequestInput, LoginRequest, ServerMessage } from '../../shared/src/protocol';
 import { browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
+import { atomicJsonWriter, createDeviceStore } from './devices';
 
 export interface BridgeOptions {
   ownerToken: string;
@@ -17,9 +18,11 @@ export interface BridgeOptions {
   allowLocalUrls?: boolean;
   vapid?: { publicKey: string; privateKey: string };
   subscriptionsFile?: string;
+  devicesFile?: string;
   browserFactory?: BrowserFactory;
   now?: () => number;
   expiryIntervalMs?: number;
+  inputDrainTimeoutMs?: number;
 }
 
 interface Entry {
@@ -30,8 +33,11 @@ interface Entry {
   controller?: Client;
   size?: { width: number; height: number };
   finalizing?: boolean;
+  inputBarrier?: Promise<void>;
+  draining?: Promise<void>;
 }
-interface Client { ws: WebSocket; authenticated: boolean; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>; frames?: ReturnType<typeof setInterval>; pendingFrame: boolean; operations: Promise<void>; count: number; window: number }
+interface Client { ws: WebSocket; authenticated: boolean; master?: boolean; deviceId?: string; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>; frames?: ReturnType<typeof setInterval>; pendingFrame: boolean; operations: Promise<void>; count: number; window: number }
+interface StoredSubscription extends PushSubscription { deviceId?: string }
 const terminal = new Set(['completed', 'denied', 'expired']);
 const allowedKeys = new Set(['Enter', 'Tab', 'Shift+Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space', 'ControlOrMeta+A']);
 
@@ -76,19 +82,39 @@ export async function createBridge(options: BridgeOptions) {
   const now = options.now ?? Date.now;
   const entries = new Map<string, Entry>();
   const clients = new Set<Client>();
-  const subscriptions = new Map<string, PushSubscription>();
+  const subscriptions = new Map<string, StoredSubscription>();
+  const devices = await createDeviceStore(options.devicesFile, now);
+  if (devices.prune().length) await devices.persist();
+  const subscriptionsWriter = atomicJsonWriter(options.subscriptionsFile);
+  const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
   const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl]) if (value) origins.add(new URL(value).origin);
   if (options.subscriptionsFile) {
+    let pruned = false;
     try {
       const items: unknown = JSON.parse(await readFile(options.subscriptionsFile, 'utf8'));
-      if (Array.isArray(items)) for (const item of items.slice(0, 10)) { try { const sub = pushSubscription(item); subscriptions.set(sub.endpoint, sub); } catch { /* Ignore invalid, never send to untrusted endpoints. */ } }
+      if (Array.isArray(items)) for (const item of items.slice(0, 10)) {
+        try {
+          const sub = pushSubscription(item);
+          const id: unknown = (item as Record<string, unknown>).deviceId;
+          if (id !== undefined && (typeof id !== 'string' || !devices.active(id))) { pruned = true; continue; }
+          subscriptions.set(sub.endpoint, { ...sub, ...(typeof id === 'string' ? { deviceId: id } : {}) });
+        } catch { pruned = true; /* Ignore invalid, never send to untrusted endpoints. */ }
+      }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Push subscriptions could not be loaded.'); }
+    if (pruned) await persistSubscriptions();
   }
   const list = () => [...entries.values()].map(item => ({ ...item.request })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  function send(client: Client, message: ServerMessage) { if (client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 2_000_000) client.ws.send(JSON.stringify(message)); }
+  function validClient(client: Client) {
+    if (!client.authenticated) return false;
+    if (client.master || (client.deviceId && devices.active(client.deviceId, true))) return true;
+    unwatch(client);
+    client.ws.close(4001, 'Phone pairing expired or revoked');
+    return false;
+  }
+  function send(client: Client, message: ServerMessage) { if ((!client.authenticated || validClient(client)) && client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 2_000_000) client.ws.send(JSON.stringify(message)); }
   function broadcast() { const message: ServerMessage = { type: 'requests', requests: list() }; for (const client of clients) if (client.authenticated) send(client, message); }
   function unwatch(client: Client) {
     if (client.frames) clearInterval(client.frames);
@@ -103,6 +129,12 @@ export async function createBridge(options: BridgeOptions) {
     if (browser) await browser.close().catch(() => {});
   }
   async function expire() {
+    const expiredDevices = devices.prune();
+    if (expiredDevices.length) {
+      for (const id of expiredDevices) disconnectDevice(id);
+      await devices.persist();
+      await persistSubscriptions();
+    }
     let changed = false;
     for (const entry of entries.values()) {
       if (now() < Date.parse(entry.request.expiresAt)) continue;
@@ -112,7 +144,7 @@ export async function createBridge(options: BridgeOptions) {
     if (changed) broadcast();
   }
   function checkEntry(id: string) { const entry = entries.get(id); if (!entry) throw new HttpError(404, 'Request not found.'); return entry; }
-  function active(entry: Entry, client: Client) { return !entry.finalizing && !terminal.has(entry.request.status) && now() < Date.parse(entry.request.expiresAt) && entry.controller === client && client.watching === entry.request.id && client.ws.readyState === WebSocket.OPEN; }
+  function active(entry: Entry, client: Client) { return validClient(client) && !entry.finalizing && !entry.draining && !terminal.has(entry.request.status) && now() < Date.parse(entry.request.expiresAt) && entry.controller === client && client.watching === entry.request.id && client.ws.readyState === WebSocket.OPEN; }
   async function frame(entry: Entry, client: Client) {
     if (client.pendingFrame || !entry.browser || !active(entry, client)) return;
     client.pendingFrame = true;
@@ -122,10 +154,16 @@ export async function createBridge(options: BridgeOptions) {
     } catch { if (active(entry, client)) { send(client, { type: 'error', message: 'The browser could not be displayed. Reopen the session to try again.' }); unwatch(client); } }
     finally { client.pendingFrame = false; }
   }
+  function resumeController(entry: Entry) {
+    const client = entry.controller;
+    if (!client || !entry.browser || !active(entry, client)) return;
+    if (entry.request.status !== 'active') { entry.request.status = 'active'; entry.request.updatedAt = new Date(now()).toISOString(); broadcast(); }
+    if (!client.frames) { void frame(entry, client); client.frames = setInterval(() => { void frame(entry, client); }, 250); }
+  }
   async function watch(client: Client, id: unknown) {
     if (typeof id !== 'string') throw new Error('Choose a valid request.');
     const entry = checkEntry(id);
-    if (entry.finalizing || !['approved', 'active'].includes(entry.request.status) || now() >= Date.parse(entry.request.expiresAt)) throw new Error('Approve an unexpired request before opening its browser.');
+    if (entry.finalizing || entry.draining || !['approved', 'active'].includes(entry.request.status) || now() >= Date.parse(entry.request.expiresAt)) throw new Error('Approve an unexpired request before opening its browser.');
     if (entry.controller && entry.controller !== client) throw new Error('This browser is being controlled on another device.');
     unwatch(client);
     client.watching = id;
@@ -151,12 +189,18 @@ export async function createBridge(options: BridgeOptions) {
     try { message = JSON.parse(raw.toString()) as Record<string, unknown>; if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error(); }
     catch { throw new Error('Invalid message.'); }
     if (!client.authenticated) {
-      if (message.type !== 'auth' || typeof message.token !== 'string' || !equalToken(message.token, options.ownerToken)) { client.ws.close(1008, 'Authentication required'); return; }
+      if (message.type !== 'auth' || typeof message.token !== 'string') { client.ws.close(4001, 'Authentication required'); return; }
+      const master = equalToken(message.token, options.ownerToken);
+      const device = !master && !equalToken(message.token, options.agentToken) ? devices.authenticate(message.token) : undefined;
+      if (!master && !device) { client.ws.close(4001, 'Authentication required'); return; }
       client.authenticated = true;
+      client.master = master;
+      client.deviceId = device?.id;
       clearTimeout(client.timer);
       send(client, { type: 'ready', info, requests: list() });
       return;
     }
+    if (!validClient(client)) return;
     if (message.type === 'watch') { await watch(client, message.requestId); return; }
     if (message.type === 'unwatch') { unwatch(client); return; }
     const entry = client.watching ? entries.get(client.watching) : undefined;
@@ -170,14 +214,23 @@ export async function createBridge(options: BridgeOptions) {
     } else if (message.type === 'key') {
       if (typeof message.key !== 'string' || !allowedKeys.has(message.key)) throw new Error('Unsupported key.');
     } else throw new Error('Unknown message type.');
-    await entry.browser.input(message as { type: string; [key: string]: unknown });
+    const operation = entry.browser.input(message as { type: string; [key: string]: unknown });
+    // Keep the barrier on the request as well as the socket: closing a phone must
+    // not orphan a keyboard operation that is still executing in Chromium.
+    const barrier = Promise.allSettled([entry.inputBarrier ?? Promise.resolve(), operation]).then(() => {});
+    entry.inputBarrier = barrier;
+    void barrier.then(() => { if (entry.inputBarrier === barrier) entry.inputBarrier = undefined; });
+    await operation;
   }
   const httpRates = new Map<string, { at: number; count: number }>();
-  function rate(request: IncomingMessage) {
-    const key = request.socket.remoteAddress ?? 'local';
+  function rate(request: IncomingMessage, principal?: string) {
+    // A tunnel puts callers behind one loopback address. Invalid credentials must
+    // not consume the separate buckets used by legitimate owners and agents.
+    const key = principal ?? `unauthenticated:${request.socket.remoteAddress ?? 'local'}`;
+    const limit = principal ? 300 : 60;
     const current = httpRates.get(key);
     if (!current || Date.now() - current.at > 60_000) httpRates.set(key, { at: Date.now(), count: 1 });
-    else if (++current.count > 300) throw new HttpError(429, 'Too many requests. Try again shortly.');
+    else if (++current.count > limit) throw new HttpError(429, 'Too many requests. Try again shortly.');
     if (httpRates.size > 100) for (const [address, entry] of httpRates) if (Date.now() - entry.at > 60_000) httpRates.delete(address);
   }
   function json(response: ServerResponse, status: number, data: unknown) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(data)); }
@@ -185,10 +238,15 @@ export async function createBridge(options: BridgeOptions) {
     if (!options.vapid) return;
     const target = `${options.appUrl ?? options.publicUrl ?? 'http://localhost:4318'}/?request=${encodeURIComponent(request.id)}`;
     await Promise.all([...subscriptions.values()].map(async subscription => {
+      if (subscription.deviceId && !devices.active(subscription.deviceId)) return;
       try {
         await webpush.sendNotification(subscription, JSON.stringify({ title: 'An agent needs your help', body: `${request.agent}: ${request.title}`, requestId: request.id, url: target }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000 });
       } catch (error) { if ([404, 410].includes((error as { statusCode?: number }).statusCode ?? 0)) subscriptions.delete(subscription.endpoint); }
     }));
+  }
+  function disconnectDevice(id: string) {
+    for (const client of clients) if (client.deviceId === id) { unwatch(client); client.ws.close(4001, 'Phone pairing expired or revoked'); }
+    for (const [endpoint, subscription] of subscriptions) if (subscription.deviceId === id) subscriptions.delete(endpoint);
   }
   const server = createServer((request, response) => { void (async () => {
     response.setHeader('Cache-Control', 'no-store');
@@ -205,7 +263,9 @@ export async function createBridge(options: BridgeOptions) {
     if (!url.pathname.startsWith('/api/')) {
       if (request.method !== 'GET' || !options.staticDir) throw new HttpError(404, 'Not found.');
       const root = resolve(options.staticDir);
-      const candidate = resolve(root, `.${decodeURIComponent(url.pathname)}`);
+      let pathname: string;
+      try { pathname = decodeURIComponent(url.pathname); } catch { throw new HttpError(400, 'Malformed URL path.'); }
+      const candidate = resolve(root, `.${pathname}`);
       if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) throw new HttpError(404, 'Not found.');
       let file = candidate;
       try { if (!(await stat(file)).isFile()) file = resolve(root, 'index.html'); } catch { file = resolve(root, 'index.html'); }
@@ -220,12 +280,32 @@ export async function createBridge(options: BridgeOptions) {
       response.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
       response.end(content); return;
     }
-    rate(request);
     const token = authorization(request);
-    const owner = equalToken(token, options.ownerToken);
+    const master = equalToken(token, options.ownerToken);
     const agent = equalToken(token, options.agentToken);
+    const device = !master && !agent ? devices.authenticate(token) : undefined;
+    const owner = master || !!device;
+    rate(request, master ? 'owner:master' : agent ? 'agent' : device ? `owner:${device.id}` : undefined);
     if (!owner && !agent) throw new HttpError(401, 'A valid bridge token is required.');
+    const requireOwner = () => { if (!owner) throw new HttpError(403, 'Owner access is required.'); if (!master && (!device || !devices.active(device.id, true))) throw new HttpError(401, 'Phone pairing expired or revoked.'); };
     await expire();
+    if (owner) requireOwner();
+    if (url.pathname === '/api/devices' && request.method === 'GET') { requireOwner(); json(response, 200, { devices: devices.list(device?.id) }); return; }
+    if (url.pathname === '/api/devices' && request.method === 'POST') {
+      if (!master) throw new HttpError(403, 'Use the original private pairing link to pair a new phone.');
+      const body = await jsonBody(request);
+      const name = safeText(body.name, 'Device name', 80);
+      if (devices.list().length >= 10) throw new HttpError(429, 'Ten phones are already paired. Revoke a phone before pairing another.');
+      json(response, 201, await devices.pair(name)); return;
+    }
+    const revoke = /^\/api\/devices\/([a-f0-9-]{36})\/revoke$/.exec(url.pathname);
+    if (revoke && request.method === 'POST') {
+      requireOwner();
+      if (!devices.remove(revoke[1])) throw new HttpError(404, 'Paired phone not found.');
+      disconnectDevice(revoke[1]);
+      await devices.persist(); await persistSubscriptions();
+      json(response, 200, { ok: true }); return;
+    }
     if (url.pathname === '/api/info' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, info); return; }
     if (url.pathname === '/api/requests' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, { requests: list() }); return; }
     if (url.pathname === '/api/requests' && request.method === 'POST') {
@@ -260,12 +340,33 @@ export async function createBridge(options: BridgeOptions) {
       if (action === 'complete' && !['approved', 'active'].includes(entry.request.status)) throw new HttpError(409, 'Approve this request before completing it.');
       if (action === 'complete') {
         entry.finalizing = true;
-        if (entry.controller) unwatch(entry.controller);
+        let prepared = false;
+        const controller = entry.controller;
+        const pending = [entry.draining, entry.inputBarrier, controller?.operations].filter((operation): operation is Promise<void> => !!operation);
+        if (pending.length) {
+          const drain = Promise.allSettled(pending).then(() => {});
+          entry.draining = drain;
+          void drain.then(() => { if (entry.draining === drain) { entry.draining = undefined; resumeController(entry); } });
+        }
         try {
+          if (entry.draining) {
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([entry.draining, new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new HttpError(504, 'Browser input is still finishing. Retry completion in a moment.')), options.inputDrainTimeoutMs ?? 10_000); })]);
+            } finally { clearTimeout(timeout); }
+          }
           if (entry.opening) entry.browser = await entry.opening;
-          await entry.browser?.prepareHandoff?.();
+          if (now() >= Date.parse(entry.request.expiresAt) || entry.request.status === 'expired') { await expire(); throw new HttpError(409, 'This request has expired.'); }
+          if (!entry.browser) throw new HttpError(409, 'Open the browser session before completing the handoff.');
+          await entry.browser.prepareHandoff?.();
+          requireOwner();
           if (now() >= Date.parse(entry.request.expiresAt)) { await expire(); throw new HttpError(409, 'This request has expired.'); }
-        } finally { entry.finalizing = false; }
+          prepared = true;
+        } catch (error) {
+          if (now() >= Date.parse(entry.request.expiresAt) || entry.request.status === 'expired') { await expire(); throw new HttpError(409, 'This request has expired.'); }
+          if (error instanceof HttpError) throw error;
+          throw new HttpError(502, 'The browser could not finish preparing the handoff. Reopen the session and try again.');
+        } finally { entry.finalizing = false; if (!prepared) resumeController(entry); }
       }
       entry.request.status = action === 'approve' ? 'approved' : action === 'deny' ? 'denied' : 'completed';
       entry.request.updatedAt = new Date(now()).toISOString();
@@ -277,9 +378,10 @@ export async function createBridge(options: BridgeOptions) {
       if (!owner) throw new HttpError(403, 'Owner access is required.');
       if (!options.vapid) throw new HttpError(409, 'Push is unavailable on this bridge.');
       const subscription = pushSubscription(await jsonBody(request));
+      requireOwner();
       if (subscriptions.size >= 10 && !subscriptions.has(subscription.endpoint)) throw new HttpError(429, 'Too many notification devices.');
-      subscriptions.set(subscription.endpoint, subscription);
-      if (options.subscriptionsFile) await writeFile(options.subscriptionsFile, JSON.stringify([...subscriptions.values()]), { mode: 0o600 });
+      subscriptions.set(subscription.endpoint, { ...subscription, ...(device ? { deviceId: device.id } : {}) });
+      await persistSubscriptions();
       json(response, 200, { ok: true }); return;
     }
     throw new HttpError(404, 'Not found.');
@@ -294,18 +396,18 @@ export async function createBridge(options: BridgeOptions) {
   sockets.on('connection', ws => {
     const client: Client = { ws, authenticated: false, alive: true, pendingFrame: false, operations: Promise.resolve(), count: 0, window: Date.now() };
     clients.add(client);
-    client.timer = setTimeout(() => ws.close(1008, 'Authentication timeout'), 5000);
+    client.timer = setTimeout(() => ws.close(4001, 'Authentication timeout'), 5000);
     ws.on('pong', () => { client.alive = true; });
     ws.on('message', raw => {
       // Limit at receipt, before queuing slow browser operations, to bound queued input memory.
       if (Date.now() - client.window > 1000) { client.window = Date.now(); client.count = 0; }
-      if (++client.count > 60) { ws.close(1008, 'Input rate exceeded'); return; }
+      if (++client.count > 60) { ws.close(4029, 'Input rate exceeded'); return; }
       client.operations = client.operations.then(() => handleMessage(client, Buffer.from(raw as Buffer))).catch(() => send(client, { type: 'error', message: 'The requested action was not accepted. Check that the session is still active.' }));
     });
     ws.on('close', () => { clearTimeout(client.timer); unwatch(client); clients.delete(client); });
     ws.on('error', () => { /* Socket closes without logging input or credentials. */ });
   });
-  const expiryTimer = setInterval(() => { void expire(); }, options.expiryIntervalMs ?? 1000);
+  const expiryTimer = setInterval(() => { void expire().catch(() => {}); }, options.expiryIntervalMs ?? 1000);
   expiryTimer.unref();
   const heartbeat = setInterval(() => { for (const client of clients) { if (!client.alive) client.ws.terminate(); else { client.alive = false; client.ws.ping(); } } }, 30_000);
   heartbeat.unref();
@@ -323,6 +425,8 @@ export async function createBridge(options: BridgeOptions) {
       await new Promise<void>(resolve => sockets.close(() => resolve()));
       await new Promise<void>(resolve => server.close(() => resolve()));
       server.closeAllConnections();
+      await devices.close();
+      await subscriptionsWriter.flush();
     },
   };
 }

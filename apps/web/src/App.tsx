@@ -32,6 +32,7 @@ import {
 import type { LoginRequest } from "../../../packages/shared/src/protocol";
 import { AgentMark, BrowserPanel, domain, timeLeft } from "./BrowserPanel";
 import { useWorkspace, validateConnection, type Workspace } from "./workspace";
+import { DeviceManager } from "./DeviceManager";
 
 type Section = "inbox" | "activity" | "devices" | "settings";
 type Filter = "all" | "pending" | "active";
@@ -155,14 +156,22 @@ function ConnectDialog({
   const [url, setUrl] = useState(workspace.connection?.url || "");
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [deviceName, setDeviceName] = useState("My phone");
+  const [submitting, setSubmitting] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    setSubmitting(true);
+    setError("");
     try {
-      workspace.connect(validateConnection(url, token));
+      await workspace.connect(validateConnection(url, token), {
+        remember,
+        name: deviceName,
+      });
       setToken("");
       onClose();
     } catch (reason) {
@@ -171,21 +180,36 @@ function ConnectDialog({
           ? reason.message
           : "Check your connection details.",
       );
+    } finally {
+      setSubmitting(false);
     }
   };
   return (
     <dialog
       ref={dialog}
       className="connect-dialog"
-      onCancel={onClose}
+      onCancel={(event) => {
+        if (submitting) event.preventDefault();
+        else onClose();
+      }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (
+          !submitting &&
+          event.target === event.currentTarget &&
+          (event.clientX < bounds.left ||
+            event.clientX > bounds.right ||
+            event.clientY < bounds.top ||
+            event.clientY > bounds.bottom)
+        )
+          onClose();
       }}
       aria-labelledby="connect-title"
     >
       <button
         className="icon-button dialog-close"
         onClick={onClose}
+        disabled={submitting}
         aria-label="Close connection dialog"
       >
         <X size={20} />
@@ -228,6 +252,35 @@ function ConnectDialog({
           onChange={(event) => setToken(event.target.value)}
           required
         />
+        <label className="remember-choice">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(event) => setRemember(event.target.checked)}
+            disabled={submitting}
+          />
+          <span>
+            <strong>Remember this phone for 7 days</strong>
+            <small>
+              A separate, revocable device key is saved on this phone. Your
+              owner token is never saved across sessions.
+            </small>
+          </span>
+        </label>
+        {remember ? (
+          <>
+            <label htmlFor="pair-device-name">Device name</label>
+            <input
+              id="pair-device-name"
+              value={deviceName}
+              onChange={(event) => setDeviceName(event.target.value)}
+              maxLength={60}
+              placeholder="My phone"
+              disabled={submitting}
+              required
+            />
+          </>
+        ) : null}
         {error ? (
           <p className="form-error" role="alert">
             {error}
@@ -236,12 +289,20 @@ function ConnectDialog({
         <div className="pairing-note">
           <LockKeyhole size={15} />
           <span>
-            The token is held for this browser tab. Use HTTPS when connecting
-            from your phone.
+            {remember
+              ? "Remember only on a phone you trust. You can revoke its access from Connections."
+              : "This pairing lasts for this browser tab only. Close the tab to end it."}{" "}
+            Use HTTPS when connecting from your phone.
           </span>
         </div>
-        <button className="button button-dark" type="submit">
-          Connect securely <ArrowRight size={17} />
+        <button
+          className="button button-dark"
+          type="submit"
+          disabled={submitting}
+        >
+          {submitting ? <LoaderCircle size={16} className="spin" /> : null}
+          {submitting ? "Pairing your phone…" : "Connect securely"}{" "}
+          <ArrowRight size={17} />
         </button>
       </form>
       <a
@@ -289,6 +350,10 @@ export function App() {
   const [now, setNow] = useState(Date.now);
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [mobileLayout, setMobileLayout] = useState(
+    () => window.matchMedia("(max-width: 760px)").matches,
+  );
+  const detailSection = useRef<HTMLDivElement>(null);
   const notify = useCallback((message: string) => setToast(message), []);
   const workspace = useWorkspace(notify);
   const isDemo = !workspace.connection;
@@ -315,6 +380,73 @@ export function App() {
   const selected =
     workspace.requests.find((request) => request.id === selectedId) ||
     filtered[0];
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setMobileLayout(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (!mobileLayout || !selectedId || section !== "inbox") return;
+    const returnFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    detailSection.current?.scrollTo({ top: 0 });
+    detailSection.current?.focus({ preventScroll: true });
+    const keys = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || document.querySelector("dialog[open]"))
+        return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSelectedId(null);
+      }
+      if (event.key === "Tab") {
+        const targets = Array.from(
+          detailSection.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]',
+          ) || [],
+        ).filter((element) => element.getClientRects().length);
+        const first = targets[0];
+        const last = targets.at(-1);
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            document.activeElement === detailSection.current)
+        ) {
+          event.preventDefault();
+          last?.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            document.activeElement === detailSection.current)
+        ) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", keys);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", keys);
+      returnFocus?.focus({ preventScroll: true });
+    };
+  }, [mobileLayout, selectedId, section]);
+  useEffect(() => {
+    if (
+      mobileLayout &&
+      selectedId &&
+      selected &&
+      ["completed", "denied", "expired"].includes(selected.status)
+    ) {
+      detailSection.current?.scrollTo({ top: 0 });
+      detailSection.current?.focus({ preventScroll: true });
+    }
+  }, [mobileLayout, selectedId, selected?.status]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -598,6 +730,25 @@ export function App() {
           </div>
         </header>
         <div className="page-content">
+          {workspace.pairingNotice ? (
+            <div className="pairing-expired-notice" role="status">
+              <ShieldCheck size={18} />
+              <p>{workspace.pairingNotice}</p>
+              <button
+                className="text-link"
+                onClick={() => setConnectOpen(true)}
+              >
+                Pair again <ArrowRight size={13} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label="Dismiss pairing notice"
+                onClick={workspace.dismissPairingNotice}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ) : null}
           {isDemo ? (
             <div className="demo-banner">
               <span className="demo-badge">DEMO</span>
@@ -799,7 +950,16 @@ export function App() {
                     Only you can approve these requests.
                   </p>
                 </section>
-                <div className="detail-section">
+                <div
+                  className="detail-section"
+                  ref={detailSection}
+                  tabIndex={-1}
+                  role={mobileLayout && selectedId ? "dialog" : undefined}
+                  aria-modal={mobileLayout && selectedId ? true : undefined}
+                  aria-label={
+                    mobileLayout && selectedId ? "Browser request" : undefined
+                  }
+                >
                   {selected ? (
                     <BrowserPanel
                       request={selected}
@@ -940,6 +1100,7 @@ export function App() {
                 </div>
                 <OnboardingArt />
               </div>
+              <DeviceManager workspace={workspace} notify={notify} />
               <div className="setup-grid">
                 <section className="content-card device-card">
                   <div className="section-title">
@@ -978,7 +1139,7 @@ export function App() {
                     {isDemo ? "Connect your computer" : "Update pairing"}
                     <ArrowRight size={16} />
                   </button>
-                  {!isDemo ? (
+                  {!isDemo && !workspace.connection?.device ? (
                     <button
                       className="text-link disconnect-link"
                       onClick={() => {
@@ -990,7 +1151,7 @@ export function App() {
                       }}
                     >
                       <Unplug size={14} />
-                      Disconnect this phone
+                      Disconnect this tab
                     </button>
                   ) : null}
                 </section>
@@ -1204,7 +1365,8 @@ export function App() {
                   <p>
                     Built for the moments your agents need a human.
                     <br />
-                    Early access. Private repository, with open source planned.
+                    Early access. The repository is private while we develop the
+                    app.
                   </p>
                   <a
                     className="button button-light button-small"

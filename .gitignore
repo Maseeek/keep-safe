@@ -8,5 +8,7 @@ playwright-report/
 .env.*
 !.env.example
 .keep-safe/
+.agents/mcp_config.json
+.mcp.json
 *.log
 .DS_Store

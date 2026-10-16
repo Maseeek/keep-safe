@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pretest": "npm run build:web"
+    "pretest": "npm run build:web",
+    "agent:config": "tsx scripts/agent-config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

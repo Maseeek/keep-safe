@@ -29,3 +29,22 @@
 - GitHub CI run `38914352494` completed successfully for that commit.
 - Added the production URL to the GitHub repository website field and README.
 - Next iteration targets opt-in persistent phone pairing with expiring, revocable device tokens.
+
+- The next Claude-based independent review could not run because its provider reported an allowance limit. No review result was inferred from that response; a fresh Gemini review was started instead.
+
+## Iteration: remembered phones, agent setup, and security review fixes
+
+- Added explicit opt-in seven-day phone pairing with separately issued keys. Only key digests are retained by the bridge. The master owner key remains tab-only.
+- Added device listing, expiry, revocation, local forgetting, and device-owned Web Push cleanup. Tests cover reconnect after bridge/browser restart and stopping live control after revocation/expiry.
+- Fixed a mobile button-overlap defect found by the UI test. Moved phone access above setup instructions for connected users.
+- Improved mobile request focus, background scroll locking, Escape/back behavior, and completion position.
+- Added a configuration generator for Codex, Claude, Antigravity, and generic MCP clients. It prints paths without reading credentials or modifying personal config.
+- Verified the generated configuration launches a real stdio MCP process from another working directory.
+- Completed the independent Gemini release security review (`d1cd8bea`) and implemented all findings:
+  - Hardened outbound proxy socket error handling on `CONNECT` and HTTP requests, plus IPv6 transition range blocks (`2002::/16`, `2001::/32`, `100::/64`, `::ffff:0:0:0/96`).
+  - Drained in-flight owner input before `prepareHandoff()`, required an open browser session before completion, and kept unexpired sessions usable if handoff cleanup fails.
+  - Separated pre-auth rate limiting from authenticated owner/agent buckets so unauthenticated tunnel traffic cannot starve legitimate requests.
+  - Replaced single-previous popup tracking with a full session page stack and cleared password inputs across all touched pages on external CDP sessions.
+  - Distinguished WebSocket authentication failure close codes (`4001`) from rate limits (`4029`), throttled rapid wheel scrolling, and clamped tap coordinates.
+- Linked the project in T3 Code with launch scripts (`Start local bridge`, `Open live app`, `Run tests`), opened the inline preview tab, and registered the local `keep-safe` MCP server in Antigravity, Codex, and Claude configs.
+- Typecheck, production frontend build, and all 49 tests pass across 11 test files.

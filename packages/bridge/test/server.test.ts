@@ -89,9 +89,128 @@ describe('bridge authorization and validation', () => {
       expect(response.status).toBe(400);
     }
   });
+
+  it('keeps invalid credentials in a separate rate bucket from authenticated owners and agents', async () => {
+    const bridge = await start();
+    const statuses: number[] = [];
+    for (let index = 0; index < 305; index += 25) {
+      const batch = await Promise.all(Array.from({ length: Math.min(25, 305 - index) }, () => bridge.request('/api/info', 'invalid-token')));
+      statuses.push(...batch.map(response => response.status));
+    }
+    expect(statuses).toContain(401); expect(statuses).toContain(429);
+    expect((await bridge.request('/api/requests')).status).toBe(200);
+    expect((await bridge.create()).status).toBe('pending');
+  });
 });
 
 describe('live browser lifecycle', () => {
+  it('cannot complete an approved request until its browser session has been opened', async () => {
+    const bridge = await start(); const item = await bridge.create();
+    await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+    const response = await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST');
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toBe('Open the browser session before completing the handoff.');
+    const detail = await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json();
+    expect(detail.status).toBe('approved'); expect(detail.browser).toBeUndefined();
+    expect(bridge.opened).toBe(0);
+  });
+
+  it('keeps an unexpired owner session usable when handoff cleanup fails', async () => {
+    let preparations = 0; let inputs = 0;
+    const bridge = await start({ browserFactory: async () => ({
+      cdpUrl: 'http://127.0.0.1:9333', frame: async () => ({ data: 'aW1hZ2U=', width: 390, height: 720, url: 'https://example.com/login' }),
+      input: async () => { inputs++; }, prepareHandoff: async () => { if (++preparations === 1) throw new Error('Synthetic cleanup failure'); }, close: async () => {},
+    }) });
+    const item = await bridge.create(); await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+    const phone = await socket(bridge.url); await phone.auth(); phone.send({ type: 'watch', requestId: item.id }); await phone.next('frame');
+    expect((await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST')).status).toBe(502);
+    const waiting = await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json();
+    expect(waiting.status).toBe('active'); expect(waiting.browser).toBeUndefined();
+    phone.messages.length = 0; await phone.next('frame');
+    phone.send({ type: 'key', key: 'Enter' }); await expect.poll(() => inputs).toBe(1);
+    phone.send({ type: 'watch', requestId: item.id }); await phone.next('frame');
+    expect((await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST')).status).toBe(200);
+    expect((await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json()).browser).toBeDefined();
+  });
+
+  it('reports an expiry during handoff cleanup as a conflict and never exposes CDP', async () => {
+    let clock = Date.now(); let release!: () => void; let preparing!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; }); const started = new Promise<void>(resolve => { preparing = resolve; });
+    const bridge = await start({ now: () => clock, expiryIntervalMs: 10, browserFactory: async () => ({
+      cdpUrl: 'http://127.0.0.1:9333', frame: async () => ({ data: 'aW1hZ2U=', width: 390, height: 720, url: 'https://example.com/login' }),
+      input: async () => {}, prepareHandoff: async () => { preparing(); await gate; throw new Error('Synthetic closed page'); }, close: async () => { release(); },
+    }) });
+    try {
+      const item = await bridge.create({ agent: 'Agent', title: 'Login', url: 'https://example.com', ttlSeconds: 2 });
+      await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+      const phone = await socket(bridge.url); await phone.auth(); phone.send({ type: 'watch', requestId: item.id }); await phone.next('frame');
+      const completion = bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST');
+      await started; clock += 2001;
+      const response = await completion; expect(response.status).toBe(409);
+      expect((await response.json()).error).toBe('This request has expired.');
+      const detail = await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json();
+      expect(detail.status).toBe('expired'); expect(detail.browser).toBeUndefined();
+    } finally { release(); }
+  });
+
+  it.each([false, true])('drains in-flight input before clearing passwords and exposing CDP (phone disconnected: %s)', async disconnect => {
+    let releaseInput!: () => void; let inputStarted!: () => void;
+    const inputGate = new Promise<void>(resolve => { releaseInput = resolve; });
+    const started = new Promise<void>(resolve => { inputStarted = resolve; });
+    const events: string[] = []; let password = ''; let completed = false;
+    const bridge = await start({ browserFactory: async () => ({
+      cdpUrl: 'http://127.0.0.1:9333',
+      frame: async () => ({ data: 'aW1hZ2U=', width: 390, height: 720, url: 'https://example.com/login' }),
+      input: async () => { events.push('input started'); inputStarted(); await inputGate; password = 'synthetic-secret'; events.push('input finished'); },
+      prepareHandoff: async () => { password = ''; events.push('password cleared'); },
+      close: async () => { releaseInput(); },
+    }) });
+    try {
+      const item = await bridge.create();
+      await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+      const phone = await socket(bridge.url); await phone.auth();
+      phone.send({ type: 'watch', requestId: item.id }); await phone.next('frame');
+      phone.send({ type: 'text', text: 'synthetic-secret' }); await started;
+      if (disconnect) { const closed = new Promise(resolve => phone.ws.once('close', resolve)); phone.ws.close(); await closed; }
+      const completion = bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST').then(response => { completed = true; return response; });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(completed).toBe(false);
+      expect(events).toEqual(['input started']);
+      const waiting = await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json();
+      expect(waiting.status).toBe('active'); expect(waiting.browser).toBeUndefined();
+      releaseInput();
+      expect((await completion).status).toBe(200);
+      expect(events).toEqual(['input started', 'input finished', 'password cleared']);
+      expect(password).toBe('');
+      const resumed = await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json();
+      expect(resumed.status).toBe('completed'); expect(resumed.browser.cdpUrl).toBe('http://127.0.0.1:9333');
+    } finally { releaseInput(); }
+  });
+
+  it('keeps the input barrier after a handoff timeout so retry cannot bypass a pending keyboard operation', async () => {
+    let releaseInput!: () => void; let inputStarted!: () => void; let prepared = 0;
+    const gate = new Promise<void>(resolve => { releaseInput = resolve; });
+    const started = new Promise<void>(resolve => { inputStarted = resolve; });
+    const bridge = await start({ inputDrainTimeoutMs: 20, browserFactory: async () => ({
+      cdpUrl: 'http://127.0.0.1:9333', frame: async () => ({ data: 'aW1hZ2U=', width: 390, height: 720, url: 'https://example.com/login' }),
+      input: async () => { inputStarted(); await gate; }, prepareHandoff: async () => { prepared++; }, close: async () => { releaseInput(); },
+    }) });
+    try {
+      const item = await bridge.create(); await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+      const phone = await socket(bridge.url); await phone.auth(); phone.send({ type: 'watch', requestId: item.id }); await phone.next('frame');
+      phone.send({ type: 'text', text: 'synthetic-secret' }); await started;
+      expect((await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST')).status).toBe(504);
+      expect((await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST')).status).toBe(504);
+      expect(prepared).toBe(0);
+      const detail = await (await bridge.request(`/api/requests/${item.id}`, agentToken)).json();
+      expect(detail.status).toBe('active'); expect(detail.browser).toBeUndefined();
+      const second = await socket(bridge.url); await second.auth(); second.send({ type: 'watch', requestId: item.id }); await second.next('error');
+      releaseInput();
+      expect((await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST')).status).toBe(200);
+      expect(prepared).toBe(1);
+    } finally { releaseInput(); }
+  });
+
   it('requires approval, streams current URL, hands browser to agent and revokes mobile input', async () => {
     const bridge = await start();
     const item = await bridge.create();
@@ -199,11 +318,20 @@ describe('live browser lifecycle', () => {
       const phone = await socket(bridge.url);
       const closed = new Promise<number>(resolve => phone.ws.once('close', code => resolve(code)));
       phone.send(message);
-      expect(await closed).toBe(1008);
+      expect(await closed).toBe(4001);
     }
     const badOrigin = new WebSocket(bridge.url.replace('http:', 'ws:') + '/ws', { origin: 'https://evil.example' });
     const error = await new Promise<Error>(resolve => badOrigin.once('error', resolve));
     expect(error.message).toContain('403');
+  });
+
+  it('uses a temporary rate-limit close code without invalidating owner credentials', async () => {
+    const bridge = await start(); const phone = await socket(bridge.url); await phone.auth();
+    const closed = new Promise<number>(resolve => phone.ws.once('close', code => resolve(code)));
+    for (let index = 0; index < 65; index++) phone.send({ type: 'unwatch' });
+    expect(await closed).toBe(4029);
+    const reconnected = await socket(bridge.url); await reconnected.auth();
+    expect((await bridge.request('/api/info')).status).toBe(200);
   });
 });
 
@@ -221,6 +349,7 @@ it('serves the frontend with a CSP and refuses symlinks outside its directory', 
   const outside = await bridge.request('/private.json', '');
   expect(outside.status).toBe(404);
   expect(await outside.text()).not.toContain('private data');
+  expect((await bridge.request('/%E0%A4%A', '')).status).toBe(400);
 });
 
 it('persists separate random pairing keys in owner-only local files', async () => {

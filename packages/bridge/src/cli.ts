@@ -35,6 +35,7 @@ async function main() {
   const bridge = await createBridge({
     ...config, port, appUrl, publicUrl,
     subscriptionsFile: join(configDirectory, 'subscriptions.json'),
+    devicesFile: join(configDirectory, 'devices.json'),
     staticDir: flags.has('--no-static') ? undefined : resolve(values.get('--static-dir') ?? 'apps/web/dist'),
     allowLocalUrls: flags.has('--allow-local-urls'),
   });

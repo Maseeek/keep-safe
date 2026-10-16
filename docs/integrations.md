@@ -28,6 +28,36 @@ This is the common JSON configuration shape, not a promise that every client use
 
 The server loads the separate agent token from the private local configuration. It never receives the owner pairing token. For a remote bridge, set `KEEP_SAFE_BRIDGE_URL` to its HTTPS origin and provide `KEEP_SAFE_AGENT_TOKEN` through the client's private environment configuration. Do not paste a real token into tracked examples or a prompt.
 
+## Generate the configuration for your checkout
+
+Run one of these commands from the repository. They print a snippet with the correct absolute paths and do not edit client configuration or read tokens:
+
+```bash
+npm run --silent agent:config -- codex
+npm run --silent agent:config -- claude
+npm run --silent agent:config -- antigravity
+```
+
+Start the bridge first. The MCP process reads its separate agent token from the local configuration directory, so the snippet contains no credential.
+
+### Codex
+
+Use the generated TOML in the Codex configuration for the account/environment running the agent. It includes a 150-second tool timeout so an explicitly bounded login wait can finish. Confirm `keep_safe` is available in the client's MCP list. See [official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+### Claude Code
+
+Merge the generated JSON into the project's `.mcp.json` or use Claude's stdio registration mechanism with the generated command, arguments and environment. Do not replace unrelated server entries. See [Claude Code MCP configuration](https://code.claude.com/docs/en/mcp).
+
+### Antigravity
+
+Merge the generated JSON into the active `mcp_config.json`, using its MCP manager or raw configuration view. The documented global location is `~/.gemini/config/mcp_config.json` and workspace location is `.agents/mcp_config.json`. See [Antigravity MCP documentation](https://antigravity.google/docs/mcp).
+
+### T3 Code
+
+T3 Code runs a selected provider on an environment. Configure Keep Safe in that provider's supported MCP configuration, then verify the tools appear in a fresh agent session. T3-managed runtime behavior can differ from the standalone IDE or CLI; do not assume a config file is loaded until the tool list proves it. See T3's [Codex provider](https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-codex.md) and [Antigravity provider](https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-antigravity.md) guides.
+
+T3's own environment MCP URL is a different service. Do not point Keep Safe at it as a browser debugging endpoint. Keep Safe's local bridge exposes REST and owner WebSockets, while its current agent MCP transport is stdio.
+
 ### Tools
 
 - `request_login`: create a time-limited request with `agent`, `title`, `url`, optional `reason`, `cdp_url`, and `ttl_seconds`.
@@ -50,10 +80,11 @@ Cookies remain in memory on the developer's computer. The managed browser is clo
 
 ## HTTP API
 
-All API requests except `/api/health` require `Authorization: Bearer <token>`. Tokens must not be put in URL queries.
+All API requests except `/api/health` require `Authorization: Bearer <token>`. Tokens must not be put in URL queries. A remembered phone key can use owner routes, but cannot create agent requests or pair another phone.
 
 - Agent token: `POST /api/requests` with JSON matching `CreateRequestInput`; `GET /api/requests/:id` to poll the result.
 - Owner token: `GET /api/info`, `GET /api/requests`, `POST /api/requests/:id/approve`, `/deny`, or `/complete`.
+- Paired phone management: `GET /api/devices`, `POST /api/devices/:id/revoke`; bootstrap owner token only: `POST /api/devices` with a device name, which returns a new seven-day key once.
 - Owner push subscription: `POST /api/push/subscribe`.
 - Owner live control: WebSocket `/ws`, first message `{"type":"auth","token":"<owner token>"}`, followed by `watch` and bounded input messages.
 

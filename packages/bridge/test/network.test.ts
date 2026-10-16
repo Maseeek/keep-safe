@@ -7,7 +7,7 @@ const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
 it('rejects DNS answers resolving to private, reserved, or mixed network addresses', async () => {
-  for (const address of ['127.0.0.1', '10.1.2.3', '192.168.1.5', '169.254.169.254', '100.64.0.1', '::1', '::ffff:127.0.0.1', 'fd00::1', 'fe80::1', '64:ff9b::7f00:1']) {
+  for (const address of ['127.0.0.1', '10.1.2.3', '192.168.1.5', '169.254.169.254', '100.64.0.1', '::1', '::ffff:127.0.0.1', '::ffff:0:127.0.0.1', 'fd00::1', 'fe80::1', '64:ff9b::7f00:1', '100::1', '2001::1', '2002:7f00:1::']) {
     expect(publicAddress(address), address).toBe(false);
     await expect(resolveDestination('looks-public.example', false, async () => [{ address, family: address.includes(':') ? 6 : 4 }])).rejects.toThrow();
   }
@@ -30,6 +30,19 @@ it('blocks private DNS at the proxy CONNECT boundary', async () => {
     socket.on('data', part => data.push(part)); socket.once('end', () => resolve(Buffer.concat(data).toString())); socket.once('error', reject);
   });
   expect(response).toContain('403 Forbidden');
+});
+
+it('survives client socket resets during slow DNS resolution on CONNECT', async () => {
+  const proxy = await createOutboundProxy(false, () => new Promise(resolve => setTimeout(() => resolve([{ address: '93.184.216.34', family: 4 }]), 80)));
+  cleanup.push(() => proxy.close());
+  const endpoint = new URL(proxy.url);
+  await new Promise<void>(resolve => {
+    const socket = connect(Number(endpoint.port), endpoint.hostname, () => {
+      socket.write('CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n');
+      socket.resetAndDestroy();
+      setTimeout(resolve, 120);
+    });
+  });
 });
 
 it('only proxies explicit local HTTP websites when development mode is enabled', async () => {

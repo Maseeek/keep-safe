@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BridgeInfo,
   ClientMessage,
+  DevicePairResult,
   LoginRequest,
+  PairedDevice,
   ServerMessage,
 } from "../../../packages/shared/src/protocol";
 
 export interface Connection {
   url: string;
   token: string;
+  device?: PairedDevice;
 }
 export interface BrowserFrame {
   requestId: string;
@@ -25,6 +28,17 @@ export type ConnectionStatus =
   | "error";
 
 const storageKey = "keep-safe.connection.v1";
+const deviceStorageKey = "keep-safe.device.v1";
+const noticeKey = "keep-safe.notice.v1";
+
+export class BridgeError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
 
 export function validateConnection(url: string, token: string): Connection {
   let parsed: URL;
@@ -53,7 +67,64 @@ export function validateConnection(url: string, token: string): Connection {
   return { url: parsed.origin, token: token.trim() };
 }
 
-function initialConnection(): Connection | null {
+function clearPairingStorage() {
+  try {
+    sessionStorage.removeItem(storageKey);
+  } catch {
+    /* Storage may be unavailable. */
+  }
+  try {
+    localStorage.removeItem(deviceStorageKey);
+  } catch {
+    /* Storage may be unavailable. */
+  }
+}
+
+function storeNotice(message: string) {
+  try {
+    if (message) sessionStorage.setItem(noticeKey, message);
+    else sessionStorage.removeItem(noticeKey);
+  } catch {
+    /* Storage may be unavailable. */
+  }
+}
+
+function readStoredNotice(): string {
+  try {
+    return sessionStorage.getItem(noticeKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+function parseDevice(value: unknown): PairedDevice | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(candidate.expiresAt))
+  ) {
+    return undefined;
+  }
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    createdAt:
+      typeof candidate.createdAt === "string"
+        ? candidate.createdAt
+        : candidate.expiresAt,
+    expiresAt: candidate.expiresAt,
+    lastSeenAt:
+      typeof candidate.lastSeenAt === "string"
+        ? candidate.lastSeenAt
+        : candidate.expiresAt,
+    current: true,
+  };
+}
+
+function initialState(): { connection: Connection | null; notice: string } {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const url = params.get("bridge");
   const token = params.get("token");
@@ -71,19 +142,66 @@ function initialConnection(): Connection | null {
       } catch {
         /* Memory-only if storage is unavailable. */
       }
-      return connection;
+      storeNotice("");
+      return { connection, notice: "" };
     } catch {
-      return null;
+      return { connection: null, notice: "" };
     }
   }
   try {
     const saved = sessionStorage.getItem(storageKey);
-    if (!saved) return null;
-    const value = JSON.parse(saved) as Connection;
-    return validateConnection(value.url, value.token);
+    if (saved) {
+      const value = JSON.parse(saved) as Connection & { device?: unknown };
+      const device = parseDevice(value.device);
+      if (!device || Date.parse(device.expiresAt) > Date.now()) {
+        return {
+          connection: {
+            ...validateConnection(value.url, value.token),
+            ...(device ? { device } : {}),
+          },
+          notice: readStoredNotice(),
+        };
+      }
+      sessionStorage.removeItem(storageKey);
+    }
   } catch {
-    return null;
+    /* Fall through to remembered device storage. */
   }
+  try {
+    const raw = localStorage.getItem(deviceStorageKey);
+    if (raw) {
+      const value = JSON.parse(raw) as {
+        url?: string;
+        token?: string;
+        device?: unknown;
+      };
+      const device = parseDevice(value.device);
+      if (!device) {
+        clearPairingStorage();
+        return { connection: null, notice: readStoredNotice() };
+      }
+      if (Date.parse(device.expiresAt) <= Date.now()) {
+        clearPairingStorage();
+        const expiredNotice =
+          "This phone\u2019s pairing expired. Open a fresh pairing link from your computer.";
+        storeNotice(expiredNotice);
+        return { connection: null, notice: expiredNotice };
+      }
+      const connection: Connection = {
+        ...validateConnection(value.url || "", value.token || ""),
+        device,
+      };
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(connection));
+      } catch {
+        /* Memory-only session mirror. */
+      }
+      return { connection, notice: readStoredNotice() };
+    }
+  } catch {
+    clearPairingStorage();
+  }
+  return { connection: null, notice: readStoredNotice() };
 }
 
 export function demoRequests(): LoginRequest[] {
@@ -143,16 +261,48 @@ export function demoRequests(): LoginRequest[] {
   ];
 }
 
+async function callBridge<T>(
+  connection: Connection,
+  path: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await fetch(connection.url + path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${connection.token}`,
+      ...options?.headers,
+    },
+    credentials: "omit",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    const fallback =
+      response.status === 401 || response.status === 403
+        ? "The owner token was not accepted. Check your pairing details and reconnect."
+        : `The bridge returned ${response.status}. Please try again.`;
+    throw new BridgeError(body.error || fallback, response.status);
+  }
+  return response.json() as Promise<T>;
+}
+
 export function useWorkspace(onError: (message: string) => void) {
+  const [initial] = useState(initialState);
   const [connection, setConnection] = useState<Connection | null>(
-    initialConnection,
+    initial.connection,
   );
+  const [pairingNotice, setPairingNotice] = useState(initial.notice);
   const [requests, setRequests] = useState<LoginRequest[]>(() =>
-    connection ? [] : demoRequests(),
+    initial.connection ? [] : demoRequests(),
   );
   const [info, setInfo] = useState<BridgeInfo | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>(
-    connection ? "connecting" : "demo",
+    initial.connection ? "connecting" : "demo",
   );
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
   const [error, setError] = useState("");
@@ -161,38 +311,66 @@ export function useWorkspace(onError: (message: string) => void) {
   const errorCallback = useRef(onError);
   errorCallback.current = onError;
 
+  const invalidatePairing = useCallback(
+    (activeConnection: Connection | null, message: string) => {
+      clearPairingStorage();
+      storeNotice(message);
+      setPairingNotice(message);
+      watchId.current = null;
+      setConnection(null);
+      setInfo(null);
+      setFrame(null);
+      setRequests(demoRequests());
+      setStatus("demo");
+      setError("");
+    },
+    [],
+  );
+
   const api = useCallback(
     async <T>(path: string, options?: RequestInit): Promise<T> => {
       if (!connection) throw new Error("Connect your computer first.");
-      const response = await fetch(connection.url + path, {
-        ...options,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${connection.token}`,
-          ...options?.headers,
-        },
-        credentials: "omit",
-        cache: "no-store",
-        referrerPolicy: "no-referrer",
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403)
+      try {
+        return await callBridge<T>(connection, path, options);
+      } catch (reason) {
+        if (
+          reason instanceof BridgeError &&
+          reason.status === 404 &&
+          path === "/api/devices"
+        )
           throw new Error(
-            "The owner token was not accepted. Check your pairing details and reconnect.",
+            "This bridge does not support remembered phones yet. Update Keep Safe on your computer. Tab-only pairing still works.",
           );
-        const body = (await response.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(
-          body.error ||
-            `The bridge returned ${response.status}. Please try again.`,
-        );
+        if (
+          reason instanceof BridgeError &&
+          [401, 403].includes(reason.status) &&
+          ["/api/info", "/api/requests", "/api/devices"].includes(path)
+        ) {
+          const message = connection.device
+            ? "This phone\u2019s pairing expired or was revoked. Open a fresh pairing link from your computer."
+            : "Your pairing was not accepted. Open a fresh pairing link from your computer.";
+          invalidatePairing(connection, message);
+          throw new Error(message);
+        }
+        throw reason;
       }
-      return response.json() as Promise<T>;
     },
-    [connection],
+    [connection, invalidatePairing],
   );
+
+  useEffect(() => {
+    if (!connection?.device) return;
+    const remaining = Date.parse(connection.device.expiresAt) - Date.now();
+    const timer = setTimeout(
+      () =>
+        invalidatePairing(
+          connection,
+          "This phone\u2019s seven-day pairing expired. Open a fresh pairing link from your computer.",
+        ),
+      Math.max(0, remaining),
+    );
+    return () => clearTimeout(timer);
+  }, [connection, invalidatePairing]);
 
   useEffect(() => {
     if (!connection) return;
@@ -242,10 +420,12 @@ export function useWorkspace(onError: (message: string) => void) {
       ws.onclose = (event) => {
         if (stopped) return;
         setFrame(null);
-        if (event.code === 1008 || event.code === 4001 || event.code === 4401) {
-          setStatus("error");
-          setError(
-            "Pairing was rejected. Check the owner token and connect again.",
+        if (event.code === 4001 || event.code === 4401) {
+          invalidatePairing(
+            connection,
+            connection.device
+              ? "This phone\u2019s pairing expired or was revoked. Open a fresh pairing link from your computer."
+              : "Pairing was rejected. Open a fresh pairing link from your computer.",
           );
           return;
         }
@@ -287,23 +467,77 @@ export function useWorkspace(onError: (message: string) => void) {
       current?.close();
       socket.current = null;
     };
-  }, [connection, api]);
+  }, [connection, api, invalidatePairing]);
 
-  const connect = (value: Connection) => {
+  const connect = async (
+    value: Connection,
+    options?: { remember: boolean; name: string },
+  ) => {
     const checked = validateConnection(value.url, value.token);
+    let next = checked;
+    if (options?.remember) {
+      if (value.device)
+        throw new Error(
+          "Use the owner token from your bridge to create a new remembered device.",
+        );
+      let result: DevicePairResult;
+      try {
+        result = await callBridge<DevicePairResult>(checked, "/api/devices", {
+          method: "POST",
+          body: JSON.stringify({ name: options.name.trim() || "My phone" }),
+        });
+      } catch (reason) {
+        if (reason instanceof BridgeError && reason.status === 404)
+          throw new Error(
+            "This bridge does not support remembered phones yet. Update Keep Safe on your computer, or connect without remembering.",
+          );
+        throw reason;
+      }
+      if (
+        !result.device ||
+        !result.token ||
+        !Number.isFinite(Date.parse(result.device.expiresAt)) ||
+        Date.parse(result.device.expiresAt) <= Date.now()
+      )
+        throw new Error(
+          "The bridge returned invalid device details. Update the bridge and try again.",
+        );
+      next = {
+        ...validateConnection(checked.url, result.token),
+        device: result.device,
+      };
+      try {
+        // Only the newly issued device secret may enter persistent storage.
+        clearPairingStorage();
+        localStorage.setItem(
+          deviceStorageKey,
+          JSON.stringify({ version: 1, ...next }),
+        );
+      } catch {
+        await callBridge(
+          checked,
+          `/api/devices/${encodeURIComponent(result.device.id)}/revoke`,
+          { method: "POST", body: "{}" },
+        ).catch(() => {});
+        throw new Error(
+          "This browser blocked persistent storage. Connect without remembering, or allow site storage and try again.",
+        );
+      }
+    } else clearPairingStorage();
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(checked));
+      sessionStorage.setItem(storageKey, JSON.stringify(next));
     } catch {
-      /* Memory-only is supported. */
+      /* Memory-only pairing is supported. */
     }
-    setConnection(checked);
+    storeNotice("");
+    setPairingNotice("");
+    watchId.current = null;
+    setConnection(next);
   };
   const disconnect = () => {
-    try {
-      sessionStorage.removeItem(storageKey);
-    } catch {
-      /* No stored connection. */
-    }
+    clearPairingStorage();
+    storeNotice("");
+    setPairingNotice("");
     watchId.current = null;
     setConnection(null);
     setInfo(null);
@@ -311,6 +545,22 @@ export function useWorkspace(onError: (message: string) => void) {
     setRequests(demoRequests());
     setStatus("demo");
     setError("");
+  };
+  const forgetDevice = async () => {
+    const previous = connection;
+    // Forget the local secret immediately, even if the computer is offline.
+    disconnect();
+    if (!previous?.device) return true;
+    try {
+      await callBridge(
+        previous,
+        `/api/devices/${encodeURIComponent(previous.device.id)}/revoke`,
+        { method: "POST", body: "{}" },
+      );
+      return true;
+    } catch {
+      return false;
+    }
   };
   const send = useCallback((message: ClientMessage) => {
     if (socket.current?.readyState !== WebSocket.OPEN) {
@@ -373,9 +623,15 @@ export function useWorkspace(onError: (message: string) => void) {
     status,
     frame,
     error,
+    pairingNotice,
+    dismissPairingNotice: () => {
+      storeNotice("");
+      setPairingNotice("");
+    },
     api,
     connect,
     disconnect,
+    forgetDevice,
     send,
     watch,
     action,

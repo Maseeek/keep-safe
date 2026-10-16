@@ -3572,6 +3572,394 @@ svg {
     font-size: 7px;
   }
 }
+.remember-choice {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  background: #f1f5e9;
+  border: 1px solid #e2e9d7;
+  border-radius: 7px;
+  padding: 12px;
+  margin: 0 0 19px !important;
+  cursor: pointer;
+}
+.remember-choice > input {
+  margin: 3px 0 0;
+  accent-color: #547740;
+  flex-shrink: 0;
+}
+.remember-choice > span {
+  margin: 0 !important;
+}
+.remember-choice strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 550;
+  color: #778d61;
+  line-height: 1.7;
+}
+.remember-choice small {
+  display: block;
+  font-size: 9px;
+  line-height: 1.8;
+  color: #95a583;
+  margin-top: 4px;
+}
+.paired-devices-card {
+  margin-top: 0;
+  margin-bottom: 22px;
+  padding: 25px;
+}
+.local-pairing-state {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid #e3eadd;
+  border-radius: 8px;
+  background: #f8faf4;
+  padding: 20px;
+}
+.device-state-icon {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #e3ead8;
+  background: #f0f5e8;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #92aa76;
+}
+.local-pairing-state > div {
+  flex: 1;
+}
+.local-pairing-state strong {
+  font-size: 12px;
+  font-weight: 550;
+  color: #768c60;
+}
+.local-pairing-state p {
+  font-size: 10px;
+  color: #97a787;
+  line-height: 1.9;
+  margin-top: 7px;
+  max-width: 470px;
+}
+.local-pairing-state.is-remembered {
+  background: #f2f7eb;
+}
+.remember-device-form {
+  padding: 18px 20px;
+  border: 1px solid #e6eddd;
+  background: #fbfcf8;
+  margin-top: 12px;
+  border-radius: 7px;
+}
+.remember-device-form > label {
+  display: block;
+  font-size: 10px;
+  color: #8da276;
+  margin-bottom: 10px;
+}
+.remember-device-form > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.remember-device-form input {
+  border: 1px solid #dfe8d3;
+  border-radius: 5px;
+  background: #fff;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: #738a5d;
+  flex: 1;
+}
+.remember-device-form p {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 9px;
+  line-height: 1.8;
+  color: #9baa8a;
+  margin-top: 12px;
+}
+.remember-device-form p svg {
+  margin-top: 2px;
+}
+.device-list-heading {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  letter-spacing: 1.2px;
+  color: #9eae8a;
+  margin: 26px 0 12px;
+}
+.device-list-heading > span:last-child {
+  font-size: 9px;
+  letter-spacing: 0;
+}
+.paired-device-list {
+  border-top: 1px solid #edf1e6;
+}
+.paired-device-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 17px 0;
+  border-bottom: 1px solid #edf1e6;
+}
+.paired-device-icon {
+  width: 33px;
+  height: 36px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: #f5f8ee;
+  color: #a1b58b;
+}
+.paired-device-row > div {
+  flex: 1;
+}
+.paired-device-row strong {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 11px;
+  color: #82976c;
+  font-weight: 500;
+}
+.paired-device-row strong > span {
+  color: #91a97a;
+  background: #edf4e2;
+  border-radius: 3px;
+  padding: 3px 5px;
+  font-size: 7px;
+}
+.paired-device-row p {
+  font-size: 9px;
+  color: #a7b398;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 7px;
+}
+.device-revoke {
+  font-size: 9px;
+  color: #aa947e;
+}
+.device-list-message {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 18px 0;
+  font-size: 10px;
+  color: #a5b297;
+  line-height: 1.8;
+}
+.device-list-error {
+  color: #b38c68;
+  font-size: 10px;
+  line-height: 1.8;
+  background: #fbf6ed;
+  border-radius: 5px;
+  padding: 12px 14px;
+  margin-top: 15px;
+}
+.device-access-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 9px;
+  color: #a1b08f;
+  line-height: 1.8;
+  margin-top: 18px;
+}
+.device-access-note svg {
+  margin-top: 2px;
+}
+.device-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 27px;
+}
+.device-confirm-dialog h2 {
+  font-size: 25px;
+  overflow-wrap: anywhere;
+}
+.pairing-expired-notice {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: #fff8e9;
+  border: 1px solid #eadfc6;
+  color: #b09a70;
+  padding: 13px 14px;
+  border-radius: 7px;
+  margin-bottom: 13px;
+}
+.pairing-expired-notice p {
+  font-size: 10px;
+  line-height: 1.9;
+  flex: 1;
+  color: #a18c63;
+}
+.pairing-expired-notice .text-link {
+  color: #9f895d;
+  white-space: nowrap;
+}
+.pairing-expired-notice .icon-button {
+  color: #b9a784;
+}
+.detail-section[role="dialog"]:focus {
+  outline: none;
+}
+@media (max-width: 760px) {
+  .remember-choice {
+    padding: 13px;
+    gap: 11px;
+  }
+  .remember-choice strong {
+    font-size: 12px;
+  }
+  .remember-choice small {
+    font-size: 10px;
+  }
+  .remember-choice > input {
+    width: 16px;
+    height: 16px;
+    margin-top: 3px;
+  }
+  .paired-devices-card {
+    padding: 21px;
+    margin-top: 0;
+    margin-bottom: 19px;
+  }
+  .local-pairing-state {
+    display: grid;
+    grid-template-columns: 39px 1fr;
+    padding: 17px;
+    gap: 13px;
+  }
+  .device-state-icon {
+    width: 37px;
+    height: 40px;
+    border-radius: 11px;
+    align-self: start;
+  }
+  .local-pairing-state strong {
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .local-pairing-state p {
+    font-size: 10px;
+    margin-top: 7px;
+  }
+  .local-pairing-state > button {
+    grid-column: 1 / -1;
+    width: 100%;
+    font-size: 11px;
+    margin-top: 2px;
+    min-height: 40px;
+  }
+  .remember-device-form {
+    padding: 16px;
+  }
+  .remember-device-form > label {
+    font-size: 11px;
+  }
+  .remember-device-form > div {
+    flex-wrap: wrap;
+  }
+  .remember-device-form input {
+    width: 100%;
+    flex: initial;
+    font-size: 16px;
+    min-height: 44px;
+    padding: 10px 11px;
+  }
+  .remember-device-form .button {
+    font-size: 11px;
+    min-height: 42px;
+    width: 100%;
+  }
+  .remember-device-form p {
+    font-size: 9px;
+  }
+  .device-list-heading {
+    font-size: 7px;
+    margin-top: 25px;
+  }
+  .paired-device-row {
+    gap: 10px;
+    padding: 18px 0;
+  }
+  .paired-device-row strong {
+    font-size: 11px;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .paired-device-row strong > span {
+    font-size: 6px;
+  }
+  .paired-device-row p {
+    font-size: 8px;
+    line-height: 1.7;
+  }
+  .paired-device-icon {
+    width: 29px;
+    height: 33px;
+  }
+  .device-revoke {
+    padding: 10px 0 10px 5px;
+    min-height: 40px;
+    font-size: 9px;
+    gap: 4px;
+  }
+  .device-list-message {
+    font-size: 10px;
+  }
+  .device-list-error {
+    font-size: 10px;
+  }
+  .device-access-note {
+    font-size: 9px;
+    line-height: 1.9;
+  }
+  .device-confirm-actions {
+    justify-content: stretch;
+    margin-top: 25px;
+    gap: 8px;
+  }
+  .device-confirm-actions > button {
+    flex: 1;
+    font-size: 10px;
+    padding: 12px 10px;
+  }
+  .device-confirm-dialog h2 {
+    font-size: 26px;
+  }
+  .pairing-expired-notice {
+    padding: 13px;
+    flex-wrap: wrap;
+    gap: 9px;
+  }
+  .pairing-expired-notice > p {
+    flex: 1;
+    min-width: 200px;
+    font-size: 10px;
+  }
+  .pairing-expired-notice .text-link {
+    margin-left: 27px;
+    font-size: 10px;
+    padding: 4px 0;
+  }
+  .pairing-expired-notice .icon-button {
+    margin-left: auto;
+    padding: 4px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -34,14 +34,15 @@ export function AgentMark({
       className={`agent-mark ${claude ? "claude" : codex ? "codex" : "gravity"} ${small ? "small" : ""}`}
       aria-hidden="true"
     >
-      {claude ? "✳" : codex ? "⌘" : "A"}
+      {claude ? "\u2733" : codex ? "\u2318" : "A"}
     </span>
   );
 }
 
 export function domain(url: string) {
   try {
-    return new URL(url).hostname;
+    const parsed = new URL(url);
+    return parsed.hostname || parsed.protocol.replace(/:$/, "") || url;
   } catch {
     return url;
   }
@@ -78,6 +79,7 @@ export function BrowserPanel({
   const [denyOpen, setDenyOpen] = useState(false);
   const [showText, setShowText] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
+  const wheelBuffer = useRef({ deltaX: 0, deltaY: 0, timer: undefined as ReturnType<typeof setTimeout> | undefined });
   const isDemo = !workspace.connection;
   const finished = ["completed", "denied", "expired"].includes(request.status);
   const expired = !finished && new Date(request.expiresAt).getTime() <= now;
@@ -102,6 +104,11 @@ export function BrowserPanel({
   useEffect(() => {
     if (!active || expired || workspace.status !== "connected") setText("");
   }, [active, expired, workspace.status]);
+  useEffect(() => {
+    return () => {
+      if (wheelBuffer.current.timer) clearTimeout(wheelBuffer.current.timer);
+    };
+  }, []);
 
   const sendText = (event: React.FormEvent) => {
     event.preventDefault();
@@ -128,7 +135,7 @@ export function BrowserPanel({
         <span className={`micro-status ${active ? "green" : ""}`}>
           <span />
           {active
-            ? "You’re in control"
+            ? "You\u2019re in control"
             : finished || expired
               ? "Session closed"
               : "Awaiting you"}
@@ -144,7 +151,7 @@ export function BrowserPanel({
         </div>
       </div>
       <div className="reason-box">
-        <span className="quote-mark">“</span>
+        <span className="quote-mark">\u201c</span>
         <p>
           {request.reason ||
             "Please sign in to this website so I can continue my task."}
@@ -206,7 +213,7 @@ export function BrowserPanel({
                 ? `${request.agent} can get back to work. Your control of this browser has ended.`
                 : request.status === "denied"
                   ? "The agent was notified. No browser access was granted."
-                  : "Ask your agent to send a fresh request when you’re ready."}
+                  : "Ask your agent to send a fresh request when you\u2019re ready."}
             </p>
           </div>
         ) : !active ? (
@@ -234,19 +241,19 @@ export function BrowserPanel({
             </p>
             <span className="privacy-caption">
               <Eye size={13} />
-              You’ll see the actual website
+              You\u2019ll see the actual website
             </span>
           </div>
         ) : isDemo ? (
           <div className="browser-state demo-browser">
             <span className="demo-surface-label">
-              INTERACTIVE DEMO · NO REAL WEBSITE
+              INTERACTIVE DEMO \u00b7 NO REAL WEBSITE
             </span>
             <div className="demo-step-icon">
               {demoStep ? <Check size={30} /> : <MousePointer2 size={30} />}
             </div>
             <h3>
-              {demoStep ? "That’s the handoff." : "Your phone. Their browser."}
+              {demoStep ? "That\u2019s the handoff." : "Your phone. Their browser."}
             </h3>
             <p>
               {demoStep
@@ -280,31 +287,49 @@ export function BrowserPanel({
               onClick={(event) => {
                 if (!canInput || !imageRef.current) return;
                 const bounds = imageRef.current.getBoundingClientRect();
+                if (!bounds.width || !bounds.height) return;
+                const clamp = (value: number, max: number) =>
+                  Math.max(0, Math.min(max, Math.round(value)));
                 workspace.send({
                   type: "click",
-                  x: Math.round(
+                  x: clamp(
                     ((event.clientX - bounds.left) / bounds.width) *
                       liveFrame.width,
+                    liveFrame.width,
                   ),
-                  y: Math.round(
+                  y: clamp(
                     ((event.clientY - bounds.top) / bounds.height) *
                       liveFrame.height,
+                    liveFrame.height,
                   ),
                 });
               }}
               onWheel={(event) => {
-                if (canInput)
-                  workspace.send({
-                    type: "scroll",
-                    deltaX: event.deltaX,
-                    deltaY: event.deltaY,
-                  });
+                if (!canInput) return;
+                const clampScroll = (value: number) =>
+                  Math.max(-3000, Math.min(3000, Math.round(value)));
+                wheelBuffer.current.deltaX = clampScroll(
+                  wheelBuffer.current.deltaX + event.deltaX,
+                );
+                wheelBuffer.current.deltaY = clampScroll(
+                  wheelBuffer.current.deltaY + event.deltaY,
+                );
+                if (!wheelBuffer.current.timer) {
+                  wheelBuffer.current.timer = setTimeout(() => {
+                    const { deltaX, deltaY } = wheelBuffer.current;
+                    wheelBuffer.current.deltaX = 0;
+                    wheelBuffer.current.deltaY = 0;
+                    wheelBuffer.current.timer = undefined;
+                    if (deltaX || deltaY)
+                      workspace.send({ type: "scroll", deltaX, deltaY });
+                  }, 50);
+                }
               }}
             />
             {workspace.status !== "connected" ? (
               <div className="reconnect-cover">
                 <LoaderCircle className="spin" size={24} />
-                <span>Reconnecting to your browser…</span>
+                <span>Reconnecting to your browser\u2026</span>
               </div>
             ) : null}
           </div>
@@ -314,11 +339,11 @@ export function BrowserPanel({
             <h3>
               {workspace.info?.browserAvailable === false
                 ? "Browser needs a moment."
-                : "Opening your browser…"}
+                : "Opening your browser\u2026"}
             </h3>
             <p>
               {workspace.info?.browserAvailable === false
-                ? "Check that Chromium is installed and the bridge can reach your agent’s browser."
+                ? "Check that Chromium is installed and the bridge can reach your agent\u2019s browser."
                 : "Connecting securely to your computer. Your live session will appear here."}
             </p>
           </div>
@@ -348,7 +373,7 @@ export function BrowserPanel({
                 onClick={() => workspace.send({ type: "key", key: "Enter" })}
                 disabled={!canInput}
               >
-                ↵
+                \u21b5
               </button>
               <button
                 title="Press Backspace in browser"
@@ -357,7 +382,7 @@ export function BrowserPanel({
                 }
                 disabled={!canInput}
               >
-                ⌫
+                \u232b
               </button>
               <button
                 title="Scroll browser up"
@@ -439,7 +464,11 @@ export function BrowserPanel({
             onClick={() =>
               onAction(request.id, active ? "complete" : "approve")
             }
-            disabled={busy || (!isDemo && workspace.status !== "connected")}
+            disabled={
+              busy ||
+              (!isDemo && workspace.status !== "connected") ||
+              (active && !isDemo && !liveFrame)
+            }
           >
             {busy ? (
               <LoaderCircle className="spin" size={16} />

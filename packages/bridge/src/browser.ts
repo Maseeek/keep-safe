@@ -49,12 +49,17 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
     // Resolve HTTP discovery ourselves, rejecting redirects and non-loopback returned endpoints.
     let endpoint = cdpUrl;
     if (cdpUrl.startsWith('http:')) {
+      const origin = new URL(cdpUrl);
       const discovery = new URL('/json/version', cdpUrl);
       const response = await fetch(discovery, { redirect: 'error', signal: AbortSignal.timeout(5000) });
       if (!response.ok) throw new Error('Chromium debugging endpoint is unavailable.');
       const data = await response.json() as { webSocketDebuggerUrl?: string };
       endpoint = validateCdpUrl(data.webSocketDebuggerUrl) ?? '';
       if (!endpoint.startsWith('ws:')) throw new Error('Invalid Chromium debugging endpoint.');
+      const resolved = new URL(endpoint);
+      if (resolved.hostname !== origin.hostname || resolved.port !== origin.port || !resolved.pathname.startsWith('/devtools/')) {
+        throw new Error('Invalid Chromium debugging endpoint.');
+      }
     }
     browser = await chromium.connectOverCDP(endpoint, { timeout: 10_000 });
     const existing = browser.contexts().flatMap(item => item.pages());
@@ -85,13 +90,24 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
     } catch (error) { await browser.close(); await proxy.close(); throw error; }
   }
   const listeners: Array<() => void> = [];
+  const pageStack: Page[] = [page];
+  const sessionPages = new Set<Page>([page]);
+  const selectActivePage = () => {
+    for (let index = pageStack.length - 1; index >= 0; index--) {
+      if (!pageStack[index].isClosed()) {
+        page = pageStack[index];
+        return;
+      }
+    }
+  };
   const instrument = (current: Page) => {
+    sessionPages.add(current);
     const dismiss = (dialog: import('playwright').Dialog) => { void dialog.dismiss().catch(() => {}); };
     const popupOpened = (popup: Page) => {
-      const previous = page;
+      pageStack.push(popup);
       page = popup;
       instrument(popup);
-      const closed = () => { if (page === popup && !previous.isClosed()) page = previous; };
+      const closed = () => { selectActivePage(); };
       popup.once('close', closed);
       listeners.push(() => popup.off('close', closed));
     };
@@ -102,14 +118,16 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
   let closed = false;
   return {
     cdpUrl,
-    get pageUrl() { return page.url(); },
+    get pageUrl() { selectActivePage(); return page.url(); },
     async frame() {
+      selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       const image = await page.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, animations: 'disabled' });
       const size = page.viewportSize() ?? await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
       return { data: image.toString('base64'), ...size, url: page.url() };
     },
     async input(input) {
+      selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       if (input.type === 'click') await page.mouse.click(input.x as number, input.y as number);
       else if (input.type === 'scroll') await page.mouse.wheel(input.deltaX as number, input.deltaY as number);
@@ -117,10 +135,11 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
       else if (input.type === 'key') await page.keyboard.press(input.key as string);
     },
     async prepareHandoff() {
+      selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
-      // Clear residual password inputs on every still-open page/frame before exposing a managed CDP endpoint.
+      // Clear residual password inputs on every still-open session page/frame before exposing a managed CDP endpoint.
       // This does not promise to erase secrets retained by the destination website's own JavaScript.
-      const pages = owned ? context.pages() : [page];
+      const pages = (owned ? context.pages() : [...sessionPages]).filter(item => !item.isClosed());
       for (const current of pages) for (const frame of current.frames()) {
         try {
           await frame.evaluate(() => {

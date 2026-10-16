@@ -16,7 +16,9 @@ Remote access requires the computer to remain awake and a secure route to the br
 
 ## Data and lifetime
 
-- Owner and agent tokens plus Web Push keys are local files with owner-only permissions in ignored `.keep-safe/`.
+- Owner and agent bootstrap tokens plus Web Push keys are local files with owner-only permissions in ignored `.keep-safe/`.
+- Remembered phones receive separate seven-day device keys. The bridge stores SHA256 digests and device metadata in a local, atomically written file. It does not retain raw device keys.
+- A remembered key is saved in the phone's localStorage only after explicit opt-in. The master owner token remains tab-only. Authenticated APIs and every live-control message recheck expiry/revocation. The device key never confers agent rights or permission to pair another phone.
 - Request metadata is in memory. It is lost when the bridge restarts. The local activity list is bounded.
 - Web Push subscriptions may be stored locally. They are not uploaded to Vercel.
 - Browser input is relayed transiently. Passwords and input messages are not logged or written to disk. Screenshots are streamed without recordings or trace files.
@@ -27,7 +29,7 @@ Remote access requires the computer to remain awake and a secure route to the br
 
 The bridge validates request URLs, accepts loopback-only CDP endpoints, rejects unsupported message types, bounds message sizes and queue length, checks permitted frontend origins, and limits request/input rates. Only one owner connection can control a given request at a time. Managed browser traffic passes through a local proxy that resolves and validates DNS, rejects private and reserved addresses, and connects to the validated IP. Subresources and redirects use the same boundary. External CDP browsers remain outside that managed network boundary.
 
-Owner pairing links are sensitive credentials. Share them only with yourself. The initial release does not supply a multi-user account service or per-device owner tokens. Closing or disconnecting the phone is not equivalent to rotating the pairing token.
+Owner pairing links are sensitive credentials. Share them only with yourself. The app supplies revocable phone keys but does not provide a multi-user account service. Closing a tab is not equivalent to revocation. Use Connections to revoke a phone; possession of the original private owner link remains bootstrap authority.
 
 An agent must cooperate by pausing while the human has control. Keep Safe cannot stop a separate process from issuing its own CDP commands. An agent holding the debugging endpoint has privileged access to that browser; do not use a general personal browser profile for untrusted agents.
 
