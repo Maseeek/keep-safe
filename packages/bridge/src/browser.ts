@@ -1,0 +1,149 @@
+import { access } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
+export { validateTargetUrl } from './network';
+
+export interface BrowserFrame { data: string; width: number; height: number; url: string }
+export interface BrowserSession {
+  readonly cdpUrl?: string;
+  readonly pageUrl?: string;
+  frame(): Promise<BrowserFrame>;
+  input(input: { type: string; [key: string]: unknown }): Promise<void>;
+  prepareHandoff?(): Promise<void>;
+  close(): Promise<void>;
+}
+export type BrowserFactory = (input: { url: string; cdpUrl?: string; allowLocalUrls: boolean }) => Promise<BrowserSession>;
+
+export function validateCdpUrl(raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || raw.length > 2048) throw new Error('CDP must be a loopback Chromium debugging URL.');
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new Error('CDP must be a loopback Chromium debugging URL.'); }
+  // IP literals only: avoid localhost DNS/redirect tricks when attaching a privileged browser.
+  if (!['127.0.0.1', '[::1]'].includes(url.hostname) || !['http:', 'ws:'].includes(url.protocol) || url.username || url.password || !url.port) {
+    throw new Error('CDP must use http://127.0.0.1:PORT or ws://127.0.0.1:PORT.');
+  }
+  return url.href;
+}
+
+export async function browserAvailable(): Promise<boolean> {
+  try { await access(process.env.KEEP_SAFE_CHROMIUM_PATH || chromium.executablePath()); return true; } catch { return false; }
+}
+
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
+}
+
+export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls }) => {
+  let browser: Browser;
+  let context: BrowserContext;
+  let page: Page;
+  let owned = false;
+  let proxy: Awaited<ReturnType<typeof createOutboundProxy>> | undefined;
+  if (cdpUrl) {
+    // Resolve HTTP discovery ourselves, rejecting redirects and non-loopback returned endpoints.
+    let endpoint = cdpUrl;
+    if (cdpUrl.startsWith('http:')) {
+      const discovery = new URL('/json/version', cdpUrl);
+      const response = await fetch(discovery, { redirect: 'error', signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error('Chromium debugging endpoint is unavailable.');
+      const data = await response.json() as { webSocketDebuggerUrl?: string };
+      endpoint = validateCdpUrl(data.webSocketDebuggerUrl) ?? '';
+      if (!endpoint.startsWith('ws:')) throw new Error('Invalid Chromium debugging endpoint.');
+    }
+    browser = await chromium.connectOverCDP(endpoint, { timeout: 10_000 });
+    const existing = browser.contexts().flatMap(item => item.pages());
+    page = existing.find(item => item.url() === url)!;
+    if (!page) { await browser.close(); throw new Error('No open browser page matches this website. Open the login page before requesting a handoff.'); }
+    context = page.context();
+  } else {
+    const port = await freePort();
+    await resolveDestination(new URL(url).hostname, allowLocalUrls);
+    proxy = await createOutboundProxy(allowLocalUrls);
+    try {
+      browser = await chromium.launch({
+        headless: true, proxy: { server: proxy.url },
+        ...(process.env.KEEP_SAFE_CHROMIUM_PATH ? { executablePath: process.env.KEEP_SAFE_CHROMIUM_PATH } : {}),
+        args: [`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', '--proxy-bypass-list=<-loopback>', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+      });
+    } catch (error) { await proxy.close(); throw error; }
+    owned = true;
+    cdpUrl = `http://127.0.0.1:${port}`;
+    try {
+      context = await browser.newContext({ viewport: { width: 390, height: 720 }, deviceScaleFactor: 1, acceptDownloads: false, serviceWorkers: 'block' });
+      // Incognito contexts keep website cookies in memory. No tracing/video/storage-state files.
+      await context.route('**/*', async route => {
+        try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
+      });
+      page = await context.newPage();
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    } catch (error) { await browser.close(); await proxy.close(); throw error; }
+  }
+  const listeners: Array<() => void> = [];
+  const instrument = (current: Page) => {
+    const dismiss = (dialog: import('playwright').Dialog) => { void dialog.dismiss().catch(() => {}); };
+    const popupOpened = (popup: Page) => {
+      const previous = page;
+      page = popup;
+      instrument(popup);
+      const closed = () => { if (page === popup && !previous.isClosed()) page = previous; };
+      popup.once('close', closed);
+      listeners.push(() => popup.off('close', closed));
+    };
+    current.on('dialog', dismiss); current.on('popup', popupOpened);
+    listeners.push(() => { current.off('dialog', dismiss); current.off('popup', popupOpened); });
+  };
+  instrument(page);
+  let closed = false;
+  return {
+    cdpUrl,
+    get pageUrl() { return page.url(); },
+    async frame() {
+      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+      const image = await page.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, animations: 'disabled' });
+      const size = page.viewportSize() ?? await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      return { data: image.toString('base64'), ...size, url: page.url() };
+    },
+    async input(input) {
+      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+      if (input.type === 'click') await page.mouse.click(input.x as number, input.y as number);
+      else if (input.type === 'scroll') await page.mouse.wheel(input.deltaX as number, input.deltaY as number);
+      else if (input.type === 'text') await page.keyboard.insertText(input.text as string);
+      else if (input.type === 'key') await page.keyboard.press(input.key as string);
+    },
+    async prepareHandoff() {
+      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+      // Clear residual password inputs on every still-open page/frame before exposing a managed CDP endpoint.
+      // This does not promise to erase secrets retained by the destination website's own JavaScript.
+      const pages = owned ? context.pages() : [page];
+      for (const current of pages) for (const frame of current.frames()) {
+        try {
+          await frame.evaluate(() => {
+            for (const input of document.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+              const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+              if (setter) setter.call(input, ''); else input.value = '';
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          });
+        } catch {
+          if (!frame.isDetached()) throw new Error('Password fields could not be cleared before handoff.');
+        }
+      }
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      for (const remove of listeners.splice(0)) remove();
+      // Closing a connected Playwright browser disconnects; it does not terminate the agent's browser.
+      if (owned) await context.close().catch(() => {});
+      await browser.close().catch(() => {});
+      await proxy?.close();
+    },
+  };
+};

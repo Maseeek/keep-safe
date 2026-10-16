@@ -1,0 +1,328 @@
+import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { readFile, stat, writeFile, realpath } from 'node:fs/promises';
+import { extname, resolve, sep } from 'node:path';
+import { WebSocketServer, WebSocket } from 'ws';
+import webpush, { type PushSubscription } from 'web-push';
+import type { BridgeInfo, CreateRequestInput, LoginRequest, ServerMessage } from '../../shared/src/protocol';
+import { browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
+
+export interface BridgeOptions {
+  ownerToken: string;
+  agentToken: string;
+  port?: number;
+  appUrl?: string;
+  publicUrl?: string;
+  staticDir?: string;
+  allowLocalUrls?: boolean;
+  vapid?: { publicKey: string; privateKey: string };
+  subscriptionsFile?: string;
+  browserFactory?: BrowserFactory;
+  now?: () => number;
+  expiryIntervalMs?: number;
+}
+
+interface Entry {
+  request: LoginRequest;
+  cdpUrl?: string;
+  browser?: BrowserSession;
+  opening?: Promise<BrowserSession>;
+  controller?: Client;
+  size?: { width: number; height: number };
+  finalizing?: boolean;
+}
+interface Client { ws: WebSocket; authenticated: boolean; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>; frames?: ReturnType<typeof setInterval>; pendingFrame: boolean; operations: Promise<void>; count: number; window: number }
+const terminal = new Set(['completed', 'denied', 'expired']);
+const allowedKeys = new Set(['Enter', 'Tab', 'Shift+Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space', 'ControlOrMeta+A']);
+
+function equalToken(actual: string | undefined, expected: string) {
+  if (!actual) return false;
+  const left = Buffer.from(actual);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+function authorization(request: IncomingMessage) {
+  const header = request.headers.authorization;
+  return header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+}
+function safeText(value: unknown, name: string, max: number, fallback?: string) {
+  if (value === undefined && fallback !== undefined) return fallback;
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) throw new HttpError(400, `${name} must be 1–${max} characters.`);
+  return value.trim();
+}
+class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+async function jsonBody(request: IncomingMessage) {
+  if (!request.headers['content-type']?.startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
+  let length = 0;
+  const parts: Buffer[] = [];
+  for await (const part of request) { const data = Buffer.from(part); length += data.length; if (length > 16_384) throw new HttpError(413, 'Request body is too large.'); parts.push(data); }
+  try { const value: unknown = JSON.parse(Buffer.concat(parts).toString()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value as Record<string, unknown>; }
+  catch { throw new HttpError(400, 'Invalid JSON object.'); }
+}
+function pushSubscription(value: Record<string, unknown>): PushSubscription {
+  const subscription = (value.subscription && typeof value.subscription === 'object' ? value.subscription : value) as Record<string, unknown>;
+  if (typeof subscription.endpoint !== 'string' || subscription.endpoint.length > 4096) throw new HttpError(400, 'Invalid push subscription.');
+  let endpoint: URL;
+  try { endpoint = new URL(subscription.endpoint); } catch { throw new HttpError(400, 'Invalid push endpoint.'); }
+  const trusted = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.services.mozilla.com', 'web.push.apple.com', 'notify.windows.com'];
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || (endpoint.port && endpoint.port !== '443') || !trusted.some(host => endpoint.hostname === host || (host === 'notify.windows.com' && endpoint.hostname.endsWith('.notify.windows.com')))) throw new HttpError(400, 'Unsupported browser push service.');
+  const keys = subscription.keys as Record<string, unknown> | undefined;
+  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' || !/^[A-Za-z0-9_=-]{40,200}$/.test(keys.p256dh) || !/^[A-Za-z0-9_=-]{16,100}$/.test(keys.auth)) throw new HttpError(400, 'Invalid push subscription keys.');
+  return { endpoint: endpoint.href, keys: { p256dh: keys.p256dh, auth: keys.auth } };
+}
+
+export async function createBridge(options: BridgeOptions) {
+  if (!options.ownerToken || !options.agentToken || options.ownerToken === options.agentToken) throw new Error('Separate owner and agent tokens are required.');
+  const now = options.now ?? Date.now;
+  const entries = new Map<string, Entry>();
+  const clients = new Set<Client>();
+  const subscriptions = new Map<string, PushSubscription>();
+  const available = !!options.browserFactory || await browserAvailable();
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
+  for (const value of [options.appUrl, options.publicUrl]) if (value) origins.add(new URL(value).origin);
+  if (options.subscriptionsFile) {
+    try {
+      const items: unknown = JSON.parse(await readFile(options.subscriptionsFile, 'utf8'));
+      if (Array.isArray(items)) for (const item of items.slice(0, 10)) { try { const sub = pushSubscription(item); subscriptions.set(sub.endpoint, sub); } catch { /* Ignore invalid, never send to untrusted endpoints. */ } }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Push subscriptions could not be loaded.'); }
+  }
+  const list = () => [...entries.values()].map(item => ({ ...item.request })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  function send(client: Client, message: ServerMessage) { if (client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 2_000_000) client.ws.send(JSON.stringify(message)); }
+  function broadcast() { const message: ServerMessage = { type: 'requests', requests: list() }; for (const client of clients) if (client.authenticated) send(client, message); }
+  function unwatch(client: Client) {
+    if (client.frames) clearInterval(client.frames);
+    client.frames = undefined;
+    if (client.watching) { const entry = entries.get(client.watching); if (entry?.controller === client) entry.controller = undefined; }
+    client.watching = undefined;
+  }
+  async function closeEntry(entry: Entry) {
+    if (entry.controller) unwatch(entry.controller);
+    const browser = entry.browser;
+    entry.browser = undefined;
+    if (browser) await browser.close().catch(() => {});
+  }
+  async function expire() {
+    let changed = false;
+    for (const entry of entries.values()) {
+      if (now() < Date.parse(entry.request.expiresAt)) continue;
+      if (!terminal.has(entry.request.status)) { entry.request.status = 'expired'; entry.request.updatedAt = new Date(now()).toISOString(); changed = true; }
+      await closeEntry(entry);
+    }
+    if (changed) broadcast();
+  }
+  function checkEntry(id: string) { const entry = entries.get(id); if (!entry) throw new HttpError(404, 'Request not found.'); return entry; }
+  function active(entry: Entry, client: Client) { return !entry.finalizing && !terminal.has(entry.request.status) && now() < Date.parse(entry.request.expiresAt) && entry.controller === client && client.watching === entry.request.id && client.ws.readyState === WebSocket.OPEN; }
+  async function frame(entry: Entry, client: Client) {
+    if (client.pendingFrame || !entry.browser || !active(entry, client)) return;
+    client.pendingFrame = true;
+    try {
+      const result = await entry.browser.frame();
+      if (active(entry, client)) { entry.size = { width: result.width, height: result.height }; send(client, { type: 'frame', requestId: entry.request.id, ...result }); }
+    } catch { if (active(entry, client)) { send(client, { type: 'error', message: 'The browser could not be displayed. Reopen the session to try again.' }); unwatch(client); } }
+    finally { client.pendingFrame = false; }
+  }
+  async function watch(client: Client, id: unknown) {
+    if (typeof id !== 'string') throw new Error('Choose a valid request.');
+    const entry = checkEntry(id);
+    if (entry.finalizing || !['approved', 'active'].includes(entry.request.status) || now() >= Date.parse(entry.request.expiresAt)) throw new Error('Approve an unexpired request before opening its browser.');
+    if (entry.controller && entry.controller !== client) throw new Error('This browser is being controlled on another device.');
+    unwatch(client);
+    client.watching = id;
+    entry.controller = client;
+    try {
+      if (!entry.browser) {
+        if (!entry.opening && [...entries.values()].filter(item => item.browser || item.opening).length >= 5) throw new Error('Five browser sessions are already open. Complete or expire an existing session first.');
+        entry.opening ??= (options.browserFactory ?? openBrowser)({ url: entry.request.url, cdpUrl: entry.cdpUrl, allowLocalUrls: !!options.allowLocalUrls });
+        entry.browser = await entry.opening;
+        entry.opening = undefined;
+      }
+      if (now() >= Date.parse(entry.request.expiresAt) || ['denied', 'expired'].includes(entry.request.status)) { await closeEntry(entry); return; }
+      if (!active(entry, client)) return;
+      entry.request.status = 'active';
+      entry.request.updatedAt = new Date(now()).toISOString();
+      broadcast();
+      await frame(entry, client);
+      if (active(entry, client)) client.frames = setInterval(() => { void frame(entry, client); }, 250);
+    } catch { unwatch(client); entry.opening = undefined; throw new Error('Unable to open this browser. Install Chromium with npx playwright install chromium, or check the agent CDP connection.'); }
+  }
+  async function handleMessage(client: Client, raw: Buffer) {
+    let message: Record<string, unknown>;
+    try { message = JSON.parse(raw.toString()) as Record<string, unknown>; if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error(); }
+    catch { throw new Error('Invalid message.'); }
+    if (!client.authenticated) {
+      if (message.type !== 'auth' || typeof message.token !== 'string' || !equalToken(message.token, options.ownerToken)) { client.ws.close(1008, 'Authentication required'); return; }
+      client.authenticated = true;
+      clearTimeout(client.timer);
+      send(client, { type: 'ready', info, requests: list() });
+      return;
+    }
+    if (message.type === 'watch') { await watch(client, message.requestId); return; }
+    if (message.type === 'unwatch') { unwatch(client); return; }
+    const entry = client.watching ? entries.get(client.watching) : undefined;
+    if (!entry?.browser || !active(entry, client)) throw new Error('Open an approved session before sending input.');
+    if (message.type === 'click') {
+      if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid tap coordinates.');
+    } else if (message.type === 'scroll') {
+      if (![message.deltaX, message.deltaY].every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 3000)) throw new Error('Invalid scroll distance.');
+    } else if (message.type === 'text') {
+      if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');
+    } else if (message.type === 'key') {
+      if (typeof message.key !== 'string' || !allowedKeys.has(message.key)) throw new Error('Unsupported key.');
+    } else throw new Error('Unknown message type.');
+    await entry.browser.input(message as { type: string; [key: string]: unknown });
+  }
+  const httpRates = new Map<string, { at: number; count: number }>();
+  function rate(request: IncomingMessage) {
+    const key = request.socket.remoteAddress ?? 'local';
+    const current = httpRates.get(key);
+    if (!current || Date.now() - current.at > 60_000) httpRates.set(key, { at: Date.now(), count: 1 });
+    else if (++current.count > 300) throw new HttpError(429, 'Too many requests. Try again shortly.');
+    if (httpRates.size > 100) for (const [address, entry] of httpRates) if (Date.now() - entry.at > 60_000) httpRates.delete(address);
+  }
+  function json(response: ServerResponse, status: number, data: unknown) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(data)); }
+  async function notify(request: LoginRequest) {
+    if (!options.vapid) return;
+    const target = `${options.appUrl ?? options.publicUrl ?? 'http://localhost:4318'}/?request=${encodeURIComponent(request.id)}`;
+    await Promise.all([...subscriptions.values()].map(async subscription => {
+      try {
+        await webpush.sendNotification(subscription, JSON.stringify({ title: 'An agent needs your help', body: `${request.agent}: ${request.title}`, requestId: request.id, url: target }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000 });
+      } catch (error) { if ([404, 410].includes((error as { statusCode?: number }).statusCode ?? 0)) subscriptions.delete(subscription.endpoint); }
+    }));
+  }
+  const server = createServer((request, response) => { void (async () => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Referrer-Policy', 'no-referrer');
+    const origin = request.headers.origin;
+    if (origin && !origins.has(origin)) throw new HttpError(403, 'This app origin is not allowed.');
+    if (origin) { response.setHeader('Access-Control-Allow-Origin', origin); response.setHeader('Vary', 'Origin'); }
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    if (request.method === 'OPTIONS') { response.writeHead(204); response.end(); return; }
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    if (url.pathname === '/api/health' && request.method === 'GET') { json(response, 200, { ok: true }); return; }
+    if (!url.pathname.startsWith('/api/')) {
+      if (request.method !== 'GET' || !options.staticDir) throw new HttpError(404, 'Not found.');
+      const root = resolve(options.staticDir);
+      const candidate = resolve(root, `.${decodeURIComponent(url.pathname)}`);
+      if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) throw new HttpError(404, 'Not found.');
+      let file = candidate;
+      try { if (!(await stat(file)).isFile()) file = resolve(root, 'index.html'); } catch { file = resolve(root, 'index.html'); }
+      let content: Buffer;
+      try {
+        const canonicalRoot = await realpath(root); const canonicalFile = await realpath(file);
+        if (!canonicalFile.startsWith(`${canonicalRoot}${sep}`)) throw new Error('File outside frontend directory.');
+        content = await readFile(canonicalFile);
+      } catch { throw new HttpError(404, 'Build the web app with npm run build:web first.'); }
+      const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
+      response.setHeader('Content-Type', types[extname(file)] ?? 'application/octet-stream');
+      response.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+      response.end(content); return;
+    }
+    rate(request);
+    const token = authorization(request);
+    const owner = equalToken(token, options.ownerToken);
+    const agent = equalToken(token, options.agentToken);
+    if (!owner && !agent) throw new HttpError(401, 'A valid bridge token is required.');
+    await expire();
+    if (url.pathname === '/api/info' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, info); return; }
+    if (url.pathname === '/api/requests' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, { requests: list() }); return; }
+    if (url.pathname === '/api/requests' && request.method === 'POST') {
+      if (!agent) throw new HttpError(403, 'Agent access is required.');
+      if ([...entries.values()].filter(entry => !terminal.has(entry.request.status)).length >= 20) throw new HttpError(429, 'The request queue is full.');
+      const body = await jsonBody(request);
+      let target: string; let cdpUrl: string | undefined;
+      try { target = validateTargetUrl(body.url, options.allowLocalUrls); cdpUrl = validateCdpUrl(body.cdpUrl); } catch (error) { throw new HttpError(400, (error as Error).message); }
+      const ttl = body.ttlSeconds === undefined ? 600 : body.ttlSeconds;
+      if (typeof ttl !== 'number' || !Number.isInteger(ttl) || ttl < 1 || ttl > 1800) throw new HttpError(400, 'ttlSeconds must be an integer between 1 and 1800.');
+      const time = now();
+      const item: LoginRequest = { id: randomUUID(), agent: safeText(body.agent, 'Agent', 80), title: safeText(body.title, 'Title', 120), url: target, origin: new URL(target).origin, reason: safeText(body.reason, 'Reason', 500, 'Complete the sign-in so your agent can continue.'), status: 'pending', createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString(), expiresAt: new Date(time + ttl * 1000).toISOString() };
+      // Bound metadata memory, preserving all live entries and newest terminal entries.
+      if (entries.size >= 100) for (const [id, entry] of entries) { if (terminal.has(entry.request.status) && !entry.browser && !entry.opening) { entries.delete(id); break; } }
+      entries.set(item.id, { request: item, cdpUrl });
+      broadcast(); void notify(item);
+      json(response, 201, item); return;
+    }
+    const match = /^\/api\/requests\/([a-f0-9-]{36})(?:\/(approve|deny|complete))?$/.exec(url.pathname);
+    if (match) {
+      const entry = checkEntry(match[1]);
+      if (request.method === 'GET' && !match[2]) {
+        const browser = agent && entry.request.status === 'completed' && entry.browser?.cdpUrl && now() < Date.parse(entry.request.expiresAt) ? { cdpUrl: entry.browser.cdpUrl, pageUrl: entry.browser.pageUrl ?? entry.request.url } : undefined;
+        json(response, 200, { ...entry.request, ...(browser ? { browser } : {}) }); return;
+      }
+      if (request.method !== 'POST' || !match[2]) throw new HttpError(405, 'Method not allowed.');
+      if (!owner) throw new HttpError(403, 'Owner access is required.');
+      const action = match[2];
+      if (entry.finalizing) throw new HttpError(409, 'This request is already being handed back.');
+      if (terminal.has(entry.request.status)) throw new HttpError(409, 'This request has already ended.');
+      if (action === 'approve' && entry.request.status !== 'pending') throw new HttpError(409, 'This request is already approved.');
+      if (action === 'complete' && !['approved', 'active'].includes(entry.request.status)) throw new HttpError(409, 'Approve this request before completing it.');
+      if (action === 'complete') {
+        entry.finalizing = true;
+        if (entry.controller) unwatch(entry.controller);
+        try {
+          if (entry.opening) entry.browser = await entry.opening;
+          await entry.browser?.prepareHandoff?.();
+          if (now() >= Date.parse(entry.request.expiresAt)) { await expire(); throw new HttpError(409, 'This request has expired.'); }
+        } finally { entry.finalizing = false; }
+      }
+      entry.request.status = action === 'approve' ? 'approved' : action === 'deny' ? 'denied' : 'completed';
+      entry.request.updatedAt = new Date(now()).toISOString();
+      if (entry.controller && action !== 'approve') unwatch(entry.controller);
+      if (action === 'deny') await closeEntry(entry);
+      broadcast(); json(response, 200, entry.request); return;
+    }
+    if (url.pathname === '/api/push/subscribe' && request.method === 'POST') {
+      if (!owner) throw new HttpError(403, 'Owner access is required.');
+      if (!options.vapid) throw new HttpError(409, 'Push is unavailable on this bridge.');
+      const subscription = pushSubscription(await jsonBody(request));
+      if (subscriptions.size >= 10 && !subscriptions.has(subscription.endpoint)) throw new HttpError(429, 'Too many notification devices.');
+      subscriptions.set(subscription.endpoint, subscription);
+      if (options.subscriptionsFile) await writeFile(options.subscriptionsFile, JSON.stringify([...subscriptions.values()]), { mode: 0o600 });
+      json(response, 200, { ok: true }); return;
+    }
+    throw new HttpError(404, 'Not found.');
+  })().catch(error => { if (!response.headersSent) json(response, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : 'The bridge could not complete this request.' }); else response.end(); }); });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: 32_768, perMessageDeflate: false });
+  server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    if (url.pathname !== '/ws' || url.search || (request.headers.origin && !origins.has(request.headers.origin))) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
+    if (clients.size >= 10) { socket.destroy(); return; }
+    sockets.handleUpgrade(request, socket, head, ws => sockets.emit('connection', ws));
+  });
+  sockets.on('connection', ws => {
+    const client: Client = { ws, authenticated: false, alive: true, pendingFrame: false, operations: Promise.resolve(), count: 0, window: Date.now() };
+    clients.add(client);
+    client.timer = setTimeout(() => ws.close(1008, 'Authentication timeout'), 5000);
+    ws.on('pong', () => { client.alive = true; });
+    ws.on('message', raw => {
+      // Limit at receipt, before queuing slow browser operations, to bound queued input memory.
+      if (Date.now() - client.window > 1000) { client.window = Date.now(); client.count = 0; }
+      if (++client.count > 60) { ws.close(1008, 'Input rate exceeded'); return; }
+      client.operations = client.operations.then(() => handleMessage(client, Buffer.from(raw as Buffer))).catch(() => send(client, { type: 'error', message: 'The requested action was not accepted. Check that the session is still active.' }));
+    });
+    ws.on('close', () => { clearTimeout(client.timer); unwatch(client); clients.delete(client); });
+    ws.on('error', () => { /* Socket closes without logging input or credentials. */ });
+  });
+  const expiryTimer = setInterval(() => { void expire(); }, options.expiryIntervalMs ?? 1000);
+  expiryTimer.unref();
+  const heartbeat = setInterval(() => { for (const client of clients) { if (!client.alive) client.ws.terminate(); else { client.alive = false; client.ws.ping(); } } }, 30_000);
+  heartbeat.unref();
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 4318, '127.0.0.1', resolve); });
+  const address = server.address() as { port: number };
+  const url = `http://127.0.0.1:${address.port}`;
+  origins.add(url); origins.add(`http://localhost:${address.port}`);
+  return {
+    server, url, port: address.port, info,
+    async close() {
+      clearInterval(expiryTimer);
+      clearInterval(heartbeat);
+      for (const client of clients) { clearTimeout(client.timer); unwatch(client); client.ws.terminate(); }
+      await Promise.all([...entries.values()].map(async entry => { if (entry.opening) { try { entry.browser = await entry.opening; } catch { /* Failed startup. */ } } await closeEntry(entry); }));
+      await new Promise<void>(resolve => sockets.close(() => resolve()));
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      server.closeAllConnections();
+    },
+  };
+}

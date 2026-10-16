@@ -1,0 +1,42 @@
+# Architecture and security
+
+## Components
+
+The Vercel deployment serves the mobile web application. It contains no browser cookies, passwords, or agent API credentials. The same frontend can be served by the local bridge.
+
+The bridge runs on the developer's computer, listens on loopback, manages login request state, and connects to Chromium. The owner pairs using a private link with the owner token in the URL fragment. The app removes the fragment immediately. HTTP requests use bearer authentication; WebSocket authentication is the first message, not a URL query.
+
+MCP and HTTP clients use a different agent token. An agent can create a login request and poll its status, but cannot approve the request, control the owner's interface, or subscribe for owner notifications.
+
+## Why the browser stays local
+
+The additional spending cap is £0. A local browser avoids paid always-on browser compute and keeps website sessions on the user's computer. Vercel serves the frontend while the bridge owns the persistent interactive connection. See [Vercel function limits](https://vercel.com/docs/functions/limitations).
+
+Remote access requires the computer to remain awake and a secure route to the bridge. A user-controlled HTTPS tunnel or private network can provide this. Cloudflare's [Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) are an evaluation option with availability and concurrency limits. They are not a production service-level guarantee. Keep Safe does not install or start a public tunnel silently.
+
+## Data and lifetime
+
+- Owner and agent tokens plus Web Push keys are local files with owner-only permissions in ignored `.keep-safe/`.
+- Request metadata is in memory. It is lost when the bridge restarts. The local activity list is bounded.
+- Web Push subscriptions may be stored locally. They are not uploaded to Vercel.
+- Browser input is relayed transiently. Passwords and input messages are not logged or written to disk. Screenshots are streamed without recordings or trace files.
+- Managed browser cookies remain in an isolated in-memory context. Existing agent browser cookies remain owned by that browser.
+- Handoffs expire after ten minutes by default, with an agent-requested maximum of thirty minutes. Owner control ends on completion, denial, or expiry. A completed managed browser remains available only until the original deadline.
+
+## Controls and limits
+
+The bridge validates request URLs, accepts loopback-only CDP endpoints, rejects unsupported message types, bounds message sizes and queue length, checks permitted frontend origins, and limits request/input rates. Only one owner connection can control a given request at a time. Managed browser traffic passes through a local proxy that resolves and validates DNS, rejects private and reserved addresses, and connects to the validated IP. Subresources and redirects use the same boundary. External CDP browsers remain outside that managed network boundary.
+
+Owner pairing links are sensitive credentials. Share them only with yourself. The initial release does not supply a multi-user account service or per-device owner tokens. Closing or disconnecting the phone is not equivalent to rotating the pairing token.
+
+An agent must cooperate by pausing while the human has control. Keep Safe cannot stop a separate process from issuing its own CDP commands. An agent holding the debugging endpoint has privileged access to that browser; do not use a general personal browser profile for untrusted agents.
+
+## Authentication method limits
+
+The phone interacts with the remote Chromium page. This does not move a phone's passkeys, native password manager, biometrics, or hardware security key into that remote browser. Some sites also block automated browsers. These methods need explicit testing and may require a supported cross-device authentication flow.
+
+Use a separate browser profile, and inspect the current website origin before entering credentials. The app shows the live page's URL so redirects are visible. Keep Safe does not bypass website authentication or anti-abuse protections.
+
+## Notifications
+
+The bridge can use Web Push with locally generated VAPID keys. Permission is requested only when the owner enables notifications. Some mobile browsers require installation to the home screen. Actual lock-screen delivery requires a subscribed physical device and is separate from testing the service worker and subscription API. On iOS, install to the Home Screen before requesting push from a user gesture; see [WebKit's Web Push guidance](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).

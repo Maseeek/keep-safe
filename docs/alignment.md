@@ -1,41 +1,34 @@
 # Project alignment
 
-## Confirmed requirements
+Agreed with Maciek on 16 October 2026.
 
-The owner requested:
+## Product
 
-- Create an app and use judgment to develop a product that other people would use.
-- Keep the source and documentation updated on GitHub.
-- Maintain a README that explains what has been done.
-- Keep the app deployed through Vercel MCP, with its live URL accessible from GitHub.
-- Use available AI allowances for continued development while the owner is away.
-- Ask ten alignment questions before unattended development.
+Keep Safe lets developers and people who vibe code complete an agent's website login while away from their computer. A polished mobile interface displays the agent's actual browser and accepts taps, typing, and scrolling. The owner approves a request, performs the login, then explicitly returns control to the agent.
 
-The repository is `Maseeek/keep-safe`. It is private. The initial README did not include an app description, requirements, or a reference design. The project name alone does not establish its purpose.
+A link alone is insufficient. The first version must include a request queue, approve and deny controls, session history, phone notifications, and expiring handoffs. Support agents through a common integration rather than locking the product to one model or IDE. Target T3 Code, Antigravity, Claude, Codex, and other MCP/HTTP-capable agents. Document compatibility limits honestly.
 
-## Questions awaiting answers
+## Decisions delegated to the implementation
 
-These questions were sent to the owner on 16 October 2026. No answers have been received in this conversation.
+- Choose architecture and visual design.
+- Choose sensible security and expiry defaults.
+- Never store passwords or log browser input. Cookies may remain in the agent's browser session.
+- Build a free initial product with a path to a profitable service.
+- Keep the GitHub repository PRIVATE. Open source is a possible future decision, not authorization to publish source now. Do not add a public licence yet.
 
-1. What should the app do? There is no app description yet. Describe the idea or share the reference you had in mind.
-2. Who should use it first? For example, yourself, families, developers, freelancers, or small businesses.
-3. What would make this successful when you return? Name any essential workflows or features.
-4. What boundaries should be respected? Anything that must be preserved, avoided, or left for your decision? Otherwise, implementation choices can be made autonomously.
-5. What should this become? A free community tool, an open-source project, a paid product, or something to decide after the first version?
-6. What data will people store, and should it sync between devices? This will guide accounts, storage, and privacy decisions.
-7. Should GitHub remain private or become public? If public, do you have a preferred licence?
-8. Which AI providers and allowances may be used? Include whether parallel agents should be used for implementation and independent reviews.
-9. What is the additional spending cap? Distinguish existing AI subscriptions from API usage, hosting, databases, domains, and other services.
-10. When exactly should autonomous work stop, and will this T3 environment remain running until then? Hourly continuation runs with a daily progress record were proposed, but have not been scheduled.
+## Budget and autonomy
 
-## Interim decisions
+- Additional spending cap: **£0**. No paid APIs, hosted browser infrastructure, databases, domains, or plan upgrades.
+- Use all available connected AI providers and their existing allowances. Parallel implementation and independent reviews are authorized. Continue with another available provider when an allowance is exhausted.
+- Stop autonomous work on **Saturday 24 October 2026 at 09:00 Europe/London**, which is **2026-10-24T08:00:00Z**. Check the clock before substantial work and deployment. Do not begin new work after this deadline.
+- T3 scheduled tasks require the environment to remain available; continuous host availability was not explicitly confirmed. Do not claim future runs are guaranteed.
 
-Until answers arrive:
+## Communication
 
-- Preserve the repository's private visibility.
-- Do not purchase services, domains, subscriptions, or paid API usage.
-- Do not select a product concept from the project name.
-- Prepare and maintain the delivery documentation.
-- Do not claim an app, deployment, or scheduler exists before it has been verified.
+The owner requested a way to contact them during development and named Gmail, WhatsApp, and Discord. Prefer an existing connected service within the £0 cap. Send progress and genuine decision requests only to the owner's account. See [contact.md](contact.md) for verified contact state.
 
-Record the owner's answers here before replacing these interim decisions. These limits are temporary project decisions, not additional approval requirements for work the owner has already authorized.
+## First architecture
+
+A static mobile web app deployed on Vercel communicates with an authenticated local bridge on the developer's running computer. The bridge controls or attaches to a Chromium browser and exposes agent integrations over MCP and HTTP. Browser cookies stay on that computer. Remote access requires an HTTPS connection to the bridge, through a private network or a user-controlled tunnel. The computer must remain awake while the agent works.
+
+This choice avoids paid always-on browser infrastructure. A hosted managed relay and team subscriptions are future product options, not part of the zero-cost deployment.

@@ -45,4 +45,12 @@ Before creating a recurring task, inspect existing scheduled tasks to avoid dupl
 
 Each continuation should inspect current files, GitHub state, and any live work before starting. Continue useful work against the agreed brief, resolve failures, and leave an accurate progress record. Check the stop date before starting new work and disable the recurring task when the agreed window ends.
 
-Current scheduler state: no recurring task is configured for this project.
+## Current scheduler
+
+- Recurring task: `scheduled-task:command:mcp:980aceb3-4f95-4e71-b6e6-5771dca48ec6:schedule-task:keep-safe-autonomy-20261016-until-20261024`
+- Bound to the current T3 thread; runs hourly.
+- First scheduled continuation: 16 October 2026 at 15:00 UTC / 16:00 London.
+- Stop time: 24 October 2026 at 08:00 UTC / 09:00 London. Every trigger must check the clock before work, disable the task at the deadline, and cancel any child work from this project.
+- These are task instructions, not an unconditional guarantee of host availability. The environment must remain running for scheduled work.
+
+The accepted brief is now in [alignment.md](alignment.md). The original questions have been answered.

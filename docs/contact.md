@@ -1,0 +1,16 @@
+# Owner contact
+
+The owner explicitly requested direct contact during development. Use the connected Gmail account to contact that same account, with daily progress and genuine decision requests. Do not contact unrelated recipients.
+
+## Verified state
+
+- Gmail account identity lookup succeeded on 16 October 2026.
+- The first test send failed with HTTP 403, Gmail provider quota `RATE_LIMIT_EXCEEDED`.
+- Sent was checked before retrying; no duplicate existed.
+- The second test send succeeded. Gmail returned a message/thread ID and the SENT and INBOX labels. The development contact route is verified as sent, not as read by the owner.
+- Use the existing thread for progress, and record message IDs and the last summary date in ignored `.keep-safe/contact.json` to prevent duplicate summaries.
+- Before retrying any uncertain send, inspect Sent and the existing thread. Do not retry blindly.
+
+The T3 conversation remains available for replies and decisions. Read only this development email thread when checking for a response. Replies do not change the £0 spending cap, private-source requirement, or stop date unless the owner explicitly changes those instructions.
+
+Do not put email addresses, webhook URLs, credentials, or browser login details in this repository. Current thread IDs needed for operation are in ignored `.keep-safe/contact.json`.
