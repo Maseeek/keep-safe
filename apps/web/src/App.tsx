@@ -33,6 +33,7 @@ import type { LoginRequest } from "../../../packages/shared/src/protocol";
 import { AgentMark, BrowserPanel, domain, timeLeft } from "./BrowserPanel";
 import { useWorkspace, validateConnection, type Workspace } from "./workspace";
 import { DeviceManager } from "./DeviceManager";
+import { HistoryControls } from "./HistoryControls";
 
 type Section = "inbox" | "activity" | "devices" | "settings";
 type Filter = "all" | "pending" | "active";
@@ -1096,6 +1097,7 @@ export function App() {
                   />
                 )}
               </div>
+              <HistoryControls workspace={workspace} now={now} notify={notify} />
               <div className="privacy-strip">
                 <ShieldCheck size={19} />
                 <p>

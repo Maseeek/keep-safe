@@ -27,7 +27,7 @@ describe('built mobile application', () => {
       expect(await page.locator('body').innerText()).not.toMatch(/\\u[0-9a-fA-F]{4}/);
       await page.getByRole('button', { name: /Done, hand back/ }).click();
       await expect.poll(() => page.getByRole('heading', { name: 'Back in good hands.' }).isVisible()).toBe(true);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       expect(await page.locator('input[type="password"]').count()).toBe(0);
       if (process.env.KEEP_SAFE_QA_SCREENSHOTS) {
         await mkdir('.keep-safe/qa', { recursive: true });

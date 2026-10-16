@@ -2,6 +2,15 @@
 
 ## 16 October 2026
 
+### Safe history cleanup and retention
+
+- Add confirmed owner history cleanup, shared live updates, and automatic cleanup of eligible memory-only metadata 24 hours after original expiry.
+- Preserve unexpired agent outcomes, live work, pending input/handback and browser opening/closure. Track slow or failed closes until safe completion.
+- Keep the 100-record cap without evicting protected outcomes; return a capacity error when necessary.
+- Add mobile confirmation, focus recovery, retryable errors, demo behavior and older-bridge guidance. Prevent stale authentication failures from clearing a newer pairing.
+- Clip decorative mobile artwork to prevent viewport expansion and restore reachable pairing controls. Strengthen phone overflow checks against the actual layout viewport.
+- Test authorization/revocation, expiry boundaries, concurrent browser work, capacity and complete mobile cleanup flows.
+
 ### Phone connection setup and diagnostics
 
 - Add `bridge setup` command guidance, optional temporary-tunnel instructions, safe shell quoting and structured output without reading keys or starting services.

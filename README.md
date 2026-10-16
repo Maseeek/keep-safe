@@ -16,6 +16,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 - Live browser streaming with taps, scrolling, text entry, and keyboard controls.
 - Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
+- Owner-controlled history cleanup that preserves unexpired agent handoffs.
 - Opt-in seven-day phone pairing with named devices and immediate revocation.
 - Isolated managed Chromium or attachment to an existing agent Chromium browser through loopback CDP.
 - MCP tools and an HTTP API so the integration is independent of a particular model.
@@ -102,6 +103,14 @@ An abrupt crash or interruption during startup can leave `bridge.lock`. It conta
 
 The CLI lifecycle and rotation checks are verified on Linux. Other operating systems and filesystems require separate validation, especially directory syncing and crash recovery.
 
+### Clear finished history
+
+Open **Activity → Clear finished history** and confirm removal. A finished request becomes eligible after its original expiry, once browser startup, input, handback and closure have finished. Pending/active requests and unexpired completed or declined outcomes remain available to agents. All connected owners receive the updated history.
+
+Request metadata stays in memory on the computer and resets on bridge restart. Eligible entries clear automatically 24 hours after their original expiry; manual cleanup or the 100-record capacity limit can remove them earlier. Pending or failed browser cleanup protects the record until closure succeeds. If all 100 records are protected, new requests receive a capacity error rather than silently losing a recent outcome.
+
+This control removes request metadata. It does not delete downloaded history exports, paired phones, keys, notification subscriptions, or cookies belonging to an externally attached browser. Managed browsers still close at the original request deadline. The demo has a labeled, tab-only cleanup flow. Older bridges show an update message before enabling cleanup.
+
 ## Development and checks
 
 ```bash
@@ -122,7 +131,7 @@ Phone controls use larger text and touch targets, with named remote keys and key
 
 - The bridge and agent computer must be running and reachable. The hosted dashboard alone does not run a browser.
 - A handoff expires after ten minutes by default, with a maximum of thirty minutes. A managed browser closes at the original request deadline even after completion; the agent must resume before then.
-- Requests and activity are currently in memory and reset when the bridge restarts.
+- Requests and activity stay in memory. Eligible finished records clear after 24 hours, earlier manual/capacity cleanup, or bridge restart; pending browser cleanup can postpone deletion.
 - Agents must pause browser input while the owner is in control. Existing debugging clients cannot be forcibly stopped by Keep Safe.
 - Phone passkeys, biometrics, hardware security keys, native password-manager integration, and every third-party login provider are not universally supported or verified.
 - The remote webpage is streamed as an image. Its fields are not yet exposed as a structured interface to screen readers. The named toolbar controls do not provide full assistive navigation inside the website.

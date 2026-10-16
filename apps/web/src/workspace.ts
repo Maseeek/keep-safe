@@ -3,6 +3,7 @@ import type {
   BridgeInfo,
   ClientMessage,
   DevicePairResult,
+  HistoryCleanupResult,
   LoginRequest,
   PairedDevice,
   ServerMessage,
@@ -296,6 +297,8 @@ export function useWorkspace(onError: (message: string) => void) {
   const [connection, setConnection] = useState<Connection | null>(
     initial.connection,
   );
+  const currentConnection = useRef(connection);
+  currentConnection.current = connection;
   const [pairingNotice, setPairingNotice] = useState(initial.notice);
   const [requests, setRequests] = useState<LoginRequest[]>(() =>
     initial.connection ? [] : demoRequests(),
@@ -313,6 +316,7 @@ export function useWorkspace(onError: (message: string) => void) {
 
   const invalidatePairing = useCallback(
     (activeConnection: Connection | null, message: string) => {
+      if (currentConnection.current !== activeConnection) return;
       clearPairingStorage();
       storeNotice(message);
       setPairingNotice(message);
@@ -616,6 +620,36 @@ export function useWorkspace(onError: (message: string) => void) {
     setRequests(Array.isArray(result) ? result : result.requests);
   };
 
+  const clearHistory = async () => {
+    const source = connection;
+    const knownIds = new Set(requests.map(request => request.id));
+    if (!source) {
+      const time = Date.now();
+      const remaining = requests.filter(request => !canClearHistory(request, time));
+      setRequests(remaining);
+      return {
+        removed: requests.length - remaining.length,
+        protected: remaining.filter(request => ["completed", "denied", "expired"].includes(request.status)).length,
+      };
+    }
+    let result: HistoryCleanupResult;
+    try {
+      result = await api("/api/history/clear", { method: "POST", body: JSON.stringify({ confirm: true }) });
+    } catch (reason) {
+      if (reason instanceof BridgeError && reason.status === 404)
+        throw new Error("Update the Keep Safe bridge on your computer to clear history.");
+      throw reason;
+    }
+    if (currentConnection.current !== source)
+      throw new Error("The connection changed. Check history on the current computer before trying again.");
+    const retained = new Set(result.requests.map(request => request.id));
+    // Keep requests that arrived over the live socket after this action began.
+    setRequests(previous => currentConnection.current === source
+      ? previous.filter(request => !knownIds.has(request.id) || retained.has(request.id))
+      : previous);
+    return { removed: result.removed, protected: result.protected };
+  };
+
   return {
     connection,
     requests,
@@ -635,8 +669,13 @@ export function useWorkspace(onError: (message: string) => void) {
     send,
     watch,
     action,
+    clearHistory,
     resetDemo: () => setRequests(demoRequests()),
   };
+}
+
+export function canClearHistory(request: LoginRequest, time: number): boolean {
+  return ["completed", "denied", "expired"].includes(request.status) && Date.parse(request.expiresAt) <= time;
 }
 
 export type Workspace = ReturnType<typeof useWorkspace>;

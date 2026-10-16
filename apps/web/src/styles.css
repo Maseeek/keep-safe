@@ -3219,6 +3219,9 @@ svg {
     height: 140px;
     margin-right: -5px;
   }
+  .page-heading:has(.onboarding-art) {
+    overflow: clip;
+  }
   .page-heading > .onboarding-art .orbit-1 {
     width: 130px;
     height: 100px;
@@ -3887,6 +3890,29 @@ svg {
 .device-confirm-dialog h2 {
   font-size: 25px;
   overflow-wrap: anywhere;
+}
+.history-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 18px;
+  padding: 24px;
+}
+.history-controls-copy { flex: 1; min-width: 0; }
+.history-controls h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; color: #344f3c; }
+.history-controls p { font-size: 14px; line-height: 1.8; color: #53644c; margin: 10px 0; }
+.history-counts { color: #53644c; font-size: 13px; line-height: 1.8; }
+.history-controls > button { flex-shrink: 0; min-height: 44px; white-space: normal; }
+.history-controls:focus-visible { outline: 2px solid #344f3c; outline-offset: 4px; }
+.history-error { color: #884b37; background: #fff6ed; padding: 12px; border-radius: 6px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .history-controls { flex-direction: column; align-items: stretch; padding: 20px; gap: 16px; }
+  .history-controls h2 { align-items: flex-start; line-height: 1.5; }
+  .history-controls h2 svg { flex-shrink: 0; margin-top: 3px; }
+  .history-controls > button { width: 100%; font-size: 14px; }
+  .history-confirm-dialog .device-confirm-actions { flex-direction: column; }
+  .history-confirm-dialog .device-confirm-actions > button { width: 100%; min-height: 44px; }
 }
 .pairing-expired-notice {
   display: flex;

@@ -22,7 +22,7 @@ Remote access requires the computer to remain awake and a secure route to the br
 - The default MCP client uses a private direct HTTP agent for loopback URLs, keeping the agent key off global proxy dispatchers. Explicit custom-fetch injection remains an integration responsibility; remote HTTPS uses the normal fetch transport. Redirects are refused.
 - Remembered phones receive separate seven-day device keys. The bridge stores SHA256 digests and device metadata in a local, atomically written file. It does not retain raw device keys.
 - A remembered key is saved in the phone's localStorage only after explicit opt-in. The master owner token remains tab-only. Authenticated APIs and every live-control message recheck expiry/revocation. The device key never confers agent rights or permission to pair another phone.
-- Request metadata is in memory. It is lost when the bridge restarts. The local activity list is bounded.
+- Request metadata is in memory and resets on restart. Eligible finished records are removed automatically 24 hours after original expiry, or earlier by confirmed owner cleanup/capacity pressure. All unexpired outcomes and pending browser opening/finalization/input/closure remain protected. A tracked failed close retains its browser reference for retry. The 100-record cap refuses new requests when no safe record can be removed.
 - Web Push subscriptions may be stored locally. They are not uploaded to Vercel.
 - Browser input is relayed transiently. Passwords and input messages are not logged or written to disk. Screenshots are streamed without recordings or trace files.
 - Managed browser cookies remain in an isolated in-memory context. Existing agent browser cookies remain owned by that browser.

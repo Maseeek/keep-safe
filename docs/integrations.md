@@ -86,11 +86,14 @@ All API requests except `/api/health` require `Authorization: Bearer <token>`. T
 
 - Agent token: `POST /api/requests` with JSON matching `CreateRequestInput`; `GET /api/requests/:id` to poll the result.
 - Owner token: `GET /api/info`, `GET /api/requests`, `POST /api/requests/:id/approve`, `/deny`, or `/complete`.
+- Owner history cleanup: `POST /api/history/clear` with JSON `{"confirm":true}`. Returns `{removed, protected, requests}` and broadcasts the latest list. A paired owner key can use this route; agent keys cannot. Only terminal records past their original expiry with no pending browser work can be removed. `BridgeInfo.historyRetentionHours` advertises support (currently 24).
 - Paired phone management: `GET /api/devices`, `POST /api/devices/:id/revoke`; bootstrap owner token only: `POST /api/devices` with a device name, which returns a new seven-day key once.
 - Owner push subscription: `POST /api/push/subscribe`.
 - Owner live control: WebSocket `/ws`, first message `{"type":"auth","token":"<owner token>"}`, followed by `watch` and bounded input messages.
 
 Public message types are in [protocol.ts](../packages/shared/src/protocol.ts). The executable MCP adapter is in [packages/mcp](../packages/mcp/src/index.ts).
+
+Agent outcomes stay available until original expiry. Eligible metadata is removed after another 24 hours, confirmed owner cleanup, bridge restart, or earlier capacity eviction. Poll promptly: a removed request returns 404. When all 100 records are protected, creation returns 429 until space becomes safe to reclaim. Cleanup does not provide session cookie export or persistent browser retention.
 
 ## Compatibility scope
 

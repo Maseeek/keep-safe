@@ -29,6 +29,13 @@ export interface BridgeInfo {
   browserAvailable: boolean;
   pushEnabled: boolean;
   vapidPublicKey?: string;
+  historyRetentionHours?: number;
+}
+
+export interface HistoryCleanupResult {
+  removed: number;
+  protected: number;
+  requests: LoginRequest[];
 }
 
 export interface PairedDevice {

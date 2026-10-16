@@ -4,7 +4,7 @@ import { readFile, stat, realpath } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
-import type { BridgeInfo, CreateRequestInput, LoginRequest, ServerMessage } from '../../shared/src/protocol';
+import type { BridgeInfo, HistoryCleanupResult, LoginRequest, ServerMessage } from '../../shared/src/protocol';
 import { browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
 import { atomicJsonWriter, createDeviceStore } from './devices';
 
@@ -35,10 +35,13 @@ interface Entry {
   finalizing?: boolean;
   inputBarrier?: Promise<void>;
   draining?: Promise<void>;
+  closing?: Promise<void>;
 }
 interface Client { ws: WebSocket; authenticated: boolean; master?: boolean; deviceId?: string; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>; frames?: ReturnType<typeof setInterval>; pendingFrame: boolean; operations: Promise<void>; count: number; window: number }
 interface StoredSubscription extends PushSubscription { deviceId?: string }
 const terminal = new Set(['completed', 'denied', 'expired']);
+const historyRetentionHours = 24;
+const historyRetentionMs = historyRetentionHours * 60 * 60 * 1000;
 const allowedKeys = new Set(['Enter', 'Tab', 'Shift+Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space', 'ControlOrMeta+A']);
 
 function equalToken(actual: string | undefined, expected: string) {
@@ -88,7 +91,7 @@ export async function createBridge(options: BridgeOptions) {
   const subscriptionsWriter = atomicJsonWriter(options.subscriptionsFile);
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, historyRetentionHours, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl]) if (value) origins.add(new URL(value).origin);
   if (options.subscriptionsFile) {
@@ -122,11 +125,33 @@ export async function createBridge(options: BridgeOptions) {
     if (client.watching) { const entry = entries.get(client.watching); if (entry?.controller === client) entry.controller = undefined; }
     client.watching = undefined;
   }
-  async function closeEntry(entry: Entry) {
+  function closeEntry(entry: Entry): Promise<void> {
     if (entry.controller) unwatch(entry.controller);
+    if (entry.closing) return entry.closing;
     const browser = entry.browser;
-    entry.browser = undefined;
-    if (browser) await browser.close().catch(() => {});
+    if (!browser) return Promise.resolve();
+    // Retain the reference until close succeeds. Other expiry/cleanup calls must
+    // not remove a record while its browser is still closing, or after a failure.
+    const closing = Promise.resolve().then(() => browser.close()).then(() => {
+      if (entry.browser === browser) entry.browser = undefined;
+    }, () => { /* A later expiry pass can retry this browser without losing its reference. */ }).finally(() => {
+      if (entry.closing === closing) entry.closing = undefined;
+    });
+    entry.closing = closing;
+    return closing;
+  }
+  function removable(entry: Entry) {
+    return terminal.has(entry.request.status) && now() >= Date.parse(entry.request.expiresAt) &&
+      !entry.browser && !entry.opening && !entry.finalizing && !entry.draining && !entry.inputBarrier && !entry.closing;
+  }
+  function clearHistory(automatic = false): HistoryCleanupResult {
+    let removed = 0; let protectedCount = 0;
+    for (const [id, entry] of entries) {
+      if (!terminal.has(entry.request.status)) continue;
+      if (removable(entry) && (!automatic || now() >= Date.parse(entry.request.expiresAt) + historyRetentionMs)) { entries.delete(id); removed++; }
+      else protectedCount++;
+    }
+    return { removed, protected: protectedCount, requests: list() };
   }
   async function expire() {
     const expiredDevices = devices.prune();
@@ -139,9 +164,11 @@ export async function createBridge(options: BridgeOptions) {
     for (const entry of entries.values()) {
       if (now() < Date.parse(entry.request.expiresAt)) continue;
       if (!terminal.has(entry.request.status)) { entry.request.status = 'expired'; entry.request.updatedAt = new Date(now()).toISOString(); changed = true; }
-      await closeEntry(entry);
+      // Metadata APIs stay responsive during slow closes. The tracked promise
+      // and retained browser reference protect the outcome until cleanup finishes.
+      void closeEntry(entry);
     }
-    if (changed) broadcast();
+    if (clearHistory(true).removed || changed) broadcast();
   }
   function checkEntry(id: string) { const entry = entries.get(id); if (!entry) throw new HttpError(404, 'Request not found.'); return entry; }
   function active(entry: Entry, client: Client) { return validClient(client) && !entry.finalizing && !entry.draining && !terminal.has(entry.request.status) && now() < Date.parse(entry.request.expiresAt) && entry.controller === client && client.watching === entry.request.id && client.ws.readyState === WebSocket.OPEN; }
@@ -307,6 +334,15 @@ export async function createBridge(options: BridgeOptions) {
       json(response, 200, { ok: true }); return;
     }
     if (url.pathname === '/api/info' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, info); return; }
+    if (url.pathname === '/api/history/clear' && request.method === 'POST') {
+      requireOwner();
+      const body = await jsonBody(request);
+      requireOwner();
+      if (body.confirm !== true) throw new HttpError(400, 'Confirm history cleanup with {"confirm":true}.');
+      const result = clearHistory();
+      if (result.removed) broadcast();
+      json(response, 200, result); return;
+    }
     if (url.pathname === '/api/requests' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, { requests: list() }); return; }
     if (url.pathname === '/api/requests' && request.method === 'POST') {
       if (!agent) throw new HttpError(403, 'Agent access is required.');
@@ -318,8 +354,14 @@ export async function createBridge(options: BridgeOptions) {
       if (typeof ttl !== 'number' || !Number.isInteger(ttl) || ttl < 1 || ttl > 1800) throw new HttpError(400, 'ttlSeconds must be an integer between 1 and 1800.');
       const time = now();
       const item: LoginRequest = { id: randomUUID(), agent: safeText(body.agent, 'Agent', 80), title: safeText(body.title, 'Title', 120), url: target, origin: new URL(target).origin, reason: safeText(body.reason, 'Reason', 500, 'Complete the sign-in so your agent can continue.'), status: 'pending', createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString(), expiresAt: new Date(time + ttl * 1000).toISOString() };
-      // Bound metadata memory, preserving all live entries and newest terminal entries.
-      if (entries.size >= 100) for (const [id, entry] of entries) { if (terminal.has(entry.request.status) && !entry.browser && !entry.opening) { entries.delete(id); break; } }
+      // Body reading is asynchronous, so recheck resource limits immediately
+      // before mutation. Never evict an outcome the agent can still retrieve.
+      if ([...entries.values()].filter(entry => !terminal.has(entry.request.status)).length >= 20) throw new HttpError(429, 'The request queue is full.');
+      if (entries.size >= 100) {
+        const oldestSafe = [...entries].find(([, entry]) => removable(entry));
+        if (!oldestSafe) throw new HttpError(429, 'History is full of protected requests. Wait for their original deadlines before creating another.');
+        entries.delete(oldestSafe[0]);
+      }
       entries.set(item.id, { request: item, cdpUrl });
       broadcast(); void notify(item);
       json(response, 201, item); return;

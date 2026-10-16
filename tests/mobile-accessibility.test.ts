@@ -73,7 +73,7 @@ describe('mobile readability and keyboard access', () => {
         await page.keyboard.press('Tab');
         expect(await approve.evaluate(element => element === document.activeElement)).toBe(true);
       }
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       if (process.env.KEEP_SAFE_QA_SCREENSHOTS) {
         await mkdir('.keep-safe/qa', { recursive: true });
         await page.screenshot({ path: `.keep-safe/qa/readable-phone-${width}.png` });
@@ -121,7 +121,7 @@ describe('mobile readability and keyboard access', () => {
       const warning = page.locator('.redirect-note');
       await expect.poll(() => warning.innerText()).toContain(`http://${host}:8443`);
       expect(await textContrast(warning)).toBeGreaterThanOrEqual(4.5);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     } finally { await context.close(); await bridge.close(); }
   });
 
