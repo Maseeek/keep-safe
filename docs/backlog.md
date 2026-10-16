@@ -10,7 +10,7 @@
 - [ ] Phone web push delivered on a physical device (subscription API, worker and installation guidance implemented).
 - [x] Meaningful explicit demo mode for visitors without a bridge.
 - [x] End-to-end fixture proving login and reuse of authenticated browser state.
-- [x] Security tests, mobile/desktop browser QA, CI (49 tests and GitHub CI passed; public deployment returns HTTP 200).
+- [x] Security tests, mobile/desktop browser QA, CI (55 tests pass locally; pairing release passed GitHub CI and public deployment verification).
 - [x] Verified Vercel deployment linked from GitHub.
 - [x] Verified owner contact and bounded recurring continuation.
 
@@ -20,6 +20,7 @@
 - [x] Opt-in seven-day phone pairing, device listing, and immediate device revocation (token rotation CLI still open).
 - [x] Compatibility examples and config generator for T3 Code, Codex, Claude and Antigravity.
 - [x] Multi-hop popup recovery, touched-page password clearing, and documented unsupported authentication methods.
+- [x] Full live origin display, mobile stream release on leaving a request, and scroll/rate-limit reconnect regression coverage.
 - [ ] Owner/agent token rotation CLI and tunnel setup helper.
 - [ ] Further accessibility and mobile keyboard improvements.
 - [ ] Privacy-preserving local session retention and cleanup controls.

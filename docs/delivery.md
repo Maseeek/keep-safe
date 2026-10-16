@@ -24,7 +24,7 @@ If a pull request is created or worked on, register its URL with the T3 thread t
 
 ## Deploy through Vercel MCP
 
-Vercel MCP account access was verified on 16 October 2026. No Vercel project has been created for this app yet.
+Vercel project `keep-safe` (`prj_zW8M93fOJrh1lzeaqZGgzfJKm9L3`) belongs to team `team_MqtKrcIvH0Rzo9p8g3ai1lY9`. Production is [keep-safe-eight.vercel.app](https://keep-safe-eight.vercel.app). The private GitHub repository is connected to this project. Use the direct Vercel MCP connection with this explicit scope.
 
 Before deployment:
 
@@ -54,3 +54,5 @@ Each continuation should inspect current files, GitHub state, and any live work 
 - These are task instructions, not an unconditional guarantee of host availability. The environment must remain running for scheduled work.
 
 The accepted brief is now in [alignment.md](alignment.md). The original questions have been answered.
+
+Continuation prompts can contain an older handoff. Prefer the current checkout and the latest entries in [progress.md](progress.md), then verify deployment state. The phone keys have a fixed seven-day expiry; an earlier chat summary's claim of a 30-day sliding expiry was incorrect.

@@ -14,7 +14,9 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 
 - Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
 - Live browser streaming with taps, scrolling, text entry, and keyboard controls.
+- Live website origin with scheme and port, plus a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
+- Opt-in seven-day phone pairing with named devices and immediate revocation.
 - Isolated managed Chromium or attachment to an existing agent Chromium browser through loopback CDP.
 - MCP tools and an HTTP API so the integration is independent of a particular model.
 - Web Push subscription support and an installable mobile web app.
@@ -84,6 +86,8 @@ npm run build      # typecheck and production frontend build
 ```
 
 Tests cover request authorization, state transitions, expiry, private-network restrictions, browser ownership, password-field clearing, MCP wire compatibility, and real Chromium login/resume flows. Built-app mobile tests exercise both the demo and a real login through the phone controls. CI runs on pushes and pull requests with read-only repository permissions.
+
+Leaving a request on mobile stops its live stream and discards pending scroll input. Reopening resumes the same unexpired browser. Temporary connection and input-rate failures reconnect without deleting a valid pairing.
 
 ## Limits to know
 

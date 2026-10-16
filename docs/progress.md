@@ -48,3 +48,15 @@
   - Distinguished WebSocket authentication failure close codes (`4001`) from rate limits (`4029`), throttled rapid wheel scrolling, and clamped tap coordinates.
 - Linked the project in T3 Code with launch scripts (`Start local bridge`, `Open live app`, `Run tests`), opened the inline preview tab, and registered the local `keep-safe` MCP server in Antigravity, Codex, and Claude configs.
 - Typecheck, production frontend build, and all 49 tests pass across 11 test files.
+
+## Continuation at 19:05 UTC: live origin and mobile stream lifecycle
+
+- Verified pairing release `133e8da673176e3aeab3a4ac94bb9c1d8a2537d1` is production READY through Vercel MCP (`dpl_5eFWm2AnXN98DdyTLpFEZSNzC434`), with HTTP 200 at the public alias. GitHub CI `38921910463` passed and repository visibility is PRIVATE.
+- Completed the remaining live-address review detail: show scheme and port, warn about same-host scheme/port changes, and remove the HTTPS indicator for opaque pages. URL paths, query strings, fragments, and credentials are omitted from the address display.
+- A new built-app test caught streaming continuing behind the mobile inbox after closing details. Mobile details now unmount on exit, release the stream, and discard pending wheel input. Reopening resumes the unexpired browser.
+- Browser tests verify rapid wheel events are coalesced and bounded, and an input-rate disconnect reconnects with the same valid pairing and active request.
+- Extended real Chromium popup coverage to clear all open session pages while leaving unrelated tabs untouched. Added CDP discovery port/path regression coverage.
+- Screenshot review caught literal Unicode escapes in the browser controls; corrected them and added visible-text regression checks.
+- Typecheck and all 55 tests pass across 13 files. Built-app tests include synthetic live frames for failure cases and the existing real Chromium login/resume flow.
+- The T3 preview open call returned `The calling provider no longer owns an active thread run.` twice. Used the repository's built-app Playwright workflow and inspected its phone screenshot. Current inline-preview pairing is not claimed. The same ownership error prevented refreshing the recurring task's stale handoff; the hourly task remains enabled and current checkout documentation takes precedence.
+- This continuation does not claim a new independent security review or physical-phone push delivery. No additional owner email was sent because today's live-link milestone was already confirmed sent.

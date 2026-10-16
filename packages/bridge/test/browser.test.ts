@@ -28,6 +28,21 @@ async function unusedPort() {
 }
 const installed = await browserAvailable();
 
+it('rejects CDP discovery that changes the debugging port or leaves the devtools path', async () => {
+  let discovered = '';
+  const discovery = httpServer((_request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ webSocketDebuggerUrl: discovered }));
+  });
+  await new Promise<void>(resolve => discovery.listen(0, '127.0.0.1', resolve));
+  cleanup.push(() => new Promise<void>(resolve => discovery.close(() => resolve())));
+  const port = (discovery.address() as { port: number }).port;
+  for (const endpoint of [`ws://127.0.0.1:${port === 65535 ? port - 1 : port + 1}/devtools/browser/fake`, `ws://127.0.0.1:${port}/unrelated-service`]) {
+    discovered = endpoint;
+    await expect(openBrowser({ url: 'https://example.com/login', cdpUrl: `http://127.0.0.1:${port}`, allowLocalUrls: false })).rejects.toThrow('Invalid Chromium debugging endpoint.');
+  }
+});
+
 it.skipIf(!installed)('disconnects from an external Chromium without closing its page or cookies', async () => {
   const url = await fixture();
   const port = await unusedPort();
@@ -78,15 +93,24 @@ it.skipIf(!installed)('recovers from multi-hop popups and clears passwords acros
   const context = await browser.newContext(); const page0 = await context.newPage();
   await page0.goto(url);
   await page0.locator('#password').fill('initial-secret');
+  const unrelated = await context.newPage();
+  await unrelated.goto(url + '?unrelated');
+  await unrelated.locator('#password').fill('unrelated-tab-secret');
   const session = await openBrowser({ url, cdpUrl: `http://127.0.0.1:${port}`, allowLocalUrls: true });
   cleanup.push(() => session.close());
   const [popup1] = await Promise.all([context.waitForEvent('page'), page0.getByRole('link', { name: 'Open popup 1' }).click()]);
   await popup1.waitForLoadState();
   await expect.poll(() => session.pageUrl).toContain('/popup1');
+  await popup1.locator('#pop1-pass').fill('intermediate-popup-secret');
   const [popup2] = await Promise.all([context.waitForEvent('page'), popup1.getByRole('link', { name: 'Open popup 2' }).click()]);
   await popup2.waitForLoadState();
   await expect.poll(() => session.pageUrl).toContain('/popup2');
   await popup2.locator('#pop2-pass').fill('popup-secret');
+  await session.prepareHandoff!();
+  expect(await page0.locator('#password').inputValue()).toBe('');
+  expect(await popup1.locator('#pop1-pass').inputValue()).toBe('');
+  expect(await popup2.locator('#pop2-pass').inputValue()).toBe('');
+  expect(await unrelated.locator('#password').inputValue()).toBe('unrelated-tab-secret');
   // Close intermediate popup1 first, then popup2; session must fall back to page0.
   await popup1.close();
   await popup2.close();

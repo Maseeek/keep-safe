@@ -15,10 +15,12 @@ import {
   LockKeyhole,
   MousePointer2,
   ShieldCheck,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import type { LoginRequest } from "../../../packages/shared/src/protocol";
 import type { Workspace } from "./workspace";
+import { browserAddress } from "./browser-address";
 
 export function AgentMark({
   name,
@@ -89,6 +91,8 @@ export function BrowserPanel({
     workspace.frame?.requestId === request.id ? workspace.frame : null;
   const canInput =
     active && workspace.status === "connected" && !!liveFrame && !expired;
+  const address = browserAddress(liveFrame?.url ?? request.url);
+  const requestedAddress = browserAddress(request.url);
 
   useEffect(() => {
     workspace.watch(active && !isDemo && !expired ? request.id : null);
@@ -105,10 +109,16 @@ export function BrowserPanel({
     if (!active || expired || workspace.status !== "connected") setText("");
   }, [active, expired, workspace.status]);
   useEffect(() => {
+    // A pending wheel event belongs to this request and this control interval.
+    // Never replay it after a disconnect, handback, or request switch.
     return () => {
-      if (wheelBuffer.current.timer) clearTimeout(wheelBuffer.current.timer);
+      const buffer = wheelBuffer.current;
+      if (buffer.timer) clearTimeout(buffer.timer);
+      buffer.timer = undefined;
+      buffer.deltaX = 0;
+      buffer.deltaY = 0;
     };
-  }, []);
+  }, [request.id, canInput]);
 
   const sendText = (event: React.FormEvent) => {
     event.preventDefault();
@@ -151,7 +161,7 @@ export function BrowserPanel({
         </div>
       </div>
       <div className="reason-box">
-        <span className="quote-mark">\u201c</span>
+        <span className="quote-mark" aria-hidden="true">&ldquo;</span>
         <p>
           {request.reason ||
             "Please sign in to this website so I can continue my task."}
@@ -178,11 +188,13 @@ export function BrowserPanel({
             <i />
             <i />
           </span>
-          <div className="address">
-            <LockKeyhole size={11} />
-            <span>
-              {liveFrame ? domain(liveFrame.url) : domain(request.url)}
-            </span>
+          <div className="address" title={address.label}>
+            {address.secure ? (
+              <LockKeyhole size={11} aria-label="HTTPS connection" />
+            ) : (
+              <TriangleAlert size={11} aria-label="Page is not using HTTPS" />
+            )}
+            <span>{address.label}</span>
           </div>
           <span className="frame-mode">
             {isDemo ? "DEMO" : active ? "LIVE" : "PRIVATE"}
@@ -241,13 +253,13 @@ export function BrowserPanel({
             </p>
             <span className="privacy-caption">
               <Eye size={13} />
-              You\u2019ll see the actual website
+              You'll see the actual website
             </span>
           </div>
         ) : isDemo ? (
           <div className="browser-state demo-browser">
             <span className="demo-surface-label">
-              INTERACTIVE DEMO \u00b7 NO REAL WEBSITE
+              INTERACTIVE DEMO · NO REAL WEBSITE
             </span>
             <div className="demo-step-icon">
               {demoStep ? <Check size={30} /> : <MousePointer2 size={30} />}
@@ -329,7 +341,7 @@ export function BrowserPanel({
             {workspace.status !== "connected" ? (
               <div className="reconnect-cover">
                 <LoaderCircle className="spin" size={24} />
-                <span>Reconnecting to your browser\u2026</span>
+                <span>Reconnecting to your browser…</span>
               </div>
             ) : null}
           </div>
@@ -373,7 +385,7 @@ export function BrowserPanel({
                 onClick={() => workspace.send({ type: "key", key: "Enter" })}
                 disabled={!canInput}
               >
-                \u21b5
+                &#x21b5;
               </button>
               <button
                 title="Press Backspace in browser"
@@ -382,7 +394,7 @@ export function BrowserPanel({
                 }
                 disabled={!canInput}
               >
-                \u232b
+                &#x232b;
               </button>
               <button
                 title="Scroll browser up"
@@ -493,11 +505,11 @@ export function BrowserPanel({
       {active &&
       liveFrame &&
       !isDemo &&
-      domain(liveFrame.url) !== domain(request.url) ? (
+      address.label !== requestedAddress.label ? (
         <div className="redirect-note">
           <ExternalLink size={14} />
           <span>
-            This page moved to <strong>{domain(liveFrame.url)}</strong>. Check
+            This page moved to <strong>{address.label}</strong>. Check
             the address before entering credentials.
           </span>
         </div>

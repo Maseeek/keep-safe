@@ -960,7 +960,7 @@ export function App() {
                     mobileLayout && selectedId ? "Browser request" : undefined
                   }
                 >
-                  {selected ? (
+                  {selected && (!mobileLayout || selectedId) ? (
                     <BrowserPanel
                       request={selected}
                       workspace={workspace}

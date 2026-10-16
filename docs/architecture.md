@@ -37,7 +37,9 @@ An agent must cooperate by pausing while the human has control. Keep Safe cannot
 
 The phone interacts with the remote Chromium page. This does not move a phone's passkeys, native password manager, biometrics, or hardware security key into that remote browser. Some sites also block automated browsers. These methods need explicit testing and may require a supported cross-device authentication flow.
 
-Use a separate browser profile, and inspect the current website origin before entering credentials. The app shows the live page's URL so redirects are visible. Keep Safe does not bypass website authentication or anti-abuse protections.
+Use a separate browser profile, and inspect the current website origin before entering credentials. The app shows the live scheme, hostname, and port without the URL's path, query, fragment, or credentials. A change of origin triggers a warning, including HTTPS to HTTP or a different port. Opaque pages such as `about:blank` are not labeled as HTTPS. Keep Safe does not bypass website authentication or anti-abuse protections.
+
+On mobile, leaving request details releases live control and stops frame streaming. Pending wheel input is discarded when leaving, changing requests, disconnecting, or ending control. Reopening the request can resume its existing browser before expiry.
 
 ## Notifications
 
