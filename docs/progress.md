@@ -123,3 +123,11 @@
 - Ran the new doctor against the actual retained bridge: all local checks pass using its current local origin. Deliberately supplying the hosted app origin correctly reports blocked CORS/WebSocket origin checks for that local-only configuration. No remote phone/tunnel success is inferred.
 - Verified the setup surface at 320px, 390px and 1440px without horizontal overflow or JavaScript errors, and inspected its phone screenshot. T3 preview initialization twice returned `The calling provider no longer owns an active thread run.`; used the repository's built-app Playwright workflow.
 - No additional owner email: today's live-link milestone was already confirmed sent. Physical push and structured remote webpage access remain unfinished. Deployment verification follows below.
+
+### Connection release verified at 22:22 UTC
+
+- Pushed application commit `eb3d872d86d89b4d8e0875d9c45f230f3021dd11` to the private repository. Vercel MCP production deployment `dpl_5bznBHGSd5G642ppNYnfRPzBNmc5` is READY for that exact commit, project and production alias [keep-safe-eight.vercel.app](https://keep-safe-eight.vercel.app).
+- GitHub CI `38975172637` passed on Node 22. Typecheck, production build and all 93 tests pass. Verified the expected production bundle, HTTP 200, demo approval/sign-in/handback, connection guide and layout at 320px, 390px and 1440px without JavaScript errors. Inspected the production phone screenshot.
+- The retained loopback bridge is healthy and its lock matches the recorded live process. No restart was needed for the diagnostic helper or static frontend update. Existing keys, sessions and local configuration were preserved. Newly launched MCP clients load the proxy-isolated transport; already running clients retain their loaded code until restarted.
+- Hourly continuation remains enabled; the next returned run is 16 October at 23:00:37 UTC, subject to host availability and the 24 October 08:00 UTC stop. No public tunnel or physical-phone push verification is claimed.
+- Next useful work: privacy-preserving local retention/cleanup controls, then structured remote-page accessibility and product validation. Keep physical-phone testing explicitly outstanding until a device is available.
