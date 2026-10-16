@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { Agent, request as httpRequest } from 'node:http';
 import type { CreateRequestInput, LoginRequest } from '../../shared/src/protocol.js';
 
 export interface AgentRequest extends LoginRequest {
@@ -8,9 +9,35 @@ export interface AgentRequest extends LoginRequest {
 
 export interface BridgeClientOptions { url: string; token: string; fetch?: typeof fetch }
 
+/** Keep local authority off global fetch/proxy dispatchers, including Node's environment proxy support. */
+async function directLoopbackRequest(url: URL, init: RequestInit): Promise<Response> {
+  const agent = new Agent({ keepAlive: false });
+  try {
+    return await new Promise<Response>((resolve, reject) => {
+      const request = httpRequest(url, {
+        agent, method: init.method, headers: Object.fromEntries(new Headers(init.headers)), signal: init.signal ?? undefined,
+      }, response => {
+        const status = response.statusCode ?? 502;
+        if (status >= 300 && status < 400) { response.destroy(); reject(new Error('Bridge redirects are disabled.')); return; }
+        if (status < 200 || status >= 300) { response.destroy(); resolve(new Response(null, { status })); return; }
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.once('error', reject);
+        response.once('aborted', () => reject(new Error('Bridge response was interrupted.')));
+        response.once('end', () => {
+          try { resolve(new Response([204, 205].includes(status) ? null : Buffer.concat(chunks), { status })); }
+          catch { reject(new Error('Bridge response could not be read.')); }
+        });
+      });
+      request.once('error', reject);
+      request.end(typeof init.body === 'string' ? init.body : undefined);
+    });
+  } finally { agent.destroy(); }
+}
+
 export class BridgeClient {
   private readonly url: URL;
-  private readonly fetcher: typeof fetch;
+  private readonly fetcher: (url: URL, init: RequestInit) => Promise<Response>;
   constructor(private readonly options: BridgeClientOptions) {
     this.url = new URL(options.url);
     if (!['http:', 'https:'].includes(this.url.protocol) || this.url.username || this.url.password || this.url.search || this.url.hash) {
@@ -20,7 +47,7 @@ export class BridgeClient {
       throw new Error('Use HTTPS for a remote bridge.');
     }
     if (!options.token) throw new Error('Agent token is missing. Start the bridge or set KEEP_SAFE_AGENT_TOKEN.');
-    this.fetcher = options.fetch ?? fetch;
+    this.fetcher = options.fetch ?? (this.url.protocol === 'http:' ? directLoopbackRequest : fetch);
   }
 
   private async request<T>(path: string, input?: unknown): Promise<T> {
@@ -41,7 +68,8 @@ export class BridgeClient {
       if (response.status === 404) throw new Error('Login request was not found.');
       throw new Error(`Bridge request failed (${response.status}). Check the URL, request fields, and bridge status.`);
     }
-    return response.json() as Promise<T>;
+    try { return await response.json() as T; }
+    catch { throw new Error('Bridge returned an unreadable response. Check the bridge URL and status.'); }
   }
 
   create(input: CreateRequestInput): Promise<AgentRequest> { return this.request('/api/requests', input); }

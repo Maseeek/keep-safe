@@ -12,6 +12,24 @@ export interface BridgeConfig {
 /** Only these deliberately worded errors are safe for CLI output. */
 export class ConfigError extends Error {}
 
+/** Read existing authority without creating files, changing permissions, or acquiring a lock. */
+export async function readExistingConfig(directory: string): Promise<BridgeConfig> {
+  let content: string;
+  try { content = await readFile(join(resolve(directory), 'config.json'), 'utf8'); }
+  catch { throw new ConfigError('Existing bridge configuration could not be read. Check the configuration directory and file permissions.'); }
+  return parseConfig(content);
+}
+
+function parseConfig(content: string): BridgeConfig {
+  let value: BridgeConfig;
+  try { value = JSON.parse(content) as BridgeConfig; }
+  catch { throw new ConfigError('Invalid bridge configuration. Restore a valid local config file before continuing.'); }
+  if (!value || typeof value.ownerToken !== 'string' || typeof value.agentToken !== 'string' || !/^[a-f0-9]{64}$/.test(value.ownerToken) || !/^[a-f0-9]{64}$/.test(value.agentToken) || value.ownerToken === value.agentToken || typeof value.vapid?.publicKey !== 'string' || !value.vapid.publicKey || typeof value.vapid?.privateKey !== 'string' || !value.vapid.privateKey) {
+    throw new ConfigError('Invalid bridge configuration. Restore a valid local config file before continuing.');
+  }
+  return value;
+}
+
 export async function loadConfig(directory = '.keep-safe', options: { createIfMissing?: boolean } = {}): Promise<BridgeConfig> {
   const path = resolve(directory);
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -19,12 +37,7 @@ export async function loadConfig(directory = '.keep-safe', options: { createIfMi
   const file = join(path, 'config.json');
   try {
     const content = await readFile(file, 'utf8');
-    let value: BridgeConfig;
-    try { value = JSON.parse(content) as BridgeConfig; }
-    catch { throw new ConfigError('Invalid bridge configuration. Restore a valid local config file before continuing.'); }
-    if (!value || typeof value.ownerToken !== 'string' || typeof value.agentToken !== 'string' || !/^[a-f0-9]{64}$/.test(value.ownerToken) || !/^[a-f0-9]{64}$/.test(value.agentToken) || value.ownerToken === value.agentToken || typeof value.vapid?.publicKey !== 'string' || !value.vapid.publicKey || typeof value.vapid?.privateKey !== 'string' || !value.vapid.privateKey) {
-      throw new ConfigError('Invalid bridge configuration. Restore a valid local config file before continuing.');
-    }
+    const value = parseConfig(content);
     await chmod(file, 0o600);
     return value;
   } catch (error) {

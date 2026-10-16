@@ -4,14 +4,19 @@ import { ConfigError, loadConfig } from './config';
 import { acquireConfigLock } from './config-lock';
 import { rotateKeys, type KeyScope } from './key-rotation';
 import { createBridge } from './server';
+import { connectionOrigin, connectionPort, hostedAppOrigin } from './connection-options';
+import { diagnoseConnection } from './doctor';
+import { connectionSetup } from './setup';
 
 class UsageError extends Error {}
 
-function argumentsOf(args: string[], rotation: boolean) {
+function argumentsOf(args: string[], command: string) {
   const values = new Map<string, string>();
   const flags = new Set<string>();
-  const allowed = new Set(rotation ? ['--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', '--static-dir']);
-  const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : ['--allow-local-urls', '--no-static', '--help']);
+  const rotation = command === 'rotate-keys';
+  const connection = command === 'doctor' || command === 'setup';
+  const allowed = new Set(rotation ? ['--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir'])]);
+  const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : connection ? ['--json', '--help'] : ['--allow-local-urls', '--no-static', '--help']);
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (booleans.has(flag)) { flags.add(flag); continue; }
@@ -23,14 +28,14 @@ function argumentsOf(args: string[], rotation: boolean) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const rotation = args[0] === 'rotate-keys';
-  const { values, flags } = argumentsOf(rotation ? args.slice(1) : args, rotation);
+  const command = ['rotate-keys', 'doctor', 'setup'].includes(args[0]) ? args.shift()! : 'start';
+  const { values, flags } = argumentsOf(args, command);
   if (flags.has('--help')) {
-    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel address for phone connections (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend URL and pairing page (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
+    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
     return;
   }
   const configDirectory = resolve(values.get('--config-dir') ?? process.env.KEEP_SAFE_CONFIG_DIR ?? '.keep-safe');
-  if (rotation) {
+  if (command === 'rotate-keys') {
     const scopes = ['owner', 'agent', 'all'].filter(scope => flags.has(`--${scope}`));
     if (scopes.length !== 1) throw new UsageError('Choose exactly one rotation scope: --owner, --agent, or --all.');
     try { await rotateKeys(configDirectory, scopes[0] as KeyScope); }
@@ -43,13 +48,24 @@ async function main() {
       : `${scopes[0] === 'all' ? 'Owner and agent keys' : 'Owner key'} replaced. Remembered phones and notifications revoked. Restart the bridge and pair phones with its new private link.${scopes[0] === 'all' ? ' Restart connected MCP clients too.' : ''}`);
     return;
   }
-  const port = Number(values.get('--port') ?? process.env.KEEP_SAFE_PORT ?? '4318');
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new UsageError('Port must be between 1 and 65535.');
-  const publicUrl = values.get('--public-url') ?? process.env.KEEP_SAFE_PUBLIC_URL ?? `http://127.0.0.1:${port}`;
-  const appUrl = values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? publicUrl;
-  for (const value of [publicUrl, appUrl]) {
-    const url = new URL(value);
-    if (url.username || url.password || url.hash || url.search || !['https:', 'http:'].includes(url.protocol) || (url.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) throw new UsageError('Public and app URLs must use HTTPS (or local HTTP for development), without credentials, query or fragment.');
+  const port = connectionPort(values.get('--port') ?? process.env.KEEP_SAFE_PORT ?? '4318');
+  const selectedPublicUrl = values.get('--public-url') ?? process.env.KEEP_SAFE_PUBLIC_URL;
+  const publicUrl = connectionOrigin(selectedPublicUrl ?? `http://127.0.0.1:${port}`);
+  const appUrl = connectionOrigin(values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? (command === 'setup' ? hostedAppOrigin : publicUrl));
+  if (command === 'setup') {
+    const report = connectionSetup({ port, configDirectory, appUrl, publicUrl: selectedPublicUrl ? publicUrl : undefined });
+    if (flags.has('--json')) console.log(JSON.stringify(report, null, 2));
+    else {
+      console.log(`Keep Safe phone connection setup\n\n${report.steps.map((step, index) => `${index + 1}. ${step}`).join('\n\n')}\n\nLocal start:\n${report.commands.localStart}\n\nOptional temporary tunnel (separate terminal):\n${report.commands.tunnel}\n\nRestart with your tunnel origin:\n${report.commands.publicStart}\n\nCheck the connection:\n${report.commands.doctor}\n\n${report.notes.join('\n\n')}\n\nOfficial tunnel guide: ${report.documentation}`);
+    }
+    return;
+  }
+  if (command === 'doctor') {
+    const report = await diagnoseConnection({ port, configDirectory, appUrl, publicUrl: selectedPublicUrl ? publicUrl : undefined });
+    if (flags.has('--json')) console.log(JSON.stringify(report, null, 2));
+    else console.log(`Keep Safe connection diagnostics\n\n${report.checks.map(check => `${check.status.toUpperCase()}  ${check.label}: ${check.message}`).join('\n')}\n\n${report.notes.join('\n\n')}`);
+    process.exitCode = report.ok ? 0 : 1;
+    return;
   }
   const lock = await acquireConfigLock(configDirectory, 'bridge');
   let bridge: Awaited<ReturnType<typeof createBridge>>;

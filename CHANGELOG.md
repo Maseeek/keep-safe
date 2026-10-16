@@ -2,6 +2,14 @@
 
 ## 16 October 2026
 
+### Phone connection setup and diagnostics
+
+- Add `bridge setup` command guidance, optional temporary-tunnel instructions, safe shell quoting and structured output without reading keys or starting services.
+- Add read-only `bridge doctor` checks for local authority, Chromium presence, app-origin preflight, and HTTP/WebSocket transport. Never send credentials to public probes, follow redirects, or print remote response data.
+- Keep local diagnostic and default loopback MCP credentials off global/environment proxy transports. Preserve explicit custom-fetch injection and remote HTTPS integration.
+- Reject non-root public/app URLs before creating local configuration, and link the connection guide from the mobile setup surface.
+- Test diagnostic side effects, credential boundaries, redirects, stalled/oversized responses, rejected app origins, generated commands and real CLI output.
+
 ### Offline key replacement
 
 - Add `rotate-keys --owner|--agent|--all` to the bridge CLI, with explicit scopes and credential-free output.

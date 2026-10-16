@@ -1220,6 +1220,19 @@ export function App() {
                           Use a secure HTTPS tunnel or private network. Open the
                           pairing link printed by the bridge on your phone.
                         </p>
+                        <p>
+                          Run <code>npm run bridge -- setup</code> on your
+                          computer for connection commands. If pairing fails,
+                          the connection guide explains the diagnostic checks.
+                        </p>
+                        <a
+                          className="text-link"
+                          href={`${repository}/blob/main/docs/connection.md`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Connection guide <ExternalLink size={13} />
+                        </a>
                       </div>
                     </li>
                     <li>

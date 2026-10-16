@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -20,8 +21,8 @@ async function port() {
   await new Promise<void>(resolve => server.close(() => resolve()));
   return value;
 }
-function launch(args: string[]) {
-  const child = spawn(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('packages/bridge/src/cli.ts'), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+function launch(args: string[], env = process.env) {
+  const child = spawn(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('packages/bridge/src/cli.ts'), ...args], { stdio: ['ignore', 'pipe', 'pipe'], env });
   let stdout = ''; let stderr = '';
   // Captured only in this temporary test process. Never print the startup pairing link.
   child.stdout.on('data', value => { stdout += String(value); });
@@ -123,4 +124,67 @@ it('does not expose malformed config contents or create keys in a missing config
   expect(await invalid.exit).toBe(1);
   expect((invalid.stdout + invalid.stderr).includes('private-test-marker-not-for-output')).toBe(false);
   expect(invalid.stderr).toContain('Invalid bridge configuration');
+});
+
+it('runs JSON diagnostics beside a locked bridge without changing its configuration or printing secrets', async () => {
+  const path = await directory();
+  const config = await loadConfig(path);
+  const selectedPort = await port();
+  const daemon = launch(['--config-dir', path, '--port', String(selectedPort), '--app-url', 'https://keep-safe-eight.vercel.app', '--no-static']);
+  await expect.poll(() => healthy(`http://127.0.0.1:${selectedPort}`), { timeout: 5000 }).toBe(true);
+  const original = await readFile(join(path, 'config.json'), 'utf8');
+  const lock = await readFile(join(path, 'bridge.lock'), 'utf8');
+  const doctor = launch(['doctor', '--config-dir', path, '--port', String(selectedPort), '--app-url', 'https://keep-safe-eight.vercel.app', '--json']);
+  expect(await doctor.exit).toBe(0);
+  const report = JSON.parse(doctor.stdout);
+  expect(report.ok).toBe(true);
+  expect(report.checks.find((value: { id: string }) => value.id === 'local-auth').status).toBe('pass');
+  expect(await readFile(join(path, 'config.json'), 'utf8') === original).toBe(true);
+  expect(await readFile(join(path, 'bridge.lock'), 'utf8') === lock).toBe(true);
+  for (const secret of [config.ownerToken, config.agentToken, config.vapid.privateKey]) expect((doctor.stdout + doctor.stderr).includes(secret)).toBe(false);
+  await daemon.stop();
+});
+
+it('prints setup without creating configuration and fails diagnostics and invalid origins safely', async () => {
+  const path = await directory();
+  const missing = join(path, 'not-created');
+  const setup = launch(['setup', '--config-dir', missing, '--json']);
+  expect(await setup.exit).toBe(0);
+  expect(JSON.parse(setup.stdout).commands.publicStart).toContain('YOUR-TUNNEL');
+  expect(await readdir(path)).toEqual([]);
+  const doctor = launch(['doctor', '--config-dir', missing, '--port', String(await port()), '--json']);
+  expect(await doctor.exit).toBe(1);
+  expect(JSON.parse(doctor.stdout).checks.find((value: { id: string }) => value.id === 'config').status).toBe('fail');
+  expect(await readdir(path)).toEqual([]);
+  for (const command of [[], ['setup'], ['doctor']]) {
+    const invalid = launch([...command, '--config-dir', missing, '--public-url', 'https://example.com/private-url-marker']);
+    expect(await invalid.exit).toBe(1);
+    expect(invalid.stderr).toContain('root HTTPS origins');
+    expect((invalid.stdout + invalid.stderr).includes('private-url-marker')).toBe(false);
+    expect(await readdir(path)).toEqual([]);
+  }
+});
+
+it('keeps the owner check direct when environment proxy routing is enabled', async () => {
+  const path = await directory();
+  const config = await loadConfig(path);
+  const selectedPort = await port();
+  const daemon = launch(['--config-dir', path, '--port', String(selectedPort), '--no-static']);
+  await expect.poll(() => healthy(`http://127.0.0.1:${selectedPort}`), { timeout: 5000 }).toBe(true);
+  let sawOwnerAuthority = false;
+  const proxy = createHttpServer((request, response) => {
+    if (request.headers.authorization?.includes(config.ownerToken)) sawOwnerAuthority = true;
+    response.writeHead(502).end('proxy fixture');
+  });
+  await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  cleanup.push(async () => { proxy.closeAllConnections(); await new Promise<void>(resolve => proxy.close(() => resolve())); });
+  const proxyOrigin = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+  const doctor = launch(['doctor', '--config-dir', path, '--port', String(selectedPort), '--json'], { ...process.env, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: proxyOrigin, http_proxy: proxyOrigin, HTTPS_PROXY: proxyOrigin, https_proxy: proxyOrigin, NO_PROXY: '', no_proxy: '' });
+  expect(await doctor.exit).toBe(0); // Every local transport uses a private direct agent.
+  const report = JSON.parse(doctor.stdout);
+  expect(report.ok).toBe(true);
+  expect(report.checks.find((value: { id: string }) => value.id === 'local-auth').status).toBe('pass');
+  expect(sawOwnerAuthority).toBe(false);
+  for (const secret of [config.ownerToken, config.agentToken, config.vapid.privateKey]) expect((doctor.stdout + doctor.stderr).includes(secret)).toBe(false);
+  await daemon.stop();
 });

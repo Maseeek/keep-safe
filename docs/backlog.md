@@ -22,7 +22,7 @@
 - [x] Multi-hop popup recovery, touched-page password clearing, and documented unsupported authentication methods.
 - [x] Full live origin display, mobile stream release on leaving a request, and scroll/rate-limit reconnect regression coverage.
 - [x] Offline owner/agent key replacement, exclusive CLI configuration locking, and documented crash recovery.
-- [ ] Easier tunnel setup and connection diagnostics.
+- [x] Easier tunnel setup and read-only connection diagnostics, with private loopback transport and documented remote-verification limits.
 - [x] Larger phone text and touch targets, full-origin inspection, named remote keys, and modal keyboard/focus recovery.
 - [ ] Structured screen-reader navigation inside the remote webpage, plus physical assistive-technology testing.
 - [ ] Privacy-preserving local session retention and cleanup controls.

@@ -21,6 +21,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 - MCP tools and an HTTP API so the integration is independent of a particular model.
 - Web Push subscription support and an installable mobile web app.
 - An explicitly labeled interactive demo that never asks for real credentials.
+- Read-only connection diagnostics and a command generator for phone/tunnel setup.
 
 Passwords and browser inputs are not recorded. Managed browser cookies stay in memory on the developer's computer. Existing agent sessions remain owned by that browser. The hosted Vercel frontend does not receive website cookies.
 
@@ -47,12 +48,14 @@ Do not share the pairing link or expose the Chromium debugging port.
 
 Your phone needs a reachable **HTTPS** bridge address. Use a trusted private network or an HTTPS tunnel to `http://127.0.0.1:4318`. The computer must remain awake. The bridge does not install or start a public tunnel automatically.
 
+Run `npm run --silent bridge -- setup` for generated connection commands and the optional temporary-tunnel guide. The helper installs and starts nothing. Follow the [connection guide](docs/connection.md) for tunnel choices, restart steps, and troubleshooting.
+
 Start the bridge with the actual tunnel and hosted app origins:
 
 ```bash
 npm run bridge -- \
   --public-url https://your-bridge.example \
-  --app-url https://your-keep-safe-app.example
+  --app-url https://keep-safe-eight.vercel.app
 ```
 
 Open the printed pairing link on your phone. The app removes the token fragment and pairs the current tab. To keep access after closing the app, choose **Remember this phone for 7 days** when pairing, or use **Remember this phone** in Connections.
@@ -60,6 +63,8 @@ Open the printed pairing link on your phone. The app removes the token fragment 
 Remembering issues a separate device key. The original owner token is never saved in persistent browser storage. Remembered keys expire after seven days; revoke a device from Connections or choose **Forget this phone** to remove its local key and request revocation. Revocation also stops that device's live control and associated notifications. If the computer is offline, local forgetting succeeds but server revocation must be completed later from another paired device or the owner link.
 
 For same-origin self-hosting, omit `--app-url`: the bridge serves the built frontend too. `npm run bridge -- --help` lists all supported options.
+
+If the connection fails, run `npm run --silent bridge -- doctor` on the computer, with the same `--port`, `--config-dir`, `--public-url`, and `--app-url` options used at startup. It checks local authority, Chromium presence, CORS, HTTPS and WebSocket transport without changing configuration. Public probes carry no keys or cookies. Add `--json` for a structured report. A passing transport check does not prove endpoint ownership, phone reachability or push delivery.
 
 ### Connect your agents
 
@@ -128,6 +133,7 @@ Phone controls use larger text and touch targets, with named remote keys and key
 - [Agreed product brief and autonomy limits](docs/alignment.md)
 - [Architecture, data handling, and security boundaries](docs/architecture.md)
 - [Agent integrations and HTTP protocol](docs/integrations.md)
+- [Phone connection and diagnostics](docs/connection.md)
 - [Delivery and recurring-work configuration](docs/delivery.md)
 - [Owner contact status](docs/contact.md)
 - [Progress](docs/progress.md), [backlog](docs/backlog.md), and [change history](CHANGELOG.md)
