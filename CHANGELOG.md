@@ -2,6 +2,15 @@
 
 ## 16 October 2026
 
+### Mobile readability and keyboard access
+
+- Increase phone text sizes and touch targets, wrap the remote-key toolbar, and keep the header visible while scrolling.
+- Darken the live address and redirect warning. Add a tap/keyboard toggle that reveals the full origin without URL secrets.
+- Use a native decline confirmation with focus restoration, name remote keys, and expose selected navigation/filter states.
+- Move mobile session notices into the request panel so they do not cover live controls.
+- Stack device confirmation actions on phones and test the complete remember/forget flow at 320px.
+- Document that the remote webpage image still lacks structured screen-reader navigation.
+
 ### Live origin and mobile control
 
 - Show the live website's scheme and port, warn on origin changes, and avoid HTTPS indicators on opaque pages.

@@ -80,7 +80,10 @@ export function BrowserPanel({
   const [demoStep, setDemoStep] = useState(0);
   const [denyOpen, setDenyOpen] = useState(false);
   const [showText, setShowText] = useState(false);
+  const [showOrigin, setShowOrigin] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
+  const denyTrigger = useRef<HTMLButtonElement>(null);
+  const denyDialog = useRef<HTMLDialogElement>(null);
   const wheelBuffer = useRef({ deltaX: 0, deltaY: 0, timer: undefined as ReturnType<typeof setTimeout> | undefined });
   const isDemo = !workspace.connection;
   const finished = ["completed", "denied", "expired"].includes(request.status);
@@ -104,6 +107,7 @@ export function BrowserPanel({
     setDemoStep(0);
     setShowKeyboard(false);
     setDenyOpen(false);
+    setShowOrigin(false);
   }, [request.id]);
   useEffect(() => {
     if (!active || expired || workspace.status !== "connected") setText("");
@@ -119,6 +123,16 @@ export function BrowserPanel({
       buffer.deltaY = 0;
     };
   }, [request.id, canInput]);
+  useEffect(() => {
+    if (!denyOpen) return;
+    const dialog = denyDialog.current;
+    const trigger = denyTrigger.current;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    };
+  }, [denyOpen]);
 
   const sendText = (event: React.FormEvent) => {
     event.preventDefault();
@@ -188,18 +202,31 @@ export function BrowserPanel({
             <i />
             <i />
           </span>
-          <div className="address" title={address.label}>
+          <button
+            className="address"
+            title={address.label}
+            aria-label={`Website origin: ${address.label}`}
+            aria-expanded={showOrigin}
+            aria-controls={showOrigin ? "full-browser-origin" : undefined}
+            onClick={() => setShowOrigin(!showOrigin)}
+          >
             {address.secure ? (
               <LockKeyhole size={11} aria-label="HTTPS connection" />
             ) : (
               <TriangleAlert size={11} aria-label="Page is not using HTTPS" />
             )}
             <span>{address.label}</span>
-          </div>
+          </button>
           <span className="frame-mode">
             {isDemo ? "DEMO" : active ? "LIVE" : "PRIVATE"}
           </span>
         </div>
+        {showOrigin ? (
+          <div className="full-browser-origin" id="full-browser-origin">
+            <strong>{address.label}</strong>
+            <span>{address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
+          </div>
+        ) : null}
         {finished || expired ? (
           <div
             className={`browser-state finished ${request.status === "denied" ? "was-denied" : ""}`}
@@ -368,6 +395,7 @@ export function BrowserPanel({
               className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
               onClick={() => setShowKeyboard(!showKeyboard)}
               aria-expanded={showKeyboard}
+              aria-controls={showKeyboard ? "remote-text-form" : undefined}
             >
               <Keyboard size={16} />
               Type text
@@ -375,6 +403,7 @@ export function BrowserPanel({
             <div className="keyboard-keys">
               <button
                 title="Press Tab in browser"
+                aria-label="Press Tab in browser"
                 onClick={() => workspace.send({ type: "key", key: "Tab" })}
                 disabled={!canInput}
               >
@@ -382,6 +411,7 @@ export function BrowserPanel({
               </button>
               <button
                 title="Press Enter in browser"
+                aria-label="Press Enter in browser"
                 onClick={() => workspace.send({ type: "key", key: "Enter" })}
                 disabled={!canInput}
               >
@@ -389,6 +419,7 @@ export function BrowserPanel({
               </button>
               <button
                 title="Press Backspace in browser"
+                aria-label="Press Backspace in browser"
                 onClick={() =>
                   workspace.send({ type: "key", key: "Backspace" })
                 }
@@ -398,6 +429,7 @@ export function BrowserPanel({
               </button>
               <button
                 title="Scroll browser up"
+                aria-label="Scroll browser up"
                 onClick={() =>
                   workspace.send({ type: "scroll", deltaX: 0, deltaY: -400 })
                 }
@@ -407,6 +439,7 @@ export function BrowserPanel({
               </button>
               <button
                 title="Scroll browser down"
+                aria-label="Scroll browser down"
                 onClick={() =>
                   workspace.send({ type: "scroll", deltaX: 0, deltaY: 400 })
                 }
@@ -417,7 +450,7 @@ export function BrowserPanel({
             </div>
           </div>
           {showKeyboard ? (
-            <form className="remote-text-form" onSubmit={sendText}>
+            <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
               <label htmlFor="remote-input">
                 Tap a field in the browser, then send text
               </label>
@@ -465,6 +498,7 @@ export function BrowserPanel({
       {!finished && !expired ? (
         <div className="session-actions">
           <button
+            ref={denyTrigger}
             className="button button-light"
             onClick={() => setDenyOpen(true)}
             disabled={busy}
@@ -515,32 +549,15 @@ export function BrowserPanel({
         </div>
       ) : null}
       {denyOpen ? (
-        <div
+        <dialog
+          ref={denyDialog}
           className="inline-confirm"
           role="alertdialog"
           aria-modal="true"
           aria-label="Decline this request"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setDenyOpen(false);
-            }
-            if (event.key === "Tab") {
-              const buttons = Array.from(
-                event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                  "button:not(:disabled)",
-                ),
-              );
-              const first = buttons[0];
-              const last = buttons.at(-1);
-              if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault();
-                last?.focus();
-              } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault();
-                first?.focus();
-              }
-            }
+          onCancel={(event) => {
+            event.preventDefault();
+            setDenyOpen(false);
           }}
         >
           <h3>
@@ -570,7 +587,7 @@ export function BrowserPanel({
               Yes, {active ? "end session" : "decline"}
             </button>
           </div>
-        </div>
+        </dialog>
       ) : null}
       <div className="flow-steps">
         <span className={active || finished ? "done" : "current"}>

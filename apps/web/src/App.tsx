@@ -146,6 +146,16 @@ function EmptyState({
   );
 }
 
+function Toast({ message, onDismiss, inline = false }: { message: string; onDismiss: () => void; inline?: boolean }) {
+  return (
+    <div className={`toast${inline ? " toast-inline" : ""}`} role="status">
+      <span><Check size={15} /></span>
+      <p>{message}</p>
+      <button onClick={onDismiss} aria-label="Dismiss notification"><X size={16} /></button>
+    </div>
+  );
+}
+
 function ConnectDialog({
   workspace,
   onClose,
@@ -618,6 +628,7 @@ export function App() {
         <nav className="main-nav" aria-label="Main navigation">
           <button
             className={section === "inbox" ? "active" : ""}
+            aria-current={section === "inbox" ? "page" : undefined}
             onClick={() => navigate("inbox")}
           >
             <Inbox size={18} />
@@ -628,6 +639,7 @@ export function App() {
           </button>
           <button
             className={section === "activity" ? "active" : ""}
+            aria-current={section === "activity" ? "page" : undefined}
             onClick={() => navigate("activity")}
           >
             <Activity size={18} />
@@ -635,6 +647,7 @@ export function App() {
           </button>
           <button
             className={section === "devices" ? "active" : ""}
+            aria-current={section === "devices" ? "page" : undefined}
             onClick={() => navigate("devices")}
           >
             <MonitorSmartphone size={18} />
@@ -642,6 +655,7 @@ export function App() {
           </button>
           <button
             className={section === "settings" ? "active" : ""}
+            aria-current={section === "settings" ? "page" : undefined}
             onClick={() => navigate("settings")}
           >
             <Settings2 size={18} />
@@ -873,18 +887,21 @@ export function App() {
                   >
                     <button
                       className={filter === "all" ? "selected" : ""}
+                      aria-pressed={filter === "all"}
                       onClick={() => setFilter("all")}
                     >
                       All requests
                     </button>
                     <button
                       className={filter === "pending" ? "selected" : ""}
+                      aria-pressed={filter === "pending"}
                       onClick={() => setFilter("pending")}
                     >
                       Needs you <span>{pending.length}</span>
                     </button>
                     <button
                       className={filter === "active" ? "selected" : ""}
+                      aria-pressed={filter === "active"}
                       onClick={() => setFilter("active")}
                     >
                       Active
@@ -960,6 +977,9 @@ export function App() {
                     mobileLayout && selectedId ? "Browser request" : undefined
                   }
                 >
+                  {mobileLayout && selectedId && toast ? (
+                    <Toast message={toast} onDismiss={() => setToast("")} inline />
+                  ) : null}
                   {selected && (!mobileLayout || selectedId) ? (
                     <BrowserPanel
                       request={selected}
@@ -1407,6 +1427,7 @@ export function App() {
           <button
             key={key}
             className={section === key ? "active" : ""}
+            aria-current={section === key ? "page" : undefined}
             onClick={() => navigate(key)}
           >
             <span>
@@ -1425,19 +1446,8 @@ export function App() {
           onClose={() => setConnectOpen(false)}
         />
       ) : null}
-      {toast ? (
-        <div className="toast" role="status">
-          <span>
-            <Check size={15} />
-          </span>
-          <p>{toast}</p>
-          <button
-            onClick={() => setToast("")}
-            aria-label="Dismiss notification"
-          >
-            <X size={16} />
-          </button>
-        </div>
+      {toast && !(mobileLayout && selectedId && section === "inbox") ? (
+        <Toast message={toast} onDismiss={() => setToast("")} />
       ) : null}
     </div>
   );

@@ -68,3 +68,16 @@
 - Restarted the local bridge on loopback port 4318 without printing its pairing credential. The native `keep_safe.request_login` and `keep_safe.get_login_request` tools are available in this T3 Codex session. Created a temporary no-credentials connection check through the actual tool, closed it through the owner API, and verified the denied result through the actual MCP tool. This proves this session's agent integration; it does not claim every named provider's native browser compatibility.
 - The bridge runs in a retained command session. Its health must be checked on future continuations; host/session availability is not guaranteed. Current operational handle is in ignored `.keep-safe/runtime.json`.
 - Next useful work: owner/agent key rotation, easier tunnel setup, and larger mobile text/touch targets. Physical-phone push remains unverified.
+
+## Continuation at 20:00 UTC: mobile readability and keyboard access
+
+- Checked the actual clock before starting, confirmed the working tree only contained the unrelated `output/`, and verified the retained local bridge was healthy.
+- Increased mobile body copy and metadata sizes, set touch controls to at least 44 × 44 CSS pixels, wrapped the remote-key toolbar, and kept the phone header visible while scrolling.
+- Darkened security copy and added a tap/keyboard full-origin toggle. Measured rendered live-address and redirect-warning text contrast above 4.5:1 in the narrow-screen test; this is not a full accessibility conformance claim.
+- A read-only mobile review identified decline-dialog focus loss, long-origin inspection, glyph-only remote-key names, faint security text, and the remote image's lack of structured screen-reader access. Fixed the interface issues and documented the remaining remote-content limitation.
+- Replaced the decline overlay with a native modal dialog, restored its opener on Cancel/Escape, named remote key controls explicitly, and exposed selected navigation/filter states.
+- A new hit-target test caught an approval notice covering the live controls. Mobile request notices now appear in normal flow inside the request panel.
+- Follow-up review caught a 320px device-confirmation overflow. Stacked its actions and added a real remember/forget flow that checks target size, content fit, and key removal.
+- New browser tests cover 320px/390px layouts, unobstructed controls, modal focus recovery, complete long-origin inspection, contrast, and device confirmation. Typecheck, production build, and all 59 tests across 14 files pass, including the real Chromium login/resume flow. Deployment results follow below.
+- T3 preview initialization again returned `The calling provider no longer owns an active thread run.` on both attempts. Used the repository's Playwright workflow and inspected phone screenshots. No claim of physical-phone or screen-reader testing is made.
+- No additional spending or owner email. Today's live-link milestone was already sent.

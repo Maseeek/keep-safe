@@ -14,7 +14,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 
 - Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
 - Live browser streaming with taps, scrolling, text entry, and keyboard controls.
-- Live website origin with scheme and port, plus a warning when it changes.
+- Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
 - Opt-in seven-day phone pairing with named devices and immediate revocation.
 - Isolated managed Chromium or attachment to an existing agent Chromium browser through loopback CDP.
@@ -89,6 +89,8 @@ Tests cover request authorization, state transitions, expiry, private-network re
 
 Leaving a request on mobile stops its live stream and discards pending scroll input. Reopening resumes the same unexpired browser. Temporary connection and input-rate failures reconnect without deleting a valid pairing.
 
+Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Session status messages appear inside the mobile request so they do not cover the controls.
+
 ## Limits to know
 
 - The bridge and agent computer must be running and reachable. The hosted dashboard alone does not run a browser.
@@ -96,6 +98,7 @@ Leaving a request on mobile stops its live stream and discards pending scroll in
 - Requests and activity are currently in memory and reset when the bridge restarts.
 - Agents must pause browser input while the owner is in control. Existing debugging clients cannot be forcibly stopped by Keep Safe.
 - Phone passkeys, biometrics, hardware security keys, native password-manager integration, and every third-party login provider are not universally supported or verified.
+- The remote webpage is streamed as an image. Its fields are not yet exposed as a structured interface to screen readers. The named toolbar controls do not provide full assistive navigation inside the website.
 - There is no hosted multi-user account service or billing yet. Future team/managed-relay plans are in [product direction](docs/product.md).
 
 ## Project records
