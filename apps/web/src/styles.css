@@ -3096,6 +3096,9 @@ svg {
     font-size: 14px;
     max-width: 280px;
     line-height: 1.8;
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
   }
   .toast > span {
     width: 24px;
@@ -3103,6 +3106,7 @@ svg {
   }
   .toast > button {
     padding: 3px;
+    flex-shrink: 0;
   }
   .toast.toast-inline {
     position: relative;
@@ -3111,6 +3115,7 @@ svg {
     transform: none;
     animation: none;
     max-width: none;
+    width: auto;
     margin: 16px 16px 0;
   }
   .empty-state {

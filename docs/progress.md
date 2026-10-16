@@ -77,6 +77,7 @@
 - A read-only mobile review identified decline-dialog focus loss, long-origin inspection, glyph-only remote-key names, faint security text, and the remote image's lack of structured screen-reader access. Fixed the interface issues and documented the remaining remote-content limitation.
 - Replaced the decline overlay with a native modal dialog, restored its opener on Cancel/Escape, named remote key controls explicitly, and exposed selected navigation/filter states.
 - A new hit-target test caught an approval notice covering the live controls. Mobile request notices now appear in normal flow inside the request panel.
+- Live screenshot inspection also caught an inherited `max-content` width on inline notices. Bounded them to the request width, kept dismissal visible, and added a narrow-screen content-fit regression check.
 - Follow-up review caught a 320px device-confirmation overflow. Stacked its actions and added a real remember/forget flow that checks target size, content fit, and key removal.
 - New browser tests cover 320px/390px layouts, unobstructed controls, modal focus recovery, complete long-origin inspection, contrast, and device confirmation. Typecheck, production build, and all 59 tests across 14 files pass, including the real Chromium login/resume flow. Deployment results follow below.
 - T3 preview initialization again returned `The calling provider no longer owns an active thread run.` on both attempts. Used the repository's Playwright workflow and inspected phone screenshots. No claim of physical-phone or screen-reader testing is made.

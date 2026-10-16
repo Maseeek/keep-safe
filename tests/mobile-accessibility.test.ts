@@ -101,6 +101,10 @@ describe('mobile readability and keyboard access', () => {
       await page.getByRole('button', { name: /Accessibility test/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
       await page.locator('.remote-screen img').waitFor();
+      const notice = page.locator('.toast-inline');
+      expect(await notice.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      expect((await notice.boundingBox())!.width).toBeLessThanOrEqual(320);
+      await touchTarget(notice.getByRole('button', { name: 'Dismiss notification' }));
       for (const name of ['Type text', 'Press Tab in browser', 'Press Enter in browser', 'Press Backspace in browser', 'Scroll browser up', 'Scroll browser down']) {
         await touchTarget(page.getByRole('button', { name, exact: true }));
       }
