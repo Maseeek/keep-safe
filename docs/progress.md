@@ -60,3 +60,11 @@
 - Typecheck and all 55 tests pass across 13 files. Built-app tests include synthetic live frames for failure cases and the existing real Chromium login/resume flow.
 - The T3 preview open call returned `The calling provider no longer owns an active thread run.` twice. Used the repository's built-app Playwright workflow and inspected its phone screenshot. Current inline-preview pairing is not claimed. The same ownership error prevented refreshing the recurring task's stale handoff; the hourly task remains enabled and current checkout documentation takes precedence.
 - This continuation does not claim a new independent security review or physical-phone push delivery. No additional owner email was sent because today's live-link milestone was already confirmed sent.
+
+### Deployment and chat integration verified at 19:09 UTC
+
+- Pushed application commit `edb8cf76d4f5e26e76505236dd50717be782de1c`. Vercel MCP production deployment `dpl_8a3TV7ME38MKWnFCZ4tTtFuYoUpP` is READY for that exact commit and owns the existing production alias.
+- GitHub CI `38952463605` passed. The live phone (390 × 844) and desktop (1440 × 900) demo flows passed approve, simulated sign-in, and handback checks with no JavaScript errors or horizontal overflow. Confirmed the expected new production JavaScript asset and inspected the phone screenshot.
+- Restarted the local bridge on loopback port 4318 without printing its pairing credential. The native `keep_safe.request_login` and `keep_safe.get_login_request` tools are available in this T3 Codex session. Created a temporary no-credentials connection check through the actual tool, closed it through the owner API, and verified the denied result through the actual MCP tool. This proves this session's agent integration; it does not claim every named provider's native browser compatibility.
+- The bridge runs in a retained command session. Its health must be checked on future continuations; host/session availability is not guaranteed. Current operational handle is in ignored `.keep-safe/runtime.json`.
+- Next useful work: owner/agent key rotation, easier tunnel setup, and larger mobile text/touch targets. Physical-phone push remains unverified.
