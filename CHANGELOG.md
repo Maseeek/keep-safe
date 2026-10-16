@@ -2,6 +2,13 @@
 
 ## 16 October 2026
 
+### Offline key replacement
+
+- Add `rotate-keys --owner|--agent|--all` to the bridge CLI, with explicit scopes and credential-free output.
+- Hold an exclusive configuration lock during bridge runtime and key replacement. Refuse stale/malformed locks until an operator verifies recovery is safe.
+- Atomically replace private configuration and revoke remembered phones/notifications before committing owner-key changes. Preserve VAPID and extra configuration metadata.
+- Add scope/authentication, failed persistence, configuration validation, real CLI restart, crash-lock, and output privacy tests.
+
 ### Mobile readability and keyboard access
 
 - Increase phone text sizes and touch targets, wrap the remote-key toolbar, and keep the header visible while scrolling.

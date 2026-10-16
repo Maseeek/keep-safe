@@ -9,20 +9,27 @@ export interface BridgeConfig {
   vapid: { publicKey: string; privateKey: string };
 }
 
-export async function loadConfig(directory = '.keep-safe'): Promise<BridgeConfig> {
+/** Only these deliberately worded errors are safe for CLI output. */
+export class ConfigError extends Error {}
+
+export async function loadConfig(directory = '.keep-safe', options: { createIfMissing?: boolean } = {}): Promise<BridgeConfig> {
   const path = resolve(directory);
   await mkdir(path, { recursive: true, mode: 0o700 });
   await chmod(path, 0o700);
   const file = join(path, 'config.json');
   try {
-    const value = JSON.parse(await readFile(file, 'utf8')) as BridgeConfig;
-    if (!/^[a-f0-9]{64}$/.test(value.ownerToken) || !/^[a-f0-9]{64}$/.test(value.agentToken) || value.ownerToken === value.agentToken || !value.vapid?.publicKey || !value.vapid?.privateKey) {
-      throw new Error('Invalid bridge configuration. Move the config file aside to create new pairing keys.');
+    const content = await readFile(file, 'utf8');
+    let value: BridgeConfig;
+    try { value = JSON.parse(content) as BridgeConfig; }
+    catch { throw new ConfigError('Invalid bridge configuration. Restore a valid local config file before continuing.'); }
+    if (!value || typeof value.ownerToken !== 'string' || typeof value.agentToken !== 'string' || !/^[a-f0-9]{64}$/.test(value.ownerToken) || !/^[a-f0-9]{64}$/.test(value.agentToken) || value.ownerToken === value.agentToken || typeof value.vapid?.publicKey !== 'string' || !value.vapid.publicKey || typeof value.vapid?.privateKey !== 'string' || !value.vapid.privateKey) {
+      throw new ConfigError('Invalid bridge configuration. Restore a valid local config file before continuing.');
     }
     await chmod(file, 0o600);
     return value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (options.createIfMissing === false) throw new ConfigError('No existing bridge configuration was found. Start the bridge first, then stop it before rotating keys.');
   }
   const config: BridgeConfig = {
     ownerToken: randomBytes(32).toString('hex'),

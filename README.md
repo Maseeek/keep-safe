@@ -75,6 +75,28 @@ Pair the app, then choose **Enable notifications** in Settings. The bridge gener
 
 The subscription API and notification routing are implemented. Lock-screen delivery on a physical iPhone or Android device has not yet been verified.
 
+### Replace owner or agent keys
+
+Stop every bridge using the configuration directory before updating or rotating keys. Bridges started before this update do not create the new configuration lock. Stopping the bridge closes its managed browser sessions, so finish or end any active handoff first.
+
+To replace the agent key:
+
+```bash
+npm run bridge -- rotate-keys --agent
+```
+
+Choose `--owner` instead to replace the owner pairing key and revoke all remembered phones and notification subscriptions. Choose `--all` to replace both keys. Exactly one scope is required. Add `--config-dir PATH` when using a different configuration directory.
+
+The rotation command prints a result without printing keys. Restart the bridge afterward. Owner/all rotation requires fresh phone pairing links. Agent/all rotation also requires restarting MCP clients that cached the old agent key. Agent-only rotation preserves existing phone pairing and Web Push keys.
+
+Updated bridge CLI processes hold an exclusive `bridge.lock` in the configuration directory until shutdown finishes. Another bridge or key operation using that directory will refuse to start. Rotation requires an existing valid configuration and writes replacements atomically with private file permissions. If a write fails, keep the bridge stopped; some remembered phones may already have been revoked.
+
+#### Recover a lock after a crash
+
+An abrupt crash or interruption during startup can leave `bridge.lock`. It contains process/host metadata, not keys. Inspect that file in your actual configuration directory and confirm the named process has exited on that host. Only after confirming every bridge/key operation using that directory has stopped, remove the stale lock and retry. Never remove a live process's lock. For the default directory on Linux/macOS, the removal command is `rm .keep-safe/bridge.lock`.
+
+The CLI lifecycle and rotation checks are verified on Linux. Other operating systems and filesystems require separate validation, especially directory syncing and crash recovery.
+
 ## Development and checks
 
 ```bash

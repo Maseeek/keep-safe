@@ -17,11 +17,12 @@
 ## After first release
 
 - [x] Independent cross-provider architecture review and fixes for confirmed findings. Further release reviews remain part of iteration.
-- [x] Opt-in seven-day phone pairing, device listing, and immediate device revocation (token rotation CLI still open).
+- [x] Opt-in seven-day phone pairing, device listing, and immediate device revocation.
 - [x] Compatibility examples and config generator for T3 Code, Codex, Claude and Antigravity.
 - [x] Multi-hop popup recovery, touched-page password clearing, and documented unsupported authentication methods.
 - [x] Full live origin display, mobile stream release on leaving a request, and scroll/rate-limit reconnect regression coverage.
-- [ ] Owner/agent token rotation CLI and tunnel setup helper.
+- [x] Offline owner/agent key replacement, exclusive CLI configuration locking, and documented crash recovery.
+- [ ] Easier tunnel setup and connection diagnostics.
 - [x] Larger phone text and touch targets, full-origin inspection, named remote keys, and modal keyboard/focus recovery.
 - [ ] Structured screen-reader navigation inside the remote webpage, plus physical assistive-technology testing.
 - [ ] Privacy-preserving local session retention and cleanup controls.

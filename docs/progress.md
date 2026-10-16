@@ -91,3 +91,14 @@
 - Verified the exact production bundle at 320px, 390px, and 1440px. Full-origin inspection, modal focus restoration, readable/dismissible inline notices, demo approval/sign-in/handback, and layout checks passed without JavaScript errors. Inspected the narrow-phone screenshot.
 - The retained loopback bridge is still healthy. Repository visibility remains PRIVATE. No credentials or user browser data were added to GitHub or Vercel.
 - Next priorities remain owner/agent key rotation and easier tunnel setup. Structured remote webpage access for screen readers and physical-phone push verification are still unfinished.
+
+## Continuation at 21:00 UTC: offline key replacement
+
+- Checked actual UTC time, current repository state, and the retained bridge's health. All key replacement tests use temporary directories and separate processes; the owner's real keys have not been rotated.
+- Added explicit offline owner/agent/all replacement commands. The updated bridge CLI holds a private exclusive configuration lock before loading configuration and releases it after shutdown persistence finishes.
+- Owner/all replacement syncs empty remembered-device and subscription stores before atomically replacing owner authority. Agent-only replacement preserves both files byte-for-byte. VAPID keys and extra configuration metadata are retained.
+- Invalid/missing configuration and conflicting scopes fail without creating replacement keys. CLI errors and rotation output use safe messages without file contents or credentials.
+- Added seven scope/failure tests and four real CLI process tests. They verify old/new authentication roles after restart, live/duplicate bridge rejection, crash-lock recovery, startup failure cleanup, partial revocation failure, and output privacy.
+- Independent read-only review found no release blocker. It confirmed write ordering, lock ownership checks, scope preservation, and sanitized output. Interrupting startup can leave a safe stale lock; the documented recovery applies rather than automatically stealing it.
+- Typecheck, production build, and all 70 tests across 16 files pass on Linux, including the existing real Chromium login/resume and mobile flows. Other operating systems/filesystems are explicitly unverified. Deployment results follow below.
+- No additional spending or owner email; today's live-link milestone was already sent.

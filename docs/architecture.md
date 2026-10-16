@@ -17,6 +17,7 @@ Remote access requires the computer to remain awake and a secure route to the br
 ## Data and lifetime
 
 - Owner and agent bootstrap tokens plus Web Push keys are local files with owner-only permissions in ignored `.keep-safe/`.
+- Offline key replacement requires an exclusive configuration-directory lock shared with the bridge CLI. It never prints new keys. Owner/all replacement durably revokes remembered phones and subscriptions before committing new bootstrap authority; agent-only replacement preserves them. VAPID keys remain unchanged. A crash lock is retained for explicit recovery rather than stolen automatically.
 - Remembered phones receive separate seven-day device keys. The bridge stores SHA256 digests and device metadata in a local, atomically written file. It does not retain raw device keys.
 - A remembered key is saved in the phone's localStorage only after explicit opt-in. The master owner token remains tab-only. Authenticated APIs and every live-control message recheck expiry/revocation. The device key never confers agent rights or permission to pair another phone.
 - Request metadata is in memory. It is lost when the bridge restarts. The local activity list is bounded.

@@ -1,0 +1,126 @@
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve, join } from 'node:path';
+import { afterEach, expect, it } from 'vitest';
+import { loadConfig } from '../packages/bridge/src/config';
+
+const cleanup: Array<() => Promise<unknown>> = [];
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
+async function directory() {
+  const path = await mkdtemp(join(tmpdir(), 'keep-safe-cli-'));
+  cleanup.push(() => rm(path, { recursive: true, force: true }));
+  return path;
+}
+async function port() {
+  const server = createServer();
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const value = (server.address() as { port: number }).port;
+  await new Promise<void>(resolve => server.close(() => resolve()));
+  return value;
+}
+function launch(args: string[]) {
+  const child = spawn(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('packages/bridge/src/cli.ts'), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  // Captured only in this temporary test process. Never print the startup pairing link.
+  child.stdout.on('data', value => { stdout += String(value); });
+  child.stderr.on('data', value => { stderr += String(value); });
+  const exit = new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGTERM');
+      const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
+      try { await exit; } finally { clearTimeout(timer); }
+    }
+  };
+  cleanup.push(stop);
+  return { child, exit, stop, get stdout() { return stdout; }, get stderr() { return stderr; } };
+}
+async function healthy(url: string) {
+  try { return (await fetch(url + '/api/health', { signal: AbortSignal.timeout(500) })).ok; } catch { return false; }
+}
+
+it('locks the real bridge, refuses live rotation, then rotates and enforces new keys after restart', async () => {
+  const path = await directory();
+  const first = await loadConfig(path);
+  const selectedPort = await port();
+  const url = `http://127.0.0.1:${selectedPort}`;
+  const daemon = launch(['--config-dir', path, '--port', String(selectedPort), '--no-static']);
+  await expect.poll(() => healthy(url), { timeout: 5000 }).toBe(true);
+  const before = await readFile(join(path, 'config.json'), 'utf8');
+  const refused = launch(['rotate-keys', '--all', '--config-dir', path]);
+  expect(await refused.exit).toBe(1);
+  expect(refused.stderr).toContain('configuration is locked');
+  expect(await readFile(join(path, 'config.json'), 'utf8') === before).toBe(true);
+  const duplicate = launch(['--config-dir', path, '--port', String(await port()), '--no-static']);
+  expect(await duplicate.exit).toBe(1);
+  expect(duplicate.stderr).toContain('configuration is locked');
+  await daemon.stop();
+  expect(await daemon.exit).toBe(0);
+  expect((await readdir(path)).includes('bridge.lock')).toBe(false);
+  const rotate = launch(['rotate-keys', '--all', '--config-dir', path]);
+  expect(await rotate.exit).toBe(0);
+  const next = await loadConfig(path);
+  for (const key of [first.ownerToken, first.agentToken, next.ownerToken, next.agentToken, first.vapid.privateKey]) {
+    expect((rotate.stdout + rotate.stderr).includes(key)).toBe(false);
+  }
+  const restarted = launch(['--config-dir', path, '--port', String(selectedPort), '--no-static']);
+  await expect.poll(() => healthy(url), { timeout: 5000 }).toBe(true);
+  const info = (token: string) => fetch(url + '/api/info', { headers: { Authorization: `Bearer ${token}` } });
+  expect((await info(first.ownerToken)).status).toBe(401);
+  expect((await info(next.ownerToken)).status).toBe(200);
+  const request = (token: string) => fetch(url + '/api/requests', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: 'CLI fixture', title: 'Check rotated agent', url: 'https://example.com' }) });
+  expect((await request(first.agentToken)).status).toBe(401);
+  expect((await request(next.agentToken)).status).toBe(201);
+  await restarted.stop();
+});
+
+it('keeps a crash lock until an operator confirms exit and removes it', async () => {
+  const path = await directory();
+  const original = await loadConfig(path);
+  const selectedPort = await port();
+  const daemon = launch(['--config-dir', path, '--port', String(selectedPort), '--no-static']);
+  await expect.poll(() => healthy(`http://127.0.0.1:${selectedPort}`), { timeout: 5000 }).toBe(true);
+  daemon.child.kill('SIGKILL');
+  await daemon.exit;
+  const refused = launch(['rotate-keys', '--agent', '--config-dir', path]);
+  expect(await refused.exit).toBe(1);
+  expect((await loadConfig(path)).agentToken === original.agentToken).toBe(true);
+  // Manual recovery is only safe after the owning process has exited.
+  await unlink(join(path, 'bridge.lock'));
+  const recovered = launch(['rotate-keys', '--agent', '--config-dir', path]);
+  expect(await recovered.exit).toBe(0);
+  expect((await loadConfig(path)).agentToken === original.agentToken).toBe(false);
+});
+
+it('releases startup locks on failure and rejects conflicting flags without changing keys', async () => {
+  const path = await directory();
+  await loadConfig(path);
+  const original = await readFile(join(path, 'config.json'), 'utf8');
+  const occupied = createServer();
+  await new Promise<void>(resolve => occupied.listen(0, '127.0.0.1', resolve));
+  cleanup.push(() => new Promise<void>(resolve => occupied.close(() => resolve())));
+  const selectedPort = (occupied.address() as { port: number }).port;
+  const failed = launch(['--config-dir', path, '--port', String(selectedPort), '--no-static']);
+  expect(await failed.exit).toBe(1);
+  expect((await readdir(path)).includes('bridge.lock')).toBe(false);
+  for (const scopes of [[], ['--owner', '--agent'], ['--all', '--owner']]) {
+    const invalid = launch(['rotate-keys', ...scopes, '--config-dir', path]);
+    expect(await invalid.exit).toBe(1);
+    expect(invalid.stderr).toContain('Choose exactly one rotation scope');
+  }
+  expect(await readFile(join(path, 'config.json'), 'utf8') === original).toBe(true);
+});
+
+it('does not expose malformed config contents or create keys in a missing configuration', async () => {
+  const path = await directory();
+  const missing = launch(['rotate-keys', '--all', '--config-dir', path]);
+  expect(await missing.exit).toBe(1);
+  expect(await readdir(path)).toEqual([]);
+  await writeFile(join(path, 'config.json'), '{private-test-marker-not-for-output');
+  const invalid = launch(['rotate-keys', '--all', '--config-dir', path]);
+  expect(await invalid.exit).toBe(1);
+  expect((invalid.stdout + invalid.stderr).includes('private-test-marker-not-for-output')).toBe(false);
+  expect(invalid.stderr).toContain('Invalid bridge configuration');
+});

@@ -40,6 +40,8 @@ npm run --silent agent:config -- antigravity
 
 Start the bridge first. The MCP process reads its separate agent token from the local configuration directory, so the snippet contains no credential.
 
+After replacing an agent key with the offline `rotate-keys --agent` or `--all` command, restart the bridge and connected MCP server processes. Existing MCP processes cache the old agent token. See [key replacement and lock recovery](../README.md#replace-owner-or-agent-keys).
+
 ### Codex
 
 Use the generated TOML in the Codex configuration for the account/environment running the agent. It includes a 150-second tool timeout so an explicitly bounded login wait can finish. Confirm `keep_safe` is available in the client's MCP list. See [official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
