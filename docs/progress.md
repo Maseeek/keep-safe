@@ -102,3 +102,12 @@
 - Independent read-only review found no release blocker. It confirmed write ordering, lock ownership checks, scope preservation, and sanitized output. Interrupting startup can leave a safe stale lock; the documented recovery applies rather than automatically stealing it.
 - Typecheck, production build, and all 70 tests across 16 files pass on Linux, including the existing real Chromium login/resume and mobile flows. Other operating systems/filesystems are explicitly unverified. Deployment results follow below.
 - No additional spending or owner email; today's live-link milestone was already sent.
+
+### Key replacement release verified at 21:17 UTC
+
+- Pushed application commit `028844df4df218a8c49a0fa1968f98c70a8a1c2f`. Vercel MCP production deployment `dpl_8TPkFSdrr5P1gjr9oqZnTs1uk3ng` is READY for that commit at the existing production alias.
+- GitHub CI `38967937635` passed. Typecheck, production build, and all 70 tests pass. Live 320px and desktop demo flows returned HTTP 200 and passed approval/sign-in/handback, overflow, and JavaScript checks.
+- Verified no active or unexpired handoff existed, then gracefully restarted the local bridge with the locking implementation. Compared its private configuration before/after and confirmed it was unchanged. The new bridge is healthy and holds its private runtime lock. Current operational handle is in ignored `.keep-safe/runtime.json`.
+- Real owner/agent keys were not rotated. Tests performed replacement only in temporary directories. Key replacement runs on the local computer; Vercel serves the dashboard.
+- Collaborative preview initialization still returned `The calling provider no longer owns an active thread run.`; the repository browser workflow supplied the live verification. Repository visibility remains PRIVATE.
+- Next useful work is easier tunnel setup and connection diagnostics. Physical push and structured screen-reader navigation remain unverified/unfinished.
