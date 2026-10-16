@@ -95,6 +95,8 @@ Public message types are in [protocol.ts](../packages/shared/src/protocol.ts). T
 
 Agent outcomes stay available until original expiry. Eligible metadata is removed after another 24 hours, confirmed owner cleanup, bridge restart, or earlier capacity eviction. Poll promptly: a removed request returns 404. When all 100 records are protected, creation returns 429 until space becomes safe to reclaim. Cleanup does not provide session cookie export or persistent browser retention.
 
+The MCP `ttl_seconds` option accepts 60–1800 seconds. The HTTP `ttlSeconds` field accepts 1–1800 seconds, including short verification lifetimes. Both default to 600 seconds.
+
 ## Compatibility scope
 
 T3 Code, Codex, Claude, Antigravity, and other clients are targets through their configurable MCP and browser interfaces. Each product's private native browser integration requires separate verification. The initial tests cover Keep Safe's MCP protocol and browser bridge, not every version of every IDE.
