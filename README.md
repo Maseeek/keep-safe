@@ -6,7 +6,9 @@ Help your agents sign in while you're away from your computer.
 
 Keep Safe puts the agent's actual browser on your phone. Approve a request, interact with the website, complete the login, then hand control back. Your agent resumes in the same authenticated browser.
 
-**Early access. Private source. Free initial release.** The hosted mobile app is being deployed; its verified URL will be added here.
+**[Open Keep Safe](https://keep-safe-eight.vercel.app)**
+
+Early access. Private source. Free initial release. The hosted app opens in a labeled demo workspace until you pair your computer.
 
 ## What works
 

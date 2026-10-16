@@ -21,3 +21,11 @@
 - Built-app mobile tests cover the complete demo and real login flow at 390 × 844. No application JavaScript errors or external requests were observed in the demo test.
 - T3 preview initially rendered mobile and desktop layouts, but later snapshots timed out. Alternative CUA browsers were unavailable. Built-app Playwright tests and screenshots provided the final UI verification.
 - Physical iPhone/Android push delivery, every third-party login site, and native browser attachment inside each named IDE remain unverified.
+
+## First deployment
+
+- Vercel MCP deployment `dpl_74GaDDU8fGcmTvquvzg8RWtRaC8h` is READY for commit `d1cd8bea7c511477ec821a860471939175837f27`.
+- Verified production alias [keep-safe-eight.vercel.app](https://keep-safe-eight.vercel.app) returns HTTP 200 with the app and its security headers. Manifest and PNG icons are available.
+- GitHub CI run `38914352494` completed successfully for that commit.
+- Added the production URL to the GitHub repository website field and README.
+- Next iteration targets opt-in persistent phone pairing with expiring, revocable device tokens.

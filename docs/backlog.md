@@ -10,13 +10,13 @@
 - [ ] Phone web push delivered on a physical device (subscription API, worker and installation guidance implemented).
 - [x] Meaningful explicit demo mode for visitors without a bridge.
 - [x] End-to-end fixture proving login and reuse of authenticated browser state.
-- [ ] Security tests, mobile/desktop browser QA, CI (24 local tests pass; CI and live deployment checks pending).
-- [ ] Verified Vercel deployment linked from GitHub.
+- [x] Security tests, mobile/desktop browser QA, CI (24 tests and GitHub CI passed; public deployment returns HTTP 200).
+- [x] Verified Vercel deployment linked from GitHub.
 - [x] Verified owner contact and bounded recurring continuation.
 
 ## After first release
 
-- [ ] Independent cross-provider review and fix confirmed findings.
+- [x] Independent cross-provider architecture review and fixes for confirmed findings. Further release reviews remain part of iteration.
 - [ ] Easier bridge installation, pairing, token rotation and device revocation.
 - [ ] Tunnel setup and reconnect recovery.
 - [ ] Accessibility and mobile keyboard improvements.
