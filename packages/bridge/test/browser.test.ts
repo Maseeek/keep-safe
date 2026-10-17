@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createServer as httpServer } from 'node:http';
 import { createServer as netServer } from 'node:net';
 import { chromium } from 'playwright';
@@ -117,4 +117,36 @@ it.skipIf(!installed)('recovers from multi-hop popups and clears passwords acros
   await expect.poll(() => session.pageUrl).toBe(url);
   await session.prepareHandoff!();
   expect(await page0.locator('#password').inputValue()).toBe('');
+});
+
+it.skipIf(!installed)('retries a replaced navigation context before handback and fails closed on other clearing errors', async () => {
+  const url = await fixture();
+  const port = await unusedPort();
+  const browser = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${port}`], ...(process.env.KEEP_SAFE_CHROMIUM_PATH ? { executablePath: process.env.KEEP_SAFE_CHROMIUM_PATH } : {}) });
+  cleanup.push(() => browser.close());
+  const context = await browser.newContext(); const page = await context.newPage();
+  await page.goto(url);
+  const connect = chromium.connectOverCDP.bind(chromium);
+  let bridgeFrame: import('playwright').Frame | undefined;
+  const connectSpy = vi.spyOn(chromium, 'connectOverCDP').mockImplementation(async (...args) => {
+    const attached = await connect(...args);
+    bridgeFrame = attached.contexts().flatMap(item => item.pages()).find(item => item.url() === url)!.mainFrame();
+    return attached;
+  });
+  cleanup.push(async () => { connectSpy.mockRestore(); });
+  const session = await openBrowser({ url, cdpUrl: `http://127.0.0.1:${port}`, allowLocalUrls: true });
+  cleanup.push(() => session.close());
+  connectSpy.mockRestore();
+  await page.goto(url + '?redirected');
+  await page.locator('#password').fill('synthetic-new-document');
+  // Control the exact CDP failure emitted when a redirect replaces the old
+  // document, while using a real new Chromium document for the retry.
+  const evaluate = vi.spyOn(bridgeFrame!, 'evaluate').mockRejectedValueOnce(new Error('Execution context was destroyed, most likely because of a navigation.'));
+  cleanup.push(async () => { evaluate.mockRestore(); });
+  await session.prepareHandoff!();
+  expect(evaluate).toHaveBeenCalledTimes(2);
+  expect(await page.locator('#password').inputValue()).toBe('');
+  evaluate.mockRejectedValueOnce(new Error('A destination script rejected password clearing.'));
+  await expect(session.prepareHandoff!()).rejects.toThrow('Password fields could not be cleared before handoff.');
+  expect(evaluate).toHaveBeenCalledTimes(3);
 });

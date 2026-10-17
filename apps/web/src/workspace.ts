@@ -6,6 +6,7 @@ import type {
   HistoryCleanupResult,
   LoginRequest,
   PairedDevice,
+  PageControlsSnapshot,
   ServerMessage,
 } from "../../../packages/shared/src/protocol";
 
@@ -308,9 +309,21 @@ export function useWorkspace(onError: (message: string) => void) {
     initial.connection ? "connecting" : "demo",
   );
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
+  const [pageControls, setPageControls] = useState<{ requestId: string; snapshot: PageControlsSnapshot } | null>(null);
+  const [focusedControl, setFocusedControl] = useState<{ requestId: string; snapshotId: string; controlId: string } | null>(null);
+  const [controlsBusy, setControlsBusy] = useState(false);
+  const [focusBusy, setFocusBusy] = useState(false);
+  const [focusBlocked, setFocusBlocked] = useState(false);
+  const [controlsError, setControlsError] = useState("");
   const [error, setError] = useState("");
   const socket = useRef<WebSocket | null>(null);
   const watchId = useRef<string | null>(null);
+  const inspectionAttempt = useRef<string | null>(null);
+  const focusAttempt = useRef<{ snapshotId: string; controlId: string } | null>(null);
+  const clearControls = useCallback(() => {
+    inspectionAttempt.current = null; focusAttempt.current = null;
+    setPageControls(null); setFocusedControl(null); setControlsBusy(false); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
+  }, []);
   const errorCallback = useRef(onError);
   errorCallback.current = onError;
 
@@ -324,11 +337,12 @@ export function useWorkspace(onError: (message: string) => void) {
       setConnection(null);
       setInfo(null);
       setFrame(null);
+      clearControls();
       setRequests(demoRequests());
       setStatus("demo");
       setError("");
     },
-    [],
+    [clearControls],
   );
 
   const api = useCallback(
@@ -391,6 +405,7 @@ export function useWorkspace(onError: (message: string) => void) {
       ws.onopen = () =>
         ws.send(JSON.stringify({ type: "auth", token: connection.token }));
       ws.onmessage = (event) => {
+        if (stopped) return;
         let message: ServerMessage;
         try {
           message = JSON.parse(String(event.data)) as ServerMessage;
@@ -408,15 +423,27 @@ export function useWorkspace(onError: (message: string) => void) {
               JSON.stringify({ type: "watch", requestId: watchId.current }),
             );
         } else if (message.type === "requests") setRequests(message.requests);
+        else if (message.type === "controls" && message.requestId === watchId.current && message.inspectionId === inspectionAttempt.current) {
+          inspectionAttempt.current = null;
+          setPageControls({ requestId: message.requestId, snapshot: message.snapshot });
+          setFocusedControl(null); setControlsBusy(false); setControlsError("");
+        } else if (message.type === "focused" && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
+          focusAttempt.current = null;
+          setFocusedControl(message); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
+        }
         else if (
           message.type === "frame" &&
           message.requestId === watchId.current
         )
           setFrame(message);
-        else if (message.type === "error")
+        else if (message.type === "error") {
+          inspectionAttempt.current = null; focusAttempt.current = null;
+          setControlsBusy(false); setFocusBusy(false); setControlsError(message.message);
           errorCallback.current(message.message);
+        }
       };
       ws.onerror = () => {
+        if (stopped) return;
         setError(
           "Cannot reach your computer. Check that the bridge and your secure tunnel are running.",
         );
@@ -424,6 +451,7 @@ export function useWorkspace(onError: (message: string) => void) {
       ws.onclose = (event) => {
         if (stopped) return;
         setFrame(null);
+        clearControls();
         if (event.code === 4001 || event.code === 4401) {
           invalidatePairing(
             connection,
@@ -444,6 +472,7 @@ export function useWorkspace(onError: (message: string) => void) {
     setRequests([]);
     setInfo(null);
     setFrame(null);
+    clearControls();
     setError("");
     // HTTP verifies pairing too, and provides a useful error when a socket is blocked.
     Promise.all([
@@ -471,7 +500,7 @@ export function useWorkspace(onError: (message: string) => void) {
       current?.close();
       socket.current = null;
     };
-  }, [connection, api, invalidatePairing]);
+  }, [connection, api, invalidatePairing, clearControls]);
 
   const connect = async (
     value: Connection,
@@ -546,6 +575,7 @@ export function useWorkspace(onError: (message: string) => void) {
     setConnection(null);
     setInfo(null);
     setFrame(null);
+    clearControls();
     setRequests(demoRequests());
     setStatus("demo");
     setError("");
@@ -573,6 +603,9 @@ export function useWorkspace(onError: (message: string) => void) {
       );
       return false;
     }
+    if (message.type === "click" || message.type === "key") {
+      focusAttempt.current = null; setFocusedControl(null); setFocusBusy(false); setFocusBlocked(false);
+    }
     socket.current.send(JSON.stringify(message));
     return true;
   }, []);
@@ -580,13 +613,34 @@ export function useWorkspace(onError: (message: string) => void) {
     if (watchId.current === requestId) return;
     watchId.current = requestId;
     setFrame(null);
+    clearControls();
     if (socket.current?.readyState === WebSocket.OPEN)
       socket.current.send(
         JSON.stringify(
           requestId ? { type: "watch", requestId } : { type: "unwatch" },
         ),
       );
-  }, []);
+  }, [clearControls]);
+  const inspectControls = () => {
+    inspectionAttempt.current = crypto.randomUUID(); focusAttempt.current = null;
+    setPageControls(null); setFocusedControl(null); setControlsError("");
+    const sent = send({ type: "inspect-controls", inspectionId: inspectionAttempt.current });
+    setControlsBusy(sent);
+  };
+  const focusControl = (snapshotId: string, controlId: string) => {
+    focusAttempt.current = { snapshotId, controlId }; setFocusBlocked(true);
+    setFocusedControl(null); setControlsError("");
+    setFocusBusy(send({ type: "focus", snapshotId, controlId }));
+  };
+  useEffect(() => {
+    if (!controlsBusy && !focusBusy) return;
+    const timer = setTimeout(() => {
+      inspectionAttempt.current = null; focusAttempt.current = null;
+      setControlsBusy(false); setFocusBusy(false);
+      setControlsError("The browser did not confirm the action. Refresh page controls before trying again.");
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [controlsBusy, focusBusy]);
   const action = async (
     requestId: string,
     actionName: "approve" | "deny" | "complete",
@@ -656,6 +710,7 @@ export function useWorkspace(onError: (message: string) => void) {
     info,
     status,
     frame,
+    pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,
     error,
     pairingNotice,
     dismissPairingNotice: () => {

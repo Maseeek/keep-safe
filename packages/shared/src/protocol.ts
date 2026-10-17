@@ -30,6 +30,23 @@ export interface BridgeInfo {
   pushEnabled: boolean;
   vapidPublicKey?: string;
   historyRetentionHours?: number;
+  pageControlsAvailable?: boolean;
+}
+
+export interface PageControl {
+  id: string;
+  role: 'textbox' | 'button' | 'checkbox' | 'radio' | 'combobox' | 'link';
+  name: string;
+  protected: boolean;
+  disabled: boolean;
+  checked?: boolean;
+}
+
+export interface PageControlsSnapshot {
+  snapshotId: string;
+  origin: string;
+  controls: PageControl[];
+  truncated: boolean;
 }
 
 export interface HistoryCleanupResult {
@@ -57,6 +74,8 @@ export type ClientMessage =
   | { type: 'auth'; token: string }
   | { type: 'watch'; requestId: string }
   | { type: 'unwatch' }
+  | { type: 'inspect-controls'; inspectionId: string }
+  | { type: 'focus'; snapshotId: string; controlId: string }
   | { type: 'click'; x: number; y: number }
   | { type: 'scroll'; deltaX: number; deltaY: number }
   | { type: 'text'; text: string }
@@ -66,6 +85,8 @@ export type ServerMessage =
   | { type: 'ready'; info: BridgeInfo; requests: LoginRequest[] }
   | { type: 'requests'; requests: LoginRequest[] }
   | { type: 'frame'; requestId: string; data: string; width: number; height: number; url: string }
+  | { type: 'controls'; requestId: string; inspectionId: string; snapshot: PageControlsSnapshot }
+  | { type: 'focused'; requestId: string; snapshotId: string; controlId: string }
   | { type: 'error'; message: string };
 
 /** REST: Authorization: Bearer <ownerToken> or <agentToken>. Tokens are separate. */

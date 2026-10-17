@@ -1,5 +1,14 @@
 # Change history
 
+## 17 October 2026
+
+### Remote page control navigation
+
+- Add bounded on-demand main-page field/button labels, roles and protected-field markers without reading field values or link addresses.
+- Focus stable snapshot targets and confirm the actual remote focus before enabling text sending. Reject stale targets and late acknowledgements.
+- Keep inspection/focus inside owner control and handback barriers, including disconnected-controller work.
+- Add value-exclusion, stale-target, authorization, lifecycle and mobile login/resume coverage. Document partial accessibility and physical-testing limits.
+
 ## 16 October 2026
 
 ### Safe history cleanup and retention

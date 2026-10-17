@@ -21,6 +21,7 @@ import {
 import type { LoginRequest } from "../../../packages/shared/src/protocol";
 import type { Workspace } from "./workspace";
 import { browserAddress } from "./browser-address";
+import { ControlNavigator } from "./ControlNavigator";
 
 export function AgentMark({
   name,
@@ -93,7 +94,7 @@ export function BrowserPanel({
   const liveFrame =
     workspace.frame?.requestId === request.id ? workspace.frame : null;
   const canInput =
-    active && workspace.status === "connected" && !!liveFrame && !expired;
+    active && workspace.status === "connected" && !!liveFrame && !expired && !workspace.focusBusy;
   const address = browserAddress(liveFrame?.url ?? request.url);
   const requestedAddress = browserAddress(request.url);
 
@@ -112,6 +113,7 @@ export function BrowserPanel({
   useEffect(() => {
     if (!active || expired || workspace.status !== "connected") setText("");
   }, [active, expired, workspace.status]);
+  useEffect(() => { if (workspace.focusBlocked) setText(""); }, [workspace.focusBlocked]);
   useEffect(() => {
     // A pending wheel event belongs to this request and this control interval.
     // Never replay it after a disconnect, handback, or request switch.
@@ -136,7 +138,7 @@ export function BrowserPanel({
 
   const sendText = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!text || !canInput) return;
+    if (!text || !canInput || workspace.focusBlocked || workspace.focusBusy) return;
     const value = text;
     setText("");
     workspace.send({ type: "text", text: value });
@@ -390,6 +392,7 @@ export function BrowserPanel({
       </div>
       {active && !isDemo && !expired ? (
         <div className="remote-controls">
+          {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} /> : null}
           <div className="remote-toolbar">
             <button
               className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
@@ -464,12 +467,12 @@ export function BrowserPanel({
                   autoCapitalize="none"
                   spellCheck={false}
                   placeholder="Text to send to the selected field"
-                  disabled={!canInput}
+                  disabled={!canInput || workspace.focusBlocked}
                 />
                 <button
                   className="button button-dark button-small"
                   type="submit"
-                  disabled={!canInput || !text}
+                  disabled={!canInput || !text || workspace.focusBlocked}
                 >
                   Send <ArrowUp size={14} />
                 </button>

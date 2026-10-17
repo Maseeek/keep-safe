@@ -24,7 +24,7 @@
 - [x] Offline owner/agent key replacement, exclusive CLI configuration locking, and documented crash recovery.
 - [x] Easier tunnel setup and read-only connection diagnostics, with private loopback transport and documented remote-verification limits.
 - [x] Larger phone text and touch targets, full-origin inspection, named remote keys, and modal keyboard/focus recovery.
-- [ ] Structured screen-reader navigation inside the remote webpage, plus physical assistive-technology testing.
+- [ ] Complete remote webpage navigation and physical assistive-technology testing. A bounded value-free page-controls navigator is implemented; iframe/shadow/custom-widget support remains limited.
 - [x] Privacy-preserving memory-only history retention and owner cleanup, with pending browser work and unexpired handoffs protected. Persistent cookie/session retention remains outside this release.
 - [ ] Product validation plan and future hosted/team pricing proposal, without enabling billing or spending.
 

@@ -90,12 +90,15 @@ All API requests except `/api/health` require `Authorization: Bearer <token>`. T
 - Paired phone management: `GET /api/devices`, `POST /api/devices/:id/revoke`; bootstrap owner token only: `POST /api/devices` with a device name, which returns a new seven-day key once.
 - Owner push subscription: `POST /api/push/subscribe`.
 - Owner live control: WebSocket `/ws`, first message `{"type":"auth","token":"<owner token>"}`, followed by `watch` and bounded input messages.
+- Optional owner page controls: while watching an active request, send `{"type":"inspect-controls","inspectionId":"<UUID>"}`. A supported bridge replies with `controls`, the request/inspection IDs and a bounded `snapshot`. Send `{"type":"focus","snapshotId":"<UUID>","controlId":"<UUID>"}` to focus one current target, then wait for the matching `focused` acknowledgement. `BridgeInfo.pageControlsAvailable` advertises the protocol. Agents cannot inspect or focus through this owner socket.
 
 Public message types are in [protocol.ts](../packages/shared/src/protocol.ts). The executable MCP adapter is in [packages/mcp](../packages/mcp/src/index.ts).
 
 Agent outcomes stay available until original expiry. Eligible metadata is removed after another 24 hours, confirmed owner cleanup, bridge restart, or earlier capacity eviction. Poll promptly: a removed request returns 404. When all 100 records are protected, creation returns 429 until space becomes safe to reclaim. Cleanup does not provide session cookie export or persistent browser retention.
 
 The MCP `ttl_seconds` option accepts 60–1800 seconds. The HTTP `ttlSeconds` field accepts 1–1800 seconds, including short verification lifetimes. Both default to 600 seconds.
+
+Page-control snapshots contain names, roles and limited state, never field values or link addresses. They omit frames/shadow DOM and unsupported widgets. Refresh after page changes; stale or hidden/disabled/renamed targets are rejected. Snapshot and focus acknowledgements must match the current request, socket and pending action. Website focus handlers can still cause navigation or other page behavior. Inspection/focus timeouts invalidate targets but do not mean renderer cancellation: the operation remains in the handback barrier until Chromium actually settles.
 
 ## Compatibility scope
 

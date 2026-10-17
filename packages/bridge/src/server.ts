@@ -91,7 +91,7 @@ export async function createBridge(options: BridgeOptions) {
   const subscriptionsWriter = atomicJsonWriter(options.subscriptionsFile);
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, historyRetentionHours, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, historyRetentionHours, pageControlsAvailable: true, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl]) if (value) origins.add(new URL(value).origin);
   if (options.subscriptionsFile) {
@@ -190,7 +190,7 @@ export async function createBridge(options: BridgeOptions) {
   async function watch(client: Client, id: unknown) {
     if (typeof id !== 'string') throw new Error('Choose a valid request.');
     const entry = checkEntry(id);
-    if (entry.finalizing || entry.draining || !['approved', 'active'].includes(entry.request.status) || now() >= Date.parse(entry.request.expiresAt)) throw new Error('Approve an unexpired request before opening its browser.');
+    if (entry.finalizing || entry.draining || entry.inputBarrier || !['approved', 'active'].includes(entry.request.status) || now() >= Date.parse(entry.request.expiresAt)) throw new Error('Approve an unexpired request and wait for any previous browser action to finish before opening its browser.');
     if (entry.controller && entry.controller !== client) throw new Error('This browser is being controlled on another device.');
     unwatch(client);
     client.watching = id;
@@ -232,16 +232,29 @@ export async function createBridge(options: BridgeOptions) {
     if (message.type === 'unwatch') { unwatch(client); return; }
     const entry = client.watching ? entries.get(client.watching) : undefined;
     if (!entry?.browser || !active(entry, client)) throw new Error('Open an approved session before sending input.');
-    if (message.type === 'click') {
-      if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid tap coordinates.');
-    } else if (message.type === 'scroll') {
-      if (![message.deltaX, message.deltaY].every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 3000)) throw new Error('Invalid scroll distance.');
-    } else if (message.type === 'text') {
-      if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');
-    } else if (message.type === 'key') {
-      if (typeof message.key !== 'string' || !allowedKeys.has(message.key)) throw new Error('Unsupported key.');
-    } else throw new Error('Unknown message type.');
-    const operation = entry.browser.input(message as { type: string; [key: string]: unknown });
+    let operation: Promise<void>;
+    if (message.type === 'inspect-controls') {
+      if (typeof message.inspectionId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.inspectionId)) throw new Error('Choose a valid page control inspection.');
+      if (!entry.browser.inspectControls) throw new Error('This browser does not support page controls. Update the bridge or use the live browser keys.');
+      operation = entry.browser.inspectControls().then(snapshot => {
+        if (active(entry, client)) send(client, { type: 'controls', requestId: entry.request.id, inspectionId: message.inspectionId as string, snapshot });
+      });
+    } else {
+      if (message.type === 'click') {
+        if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid tap coordinates.');
+      } else if (message.type === 'scroll') {
+        if (![message.deltaX, message.deltaY].every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 3000)) throw new Error('Invalid scroll distance.');
+      } else if (message.type === 'text') {
+        if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');
+      } else if (message.type === 'key') {
+        if (typeof message.key !== 'string' || !allowedKeys.has(message.key)) throw new Error('Unsupported key.');
+      } else if (message.type === 'focus') {
+        if (typeof message.snapshotId !== 'string' || typeof message.controlId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.snapshotId) || !/^[a-f0-9-]{36}$/.test(message.controlId)) throw new Error('Refresh page controls before choosing a field.');
+      } else throw new Error('Unknown message type.');
+      operation = entry.browser.input(message as { type: string; [key: string]: unknown }).then(() => {
+        if (message.type === 'focus' && active(entry, client)) send(client, { type: 'focused', requestId: entry.request.id, snapshotId: message.snapshotId as string, controlId: message.controlId as string });
+      });
+    }
     // Keep the barrier on the request as well as the socket: closing a phone must
     // not orphan a keyboard operation that is still executing in Chromium.
     const barrier = Promise.allSettled([entry.inputBarrier ?? Promise.resolve(), operation]).then(() => {});

@@ -44,6 +44,8 @@ Use a separate browser profile, and inspect the current website origin before en
 
 On mobile, leaving request details releases live control and stops frame streaming. Pending wheel input is discarded when leaving, changing requests, disconnecting, or ending control. Reopening the request can resume its existing browser before expiry.
 
+The owner may request a bounded main-page control list over the authenticated live-control socket. Only the active controller receives labels/roles/state; field values, cookie data and link addresses are not inspected. The browser retains at most 50 transient target handles, bound to a snapshot, page and URL. Navigation, refresh, handback and closure invalidate them. Focus rechecks the current descriptor and active element, and the frontend requires the matching acknowledgement before reporting success. Website-provided labels can still contain sensitive text; this is transient owner-visible content, never activity history or a server log. Pending inspection/focus participates in the handback barrier. This is an approximate control navigator rather than full accessibility-tree or physical assistive-technology support.
+
 ## Notifications
 
 The bridge can use Web Push with locally generated VAPID keys. Permission is requested only when the owner enables notifications. Some mobile browsers require installation to the home screen. Actual lock-screen delivery requires a subscribed physical device and is separate from testing the service worker and subscription API. On iOS, install to the Home Screen before requesting push from a user gesture; see [WebKit's Web Push guidance](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).

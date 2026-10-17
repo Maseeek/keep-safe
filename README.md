@@ -14,6 +14,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 
 - Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
 - Live browser streaming with taps, scrolling, text entry, and keyboard controls.
+- Optional page-controls list with names, roles, password-field markers and confirmed remote focus.
 - Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
 - Owner-controlled history cleanup that preserves unexpired agent handoffs.
@@ -127,6 +128,8 @@ Leaving a request on mobile stops its live stream and discards pending scroll in
 
 Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Session status messages appear inside the mobile request so they do not cover the controls.
 
+During a live session, open **Page controls** to list supported labeled fields and buttons, choose one to focus, then use **Type text** or the remote keys. The list does not read field values or link addresses. It shows up to 50 controls from a bounded main-page scan and refreshes only when requested. Password fields are marked, while entered text remains outside the list. After an unconfirmed focus attempt, text sending stays blocked until a fresh confirmed focus or an explicit browser tap/Tab action.
+
 ## Limits to know
 
 - The bridge and agent computer must be running and reachable. The hosted dashboard alone does not run a browser.
@@ -134,7 +137,7 @@ Phone controls use larger text and touch targets, with named remote keys and key
 - Requests and activity stay in memory. Eligible finished records clear after 24 hours, earlier manual/capacity cleanup, or bridge restart; pending browser cleanup can postpone deletion.
 - Agents must pause browser input while the owner is in control. Existing debugging clients cannot be forcibly stopped by Keep Safe.
 - Phone passkeys, biometrics, hardware security keys, native password-manager integration, and every third-party login provider are not universally supported or verified.
-- The remote webpage is streamed as an image. Its fields are not yet exposed as a structured interface to screen readers. The named toolbar controls do not provide full assistive navigation inside the website.
+- The webpage image has an optional structured control navigator, not a complete accessibility tree. Names are approximations from site-provided labels; frames, shadow DOM and complex custom widgets may be omitted. A website can react to normal focus events. Physical screen-reader use has not been verified, and full remote webpage navigation remains unfinished.
 - There is no hosted multi-user account service or billing yet. Future team/managed-relay plans are in [product direction](docs/product.md).
 
 ## Project records
