@@ -2,6 +2,15 @@
 
 ## 17 October 2026
 
+### Notification enrollment and control
+
+- Check the current pairing's bridge enrollment before showing notifications as enabled; reject stale results from another connection.
+- Add retryable enrollment/status/removal controls without forgetting the phone or removing other computers' subscriptions.
+- Ask before replacing a different browser notification key, and document the distinction between enrollment and physical delivery.
+- Persist dead endpoint removal and preserve newer enrollments when an older in-flight send fails.
+- Transfer a verified tab-owner enrollment during explicit phone remembering, so the new device's revocation removes its alerts. Reject changed enrollment and roll back unpublished device creation on migration failure.
+- Prevent delayed remember actions from replacing a newer connection, and revoke unused device keys returned after cancellation or supersession.
+
 ### Focus acknowledgement during navigation
 
 - Invalidate page-control snapshots on early navigation intent, including synchronously cancelled navigation, before acknowledging remote focus.

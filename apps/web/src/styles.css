@@ -1674,6 +1674,14 @@ svg {
 .settings-card {
   padding: 27px;
 }
+
+.notification-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.notification-actions .button { min-height: 44px; white-space: normal; }
+.settings-card > .notification-status.error { color: #963d2e; }
+@media (max-width: 760px) {
+  .notification-actions { flex-direction: column; align-items: stretch; }
+  .notification-actions .button { width: 100%; }
+}
 .settings-section-icon {
   width: 39px;
   height: 39px;

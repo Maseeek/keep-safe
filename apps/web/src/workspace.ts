@@ -263,7 +263,7 @@ export function demoRequests(): LoginRequest[] {
   ];
 }
 
-async function callBridge<T>(
+export async function callBridge<T>(
   connection: Connection,
   path: string,
   options?: RequestInit,
@@ -300,6 +300,7 @@ export function useWorkspace(onError: (message: string) => void) {
   );
   const currentConnection = useRef(connection);
   currentConnection.current = connection;
+  const connectionAttempt = useRef(0);
   const [pairingNotice, setPairingNotice] = useState(initial.notice);
   const [requests, setRequests] = useState<LoginRequest[]>(() =>
     initial.connection ? [] : demoRequests(),
@@ -330,6 +331,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const invalidatePairing = useCallback(
     (activeConnection: Connection | null, message: string) => {
       if (currentConnection.current !== activeConnection) return;
+      connectionAttempt.current++;
       clearPairingStorage();
       storeNotice(message);
       setPairingNotice(message);
@@ -504,8 +506,11 @@ export function useWorkspace(onError: (message: string) => void) {
 
   const connect = async (
     value: Connection,
-    options?: { remember: boolean; name: string },
+    options?: { remember: boolean; name: string; notificationSubscription?: PushSubscriptionJSON; signal?: AbortSignal },
   ) => {
+    const attempt = ++connectionAttempt.current;
+    const superseded = () => attempt !== connectionAttempt.current || options?.signal?.aborted === true;
+    if (superseded()) throw new Error("Pairing was cancelled. Your current connection is unchanged.");
     const checked = validateConnection(value.url, value.token);
     let next = checked;
     if (options?.remember) {
@@ -517,7 +522,7 @@ export function useWorkspace(onError: (message: string) => void) {
       try {
         result = await callBridge<DevicePairResult>(checked, "/api/devices", {
           method: "POST",
-          body: JSON.stringify({ name: options.name.trim() || "My phone" }),
+          body: JSON.stringify({ name: options.name.trim() || "My phone", ...(options.notificationSubscription ? { notificationSubscription: options.notificationSubscription } : {}) }),
         });
       } catch (reason) {
         if (reason instanceof BridgeError && reason.status === 404)
@@ -539,6 +544,10 @@ export function useWorkspace(onError: (message: string) => void) {
         ...validateConnection(checked.url, result.token),
         device: result.device,
       };
+      if (superseded()) {
+        await callBridge(checked, `/api/devices/${encodeURIComponent(result.device.id)}/revoke`, { method: "POST", body: "{}" }).catch(() => {});
+        throw new Error("Pairing changed before this phone could be remembered. Check the current connection and try again.");
+      }
       try {
         // Only the newly issued device secret may enter persistent storage.
         clearPairingStorage();
@@ -568,6 +577,7 @@ export function useWorkspace(onError: (message: string) => void) {
     setConnection(next);
   };
   const disconnect = () => {
+    connectionAttempt.current++;
     clearPairingStorage();
     storeNotice("");
     setPairingNotice("");

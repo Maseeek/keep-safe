@@ -98,3 +98,13 @@ The request lasts five minutes. Decline, expiry, failure and Ctrl+C close the pr
 Exit `0` means the synthetic login/resume check passed. Exit `1` means it did not complete or cleanup failed. Interrupt/termination/terminal hangup normally return `130`/`143`/`129` after cleanup. Use `npm run --silent bridge -- rehearse --help` for usage.
 
 A passing rehearsal proves the specific device/connection path you actually used and this synthetic handoff. Desktop mobile emulation does not prove physical-phone use. This check does not certify third-party login providers, password clearing, passkeys, physical push or a different network. Test push separately on a physical device. Each pilot participant must use their own isolated bridge and pairing, as described in the [validation plan](validation.md).
+
+## Check phone notifications
+
+1. Pair the physical phone and keep the computer and its HTTPS route running. On iPhone, install Keep Safe to the Home Screen and launch it there first.
+2. Open Settings and choose **Enable notifications** from that button's user gesture. Allow the browser permission. If another computer's notification key is in use, read the switch confirmation before accepting; it replaces that browser subscription and stops its earlier alerts.
+3. Choose **Check notification status**. An on status confirms this browser subscription is enrolled for the current pairing on the current computer. It does not prove that a notification reached the phone. A failed check can be retried; an older bridge needs an update to supply this status.
+4. Lock the phone, then run the synthetic rehearsal from another terminal on the computer. Observe whether a real notification arrives and opens the correct request. Remember the phone explicitly before expecting a fresh app window to reconnect without the owner link. Decline or complete the request within its five-minute deadline.
+5. In Settings, choose **Turn off notifications**, check status again, and repeat a synthetic request. This pairing should remain connected and receive no further alerts from this computer. A notification already accepted by the push provider may still arrive; disabling cannot retract it. Browser permission and other computers' enrollments are unchanged.
+
+Record the phone/browser family, network type and actual observed delivery or failure without collecting tokens, endpoints, input content or identifying screenshots. Physical-device delivery remains unverified until this is performed on a real device. This guide does not claim the test has happened.

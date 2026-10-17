@@ -83,7 +83,13 @@ Chrome 136+ requires a non-default user data directory when launching with remot
 
 Pair the app, then choose **Enable notifications** in Settings. The bridge generates Web Push keys automatically. On iPhone, add the app to the Home Screen and open it there before enabling notifications, as required by [WebKit's Web Push support](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).
 
-The subscription API and notification routing are implemented. Lock-screen delivery on a physical iPhone or Android device has not yet been verified.
+Settings checks the current computer's enrollment rather than assuming an existing browser subscription is registered there. **Check notification status** refreshes that check; **Turn off notifications** removes only this pairing's enrollment on that computer. Pairing and browser permission stay unchanged. A failed removal remains retryable.
+
+If notifications are already enrolled with a tab-only owner connection, **Remember this phone** verifies and transfers that browser enrollment to its new revocable device key. A failed verification or changed enrollment asks you to retry before publishing a new pairing. Ordinary bridge switching does not transfer notifications automatically.
+
+If this app's browser subscription uses another computer's notification key, enabling asks before replacing it. Accepting stops that old subscription's alerts in this browser. An older bridge can still register notifications, but cannot confirm enrollment or turn it off through these controls until updated. See the [notification check](docs/connection.md#check-phone-notifications).
+
+Enrollment is separate from delivery. Lock-screen delivery on a physical iPhone or Android device has not yet been verified.
 
 ### Practice before using a real account
 

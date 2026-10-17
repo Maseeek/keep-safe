@@ -1,5 +1,6 @@
 import { timingSafeEqual, randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, type ClientRequest, type IncomingMessage, type RequestOptions, type ServerResponse } from 'node:http';
+import { Agent as HttpsAgent } from 'node:https';
 import { readFile, stat, realpath } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -79,6 +80,36 @@ function pushSubscription(value: Record<string, unknown>): PushSubscription {
   if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' || !/^[A-Za-z0-9_=-]{40,200}$/.test(keys.p256dh) || !/^[A-Za-z0-9_=-]{16,100}$/.test(keys.auth)) throw new HttpError(400, 'Invalid push subscription keys.');
   return { endpoint: endpoint.href, keys: { p256dh: keys.p256dh, auth: keys.auth } };
 }
+function matchingSubscription(stored: StoredSubscription | undefined, subscription: PushSubscription, deviceId: string | undefined) {
+  return !!stored && stored.deviceId === deviceId && stored.endpoint === subscription.endpoint &&
+    stored.keys.p256dh === subscription.keys.p256dh && stored.keys.auth === subscription.keys.auth;
+}
+function createPushTransport() {
+  // web-push accepts a private HTTPS agent. Node dispatches ClientRequests via
+  // addRequest (not declared by @types/node), before DNS/socket establishment.
+  const agent = new HttpsAgent({ keepAlive: false }) as HttpsAgent & { addRequest(request: ClientRequest, options: RequestOptions): void };
+  const dispatch = agent.addRequest;
+  const pending = new Map<ClientRequest, () => void>();
+  let closed = false;
+  agent.addRequest = (request, options) => {
+    if (closed) { queueMicrotask(() => request.destroy(new Error('Notification delivery stopped.'))); return; }
+    const timer = setTimeout(() => request.destroy(new Error('Notification delivery timed out.')), 5000);
+    timer.unref();
+    const finished = () => { clearTimeout(timer); pending.delete(request); };
+    pending.set(request, finished);
+    request.once('close', finished);
+    try { dispatch.call(agent, request, options); }
+    catch (error) { finished(); throw error; }
+  };
+  return {
+    agent,
+    close() {
+      closed = true;
+      for (const [request, finished] of pending) { finished(); request.destroy(new Error('Notification delivery stopped.')); }
+      agent.destroy();
+    },
+  };
+}
 
 export async function createBridge(options: BridgeOptions) {
   if (!options.ownerToken || !options.agentToken || options.ownerToken === options.agentToken) throw new Error('Separate owner and agent tokens are required.');
@@ -86,12 +117,15 @@ export async function createBridge(options: BridgeOptions) {
   const entries = new Map<string, Entry>();
   const clients = new Set<Client>();
   const subscriptions = new Map<string, StoredSubscription>();
+  const notifications = new Set<Promise<void>>();
+  const pushTransport = createPushTransport();
+  let devicePairing = Promise.resolve();
   const devices = await createDeviceStore(options.devicesFile, now);
   if (devices.prune().length) await devices.persist();
   const subscriptionsWriter = atomicJsonWriter(options.subscriptionsFile);
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, historyRetentionHours, pageControlsAvailable: true, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl]) if (value) origins.add(new URL(value).origin);
   if (options.subscriptionsFile) {
@@ -277,12 +311,20 @@ export async function createBridge(options: BridgeOptions) {
   async function notify(request: LoginRequest) {
     if (!options.vapid) return;
     const target = `${options.appUrl ?? options.publicUrl ?? 'http://localhost:4318'}/?request=${encodeURIComponent(request.id)}`;
+    let pruned = false;
     await Promise.all([...subscriptions.values()].map(async subscription => {
       if (subscription.deviceId && !devices.active(subscription.deviceId)) return;
       try {
-        await webpush.sendNotification(subscription, JSON.stringify({ title: 'An agent needs your help', body: `${request.agent}: ${request.title}`, requestId: request.id, url: target }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000 });
-      } catch (error) { if ([404, 410].includes((error as { statusCode?: number }).statusCode ?? 0)) subscriptions.delete(subscription.endpoint); }
+        await webpush.sendNotification(subscription, JSON.stringify({ title: 'An agent needs your help', body: `${request.agent}: ${request.title}`, requestId: request.id, url: target }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000, agent: pushTransport.agent });
+      } catch (error) {
+        // A delayed response must not remove a newer enrollment or a migration
+        // to another owner principal using the same browser subscription.
+        if ([404, 410].includes((error as { statusCode?: number } | null)?.statusCode ?? 0) && subscriptions.get(subscription.endpoint) === subscription) {
+          subscriptions.delete(subscription.endpoint); pruned = true;
+        }
+      }
     }));
+    if (pruned) await persistSubscriptions();
   }
   function disconnectDevice(id: string) {
     for (const client of clients) if (client.deviceId === id) { unwatch(client); client.ws.close(4001, 'Phone pairing expired or revoked'); }
@@ -334,9 +376,37 @@ export async function createBridge(options: BridgeOptions) {
     if (url.pathname === '/api/devices' && request.method === 'POST') {
       if (!master) throw new HttpError(403, 'Use the original private pairing link to pair a new phone.');
       const body = await jsonBody(request);
+      if (!equalToken(authorization(request), options.ownerToken)) throw new HttpError(403, 'Use the original private pairing link to pair a new phone.');
       const name = safeText(body.name, 'Device name', 80);
-      if (devices.list().length >= 10) throw new HttpError(429, 'Ten phones are already paired. Revoke a phone before pairing another.');
-      json(response, 201, await devices.pair(name)); return;
+      let notification: PushSubscription | undefined;
+      if (body.notificationSubscription !== undefined) {
+        if (!body.notificationSubscription || typeof body.notificationSubscription !== 'object' || Array.isArray(body.notificationSubscription)) throw new HttpError(400, 'Invalid push subscription.');
+        notification = pushSubscription(body.notificationSubscription as Record<string, unknown>);
+      }
+      const pairing = devicePairing.then(async () => {
+        const previous = notification ? subscriptions.get(notification.endpoint) : undefined;
+        if (notification && !matchingSubscription(previous, notification, undefined)) throw new HttpError(409, 'Refresh notification settings or turn notifications off before remembering this phone.');
+        if (devices.list().length >= 10) throw new HttpError(429, 'Ten phones are already paired. Revoke a phone before pairing another.');
+        const paired = await devices.pair(name);
+        if (!notification || !previous) return paired;
+        let migrated: StoredSubscription | undefined;
+        try {
+          if (subscriptions.get(notification.endpoint) !== previous) throw new Error('Notification enrollment changed.');
+          migrated = { ...notification, deviceId: paired.device.id };
+          subscriptions.set(notification.endpoint, migrated);
+          await persistSubscriptions();
+          if (!devices.active(paired.device.id) || subscriptions.get(notification.endpoint) !== migrated) throw new Error('Phone enrollment changed.');
+          return paired;
+        } catch {
+          devices.remove(paired.device.id);
+          // Never overwrite an unrelated concurrent re-enrollment on rollback.
+          if (migrated && subscriptions.get(notification.endpoint) === migrated) subscriptions.set(notification.endpoint, previous);
+          await Promise.allSettled([devices.persist(), persistSubscriptions()]);
+          throw new HttpError(500, 'The phone could not be paired. Refresh notification settings and try again.');
+        }
+      });
+      devicePairing = pairing.then(() => {}, () => {});
+      json(response, 201, await pairing); return;
     }
     const revoke = /^\/api\/devices\/([a-f0-9-]{36})\/revoke$/.exec(url.pathname);
     if (revoke && request.method === 'POST') {
@@ -376,7 +446,10 @@ export async function createBridge(options: BridgeOptions) {
         entries.delete(oldestSafe[0]);
       }
       entries.set(item.id, { request: item, cdpUrl });
-      broadcast(); void notify(item);
+      broadcast();
+      const notification = notify(item).catch(() => {});
+      notifications.add(notification);
+      void notification.then(() => notifications.delete(notification));
       json(response, 201, item); return;
     }
     const match = /^\/api\/requests\/([a-f0-9-]{36})(?:\/(approve|deny|complete))?$/.exec(url.pathname);
@@ -429,11 +502,19 @@ export async function createBridge(options: BridgeOptions) {
       if (action === 'deny') await closeEntry(entry);
       broadcast(); json(response, 200, entry.request); return;
     }
-    if (url.pathname === '/api/push/subscribe' && request.method === 'POST') {
-      if (!owner) throw new HttpError(403, 'Owner access is required.');
-      if (!options.vapid) throw new HttpError(409, 'Push is unavailable on this bridge.');
-      const subscription = pushSubscription(await jsonBody(request));
+    const pushAction = /^\/api\/push\/(subscribe|status|unsubscribe)$/.exec(url.pathname);
+    if (pushAction && request.method === 'POST') {
       requireOwner();
+      if (pushAction[1] === 'subscribe' && !options.vapid) throw new HttpError(409, 'Push is unavailable on this bridge.');
+      const body = await jsonBody(request);
+      requireOwner();
+      const subscription = pushSubscription(body);
+      const matching = matchingSubscription(subscriptions.get(subscription.endpoint), subscription, device?.id);
+      if (pushAction[1] === 'status') { json(response, 200, { enabled: matching }); return; }
+      if (pushAction[1] === 'unsubscribe') {
+        if (matching) { subscriptions.delete(subscription.endpoint); await persistSubscriptions(); }
+        json(response, 200, { ok: true }); return;
+      }
       if (subscriptions.size >= 10 && !subscriptions.has(subscription.endpoint)) throw new HttpError(429, 'Too many notification devices.');
       subscriptions.set(subscription.endpoint, { ...subscription, ...(device ? { deviceId: device.id } : {}) });
       await persistSubscriptions();
@@ -481,6 +562,8 @@ export async function createBridge(options: BridgeOptions) {
       await new Promise<void>(resolve => server.close(() => resolve()));
       server.closeAllConnections();
       await devices.close();
+      pushTransport.close();
+      await Promise.allSettled(notifications);
       await subscriptionsWriter.flush();
     },
   };

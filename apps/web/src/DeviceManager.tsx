@@ -97,9 +97,11 @@ function DeviceConfirm({
 export function DeviceManager({
   workspace,
   notify,
+  notificationForRemember,
 }: {
   workspace: Workspace;
   notify: (message: string) => void;
+  notificationForRemember?: (connection: NonNullable<Workspace["connection"]>) => Promise<PushSubscriptionJSON | undefined>;
 }) {
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [loading, setLoading] = useState(false);
@@ -109,6 +111,10 @@ export function DeviceManager({
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PairedDevice | null>(null);
   const connection = workspace.connection;
+  const currentConnection = useRef(connection);
+  currentConnection.current = connection;
+  const pendingRemember = useRef<AbortController | null>(null);
+  useEffect(() => () => pendingRemember.current?.abort(), []);
   const api = workspace.api;
   const load = useCallback(async () => {
     if (!connection) {
@@ -145,8 +151,13 @@ export function DeviceManager({
     event.preventDefault();
     setBusy(true);
     setError("");
+    const pending = new AbortController();
+    pendingRemember.current?.abort();
+    pendingRemember.current = pending;
     try {
-      await workspace.connect(connection, { remember: true, name });
+      const notificationSubscription = await notificationForRemember?.(connection);
+      if (pending.signal.aborted || currentConnection.current !== connection) throw new Error("The pairing changed. Check this phone’s connection before remembering it.");
+      await workspace.connect(connection, { remember: true, name, notificationSubscription, signal: pending.signal });
       setRememberOpen(false);
       notify(
         "Phone remembered for 7 days. Your owner token was replaced by a revocable device key.",
@@ -238,6 +249,7 @@ export function DeviceManager({
           <button
             className="button button-dark button-small"
             onClick={() => setRememberOpen(!rememberOpen)}
+            disabled={busy}
             aria-expanded={rememberOpen}
           >
             Remember this phone <ArrowRight size={13} />

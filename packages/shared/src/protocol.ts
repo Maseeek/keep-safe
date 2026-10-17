@@ -28,6 +28,7 @@ export interface BridgeInfo {
   version: string;
   browserAvailable: boolean;
   pushEnabled: boolean;
+  pushManagementAvailable?: boolean;
   vapidPublicKey?: string;
   historyRetentionHours?: number;
   pageControlsAvailable?: boolean;
@@ -95,5 +96,7 @@ export const API = {
   info: '/api/info',
   requests: '/api/requests',
   subscribe: '/api/push/subscribe',
+  pushStatus: '/api/push/status',
+  unsubscribe: '/api/push/unsubscribe',
   socket: '/ws',
 } as const;

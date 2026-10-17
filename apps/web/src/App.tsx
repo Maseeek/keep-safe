@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -34,6 +34,7 @@ import { AgentMark, BrowserPanel, domain, timeLeft } from "./BrowserPanel";
 import { useWorkspace, validateConnection, type Workspace } from "./workspace";
 import { DeviceManager } from "./DeviceManager";
 import { HistoryControls } from "./HistoryControls";
+import { useNotifications } from "./useNotifications";
 
 type Section = "inbox" | "activity" | "devices" | "settings";
 type Filter = "all" | "pending" | "active";
@@ -160,9 +161,11 @@ function Toast({ message, onDismiss, inline = false }: { message: string; onDism
 function ConnectDialog({
   workspace,
   onClose,
+  notificationForRemember,
 }: {
   workspace: Workspace;
   onClose: () => void;
+  notificationForRemember: (connection: NonNullable<Workspace["connection"]>) => Promise<PushSubscriptionJSON | undefined>;
 }) {
   const [url, setUrl] = useState(workspace.connection?.url || "");
   const [token, setToken] = useState("");
@@ -171,17 +174,27 @@ function ConnectDialog({
   const [deviceName, setDeviceName] = useState("My phone");
   const [submitting, setSubmitting] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
+  const pendingConnect = useRef<AbortController | null>(null);
   useEffect(() => {
     dialog.current?.showModal();
+    return () => pendingConnect.current?.abort();
   }, []);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
     setError("");
+    const pending = new AbortController();
+    pendingConnect.current?.abort();
+    pendingConnect.current = pending;
     try {
-      await workspace.connect(validateConnection(url, token), {
+      const connection = validateConnection(url, token);
+      const notificationSubscription = remember ? await notificationForRemember(connection) : undefined;
+      if (!dialog.current?.open || pending.signal.aborted) return;
+      await workspace.connect(connection, {
         remember,
         name: deviceName,
+        notificationSubscription,
+        signal: pending.signal,
       });
       setToken("");
       onClose();
@@ -359,14 +372,28 @@ export function App() {
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const [notificationBusy, setNotificationBusy] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [mobileLayout, setMobileLayout] = useState(
     () => window.matchMedia("(max-width: 760px)").matches,
   );
   const detailSection = useRef<HTMLDivElement>(null);
   const notify = useCallback((message: string) => setToast(message), []);
   const workspace = useWorkspace(notify);
+  const notifications = useNotifications(workspace, notify);
+  const notificationEnableButton = useRef<HTMLButtonElement>(null);
+  const notificationContext = useRef({ section, connection: workspace.connection, key: workspace.info?.vapidPublicKey });
+  notificationContext.current = { section, connection: workspace.connection, key: workspace.info?.vapidPublicKey };
+  const turnOffNotifications = async (event: MouseEvent<HTMLButtonElement>) => {
+    const source = notificationContext.current;
+    const initiator = event.currentTarget;
+    const restoreFocus = document.activeElement === initiator;
+    if (!await notifications.disable() || !restoreFocus) return;
+    requestAnimationFrame(() => {
+      const current = notificationContext.current;
+      const focusUnchanged = document.activeElement === initiator || document.activeElement === document.body;
+      if (focusUnchanged && current.section === "settings" && current.connection === source.connection && current.key === source.key)
+        notificationEnableButton.current?.focus();
+    });
+  };
   const isDemo = !workspace.connection;
   const current = workspace.requests.filter(
     (request) =>
@@ -487,14 +514,6 @@ export function App() {
     return () =>
       navigator.serviceWorker.removeEventListener("message", openRequest);
   }, []);
-  useEffect(() => {
-    setNotificationsEnabled(false);
-    if (!workspace.connection || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.ready
-      .then((registration) => registration.pushManager.getSubscription())
-      .then((subscription) => setNotificationsEnabled(!!subscription))
-      .catch(() => {});
-  }, [workspace.connection]);
 
   const takeAction = async (
     id: string,
@@ -525,64 +544,6 @@ export function App() {
   const navigate = (next: Section) => {
     setSection(next);
     setSelectedId(null);
-  };
-  const enableNotifications = async () => {
-    if (isDemo) {
-      setSection("settings");
-      notify("Connect your computer to enable real phone notifications.");
-      return;
-    }
-    if (
-      !("Notification" in window) ||
-      !("PushManager" in window) ||
-      !("serviceWorker" in navigator)
-    ) {
-      notify(
-        "This browser does not support push. On iPhone, add Keep Safe to your Home Screen and open it there.",
-      );
-      return;
-    }
-    if (!workspace.info?.pushEnabled || !workspace.info.vapidPublicKey) {
-      notify(
-        "Enable Web Push in your bridge first. The setup guide explains the free VAPID configuration.",
-      );
-      return;
-    }
-    setNotificationBusy(true);
-    try {
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted")
-        throw new Error(
-          "Notifications were not enabled. You can change permission in your browser’s site settings.",
-        );
-      const registration = await navigator.serviceWorker.ready;
-      const key = workspace.info.vapidPublicKey
-        .replace(/-/g, "+")
-        .replace(/_/g, "/");
-      const bytes = Uint8Array.from(atob(key), (char) => char.charCodeAt(0));
-      const subscription =
-        (await registration.pushManager.getSubscription()) ||
-        (await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: bytes,
-        }));
-      await workspace.api("/api/push/subscribe", {
-        method: "POST",
-        body: JSON.stringify(subscription),
-      });
-      setNotificationsEnabled(true);
-      notify(
-        "You’re on the list. We’ll notify you when your agent needs a hand.",
-      );
-    } catch (reason) {
-      notify(
-        reason instanceof Error
-          ? reason.message
-          : "Could not enable notifications.",
-      );
-    } finally {
-      setNotificationBusy(false);
-    }
   };
   const exportHistory = () => {
     const file = new Blob(
@@ -727,9 +688,9 @@ export function App() {
             <button
               className="icon-button notification-button"
               aria-label="Set up phone notifications"
-              onClick={enableNotifications}
+              onClick={() => navigate("settings")}
             >
-              {notificationsEnabled ? (
+              {notifications.enabled ? (
                 <BellRing size={19} />
               ) : (
                 <Bell size={19} />
@@ -1004,7 +965,7 @@ export function App() {
                       </p>
                       <button
                         className="button button-light"
-                        onClick={enableNotifications}
+                        onClick={() => navigate("settings")}
                       >
                         <Bell size={15} />
                         Notify me
@@ -1122,7 +1083,7 @@ export function App() {
                 </div>
                 <OnboardingArt />
               </div>
-              <DeviceManager workspace={workspace} notify={notify} />
+              <DeviceManager workspace={workspace} notify={notify} notificationForRemember={notifications.forRemember} />
               <div className="setup-grid">
                 <section className="content-card device-card">
                   <div className="section-title">
@@ -1307,33 +1268,21 @@ export function App() {
                     Get a phone notification when an agent sends a request. You
                     stay in charge of when to open it.
                   </p>
-                  <button
-                    className="button button-dark"
-                    disabled={notificationBusy || notificationsEnabled}
-                    onClick={enableNotifications}
-                  >
-                    {notificationBusy ? (
-                      <LoaderCircle size={16} className="spin" />
-                    ) : notificationsEnabled ? (
-                      <Check size={16} />
-                    ) : (
-                      <Bell size={16} />
-                    )}
-                    {notificationsEnabled
-                      ? "Notifications enabled"
-                      : "Enable notifications"}
-                  </button>
-                  {isDemo ? (
-                    <div className="settings-note">
-                      <Link2 size={14} />
-                      Pair your computer first to enable real notifications.
-                    </div>
-                  ) : !workspace.info?.pushEnabled ? (
-                    <div className="settings-note">
-                      <Terminal size={14} />
-                      Your bridge needs free VAPID keys to send Web Push.
-                    </div>
-                  ) : null}
+                  <p className={notifications.error ? "notification-status error" : "notification-status"} role={notifications.error ? "alert" : "status"}>{notifications.message}</p>
+                  <div className="notification-actions" aria-busy={notifications.busy || notifications.checking}>
+                    <button
+                      className="button button-dark"
+                      ref={notificationEnableButton}
+                      disabled={notifications.busy || notifications.checking || notifications.enabled}
+                      onClick={notifications.enable}
+                    >
+                      {notifications.busy || notifications.checking ? <LoaderCircle size={16} className="spin" /> : notifications.enabled ? <Check size={16} /> : <Bell size={16} />}
+                      {notifications.enabled ? "Notifications enabled" : "Enable notifications"}
+                    </button>
+                    {notifications.enabled && notifications.canDisable ? <button className="button button-light" disabled={notifications.busy} onClick={turnOffNotifications}>Turn off notifications</button> : null}
+                    {notifications.canCheck ? <button className="button button-light" disabled={notifications.busy || notifications.checking} onClick={notifications.refresh}>Check notification status</button> : null}
+                  </div>
+                  <p className="settings-note">Enrollment confirms this computer is registered to send alerts. It does not confirm delivery. Turning alerts off keeps this phone paired and leaves browser permission unchanged.</p>
                   <div className="ios-note">
                     <Smartphone size={17} />
                     <p>
@@ -1458,6 +1407,7 @@ export function App() {
       {connectOpen ? (
         <ConnectDialog
           workspace={workspace}
+          notificationForRemember={notifications.forRemember}
           onClose={() => setConnectOpen(false)}
         />
       ) : null}
