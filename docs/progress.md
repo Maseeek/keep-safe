@@ -166,3 +166,15 @@
 - Main-document labels are approximations, not a complete accessibility tree. Iframes, shadow DOM, complex widgets and physical assistive-technology use remain limited or unverified. Physical-phone push remains unverified.
 - T3 collaborative preview initialization twice returned `The calling provider no longer owns an active thread run.` Used the documented built-app Playwright workflow and inspected the narrow-phone controls screenshot.
 - No real credentials were entered, no real keys rotated, no public tunnel created and no additional spending introduced. The hourly continuation remains enabled; its next returned run is 17 October at 01:00:45 UTC, subject to host availability and the 24 October 08:00 UTC stop.
+
+
+### Page controls release verified at 00:27 UTC
+
+- Pushed application commit `3fc4b0547b845d13e05a6f87fee26a633e01916a` to the private repository. Vercel MCP production deployment `dpl_AkGtz7heH4Pq2ezhrMDNHX6qbyPk` is READY for that exact commit, intended project and existing production alias [keep-safe-eight.vercel.app](https://keep-safe-eight.vercel.app).
+- Verified HTTP 200 and the exact production bundle at 320px, 390px and 1440px. Demo approval, simulated login and handback pass without JavaScript errors or horizontal overflow. Page controls are intentionally absent from the demo; the real controls flow is covered by built-app Chromium tests at 320px and 390px. Inspected the phone screenshots.
+- Rechecked that the actual local bridge had no pending or unexpired handoff, gracefully stopped its verified process and started this release. Its private configuration is byte-for-byte unchanged. The new bridge is healthy, advertises page controls, holds its configuration lock and passes the local diagnostic checks. Current operational handle is in ignored `.keep-safe/runtime.json`.
+- Source remains PRIVATE and additional spend remains £0. Main-page control navigation is partial accessibility support; physical assistive technology and physical-phone push remain unverified. No remote phone/tunnel success is inferred from local checks.
+
+- GitHub CI `38986350699` passed on Node 22. Local and CI verification includes typecheck, the production build and all 133 tests.
+- Sent the 17 October daily summary to the owner's connected Gmail account in the existing development thread. Gmail confirmed SENT/INBOX and returned the existing thread ID; ignored contact state records the message and summary date to prevent duplicates. No read receipt is claimed. No decision blocker was raised.
+- Next useful independent work is the product validation plan and a future hosted/team offer within the £0 cap. Keep unsupported browser/assistive-technology cases and physical push verification explicit.

@@ -14,3 +14,8 @@ The owner explicitly requested direct contact during development. Use the connec
 The T3 conversation remains available for replies and decisions. Read only this development email thread when checking for a response. Replies do not change the £0 spending cap, private-source requirement, or stop date unless the owner explicitly changes those instructions.
 
 Do not put email addresses, webhook URLs, credentials, or browser login details in this repository. Current thread IDs needed for operation are in ignored `.keep-safe/contact.json`.
+
+
+## Daily summary on 17 October 2026
+
+Checked the existing development thread before sending; only the two previously confirmed messages existed. Sent one daily release summary to the connected account in that same thread. Gmail returned SENT and INBOX labels. The message and summary date are recorded in ignored local state. No owner reply or read receipt was observed.
