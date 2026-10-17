@@ -7,6 +7,7 @@ import { createBridge } from './server';
 import { connectionOrigin, connectionPort, hostedAppOrigin } from './connection-options';
 import { diagnoseConnection } from './doctor';
 import { connectionSetup } from './setup';
+import { RehearsalError, runRehearsal } from './rehearsal';
 
 class UsageError extends Error {}
 
@@ -14,9 +15,10 @@ function argumentsOf(args: string[], command: string) {
   const values = new Map<string, string>();
   const flags = new Set<string>();
   const rotation = command === 'rotate-keys';
+  const rehearsal = command === 'rehearse';
   const connection = command === 'doctor' || command === 'setup';
-  const allowed = new Set(rotation ? ['--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir'])]);
-  const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : connection ? ['--json', '--help'] : ['--allow-local-urls', '--no-static', '--help']);
+  const allowed = new Set(rotation ? ['--config-dir'] : rehearsal ? ['--port', '--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir'])]);
+  const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : connection ? ['--json', '--help'] : rehearsal ? ['--help'] : ['--allow-local-urls', '--no-static', '--help']);
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (booleans.has(flag)) { flags.add(flag); continue; }
@@ -28,10 +30,14 @@ function argumentsOf(args: string[], command: string) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const command = ['rotate-keys', 'doctor', 'setup'].includes(args[0]) ? args.shift()! : 'start';
+  const command = ['rotate-keys', 'doctor', 'setup', 'rehearse'].includes(args[0]) ? args.shift()! : 'start';
   const { values, flags } = argumentsOf(args, command);
+  if (flags.has('--help') && command === 'rehearse') {
+    console.log('Usage: npm run --silent bridge -- rehearse [--port NUMBER] [--config-dir PATH]\n\nStart and pair your bridge first, then run this on the agent computer in another terminal.\nApprove Practice browser handoff on your phone, type only PRACTICE, choose Practice sign-in, then Done, hand back.\nThe request expires after five minutes. The check verifies synthetic sign-in after reload. It does not test a real account or physical push.\nOnly existing local agent authority is used. No keys, browser endpoints or typed values are printed.\nCtrl+C closes the practice browser; an unfinished request can remain until its original expiry.\nPort/configuration environment defaults match bridge startup. No tunnel or bridge is started by this command.');
+    return;
+  }
   if (flags.has('--help')) {
-    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
+    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nSynthetic phone rehearsal (start and pair the bridge first):\n  npm run --silent bridge -- rehearse [--port NUMBER] [--config-dir PATH]\n  Use only the fixed practice phrase, never real credentials.\n  Verify the returned practice browser after explicit handback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
     return;
   }
   const configDirectory = resolve(values.get('--config-dir') ?? process.env.KEEP_SAFE_CONFIG_DIR ?? '.keep-safe');
@@ -49,6 +55,28 @@ async function main() {
     return;
   }
   const port = connectionPort(values.get('--port') ?? process.env.KEEP_SAFE_PORT ?? '4318');
+  if (command === 'rehearse') {
+    const controller = new AbortController();
+    let interrupted = 0;
+    const stop = (code: number) => {
+      if (interrupted) return;
+      interrupted = code;
+      console.log('Stopping practice. Waiting for browser cleanup.');
+      controller.abort();
+    };
+    const interrupt = () => stop(130);
+    const terminate = () => stop(143);
+    const hangup = () => stop(129);
+    process.on('SIGINT', interrupt); process.on('SIGTERM', terminate); process.on('SIGHUP', hangup);
+    try {
+      const result = await runRehearsal({ configDirectory, port, signal: controller.signal, log: message => console.log(message) });
+      console.log(result === 'passed'
+        ? 'Practice handoff verified. The returned browser stayed signed in after reload.'
+        : result === 'cancelled' ? 'Practice stopped.' : `Practice ${result === 'timed-out' ? 'timed out' : result}. The login/resume check did not complete.`);
+      process.exitCode = interrupted || (result === 'passed' ? 0 : 1);
+    } finally { process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup); }
+    return;
+  }
   const selectedPublicUrl = values.get('--public-url') ?? process.env.KEEP_SAFE_PUBLIC_URL;
   const publicUrl = connectionOrigin(selectedPublicUrl ?? `http://127.0.0.1:${port}`);
   const appUrl = connectionOrigin(values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? (command === 'setup' ? hostedAppOrigin : publicUrl));
@@ -96,4 +124,4 @@ async function main() {
   process.once('SIGTERM', shutdown);
 }
 
-main().catch(error => { console.error(error instanceof UsageError || error instanceof ConfigError ? error.message : 'Keep Safe could not start. Check the options, port availability, and local configuration. Use --help for setup.'); process.exitCode = 1; });
+main().catch(error => { console.error(error instanceof UsageError || error instanceof ConfigError || error instanceof RehearsalError ? error.message : 'Keep Safe could not start. Check the options, port availability, and local configuration. Use --help for setup.'); process.exitCode = 1; });

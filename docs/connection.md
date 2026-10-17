@@ -68,4 +68,33 @@ Exit status is `1` when any check fails and `0` when none fail. Warnings can rem
 
 Public probes run from this computer. They do **not** prove the remote endpoint belongs to you, that another network can reach it, that browser security restrictions permit the connection, or that physical push works. Tunnel protection that needs an interactive browser login can also block cross-origin API and WebSocket requests. Do not bypass an access policy just to make a diagnostic pass.
 
-After diagnostics, open the private pairing link on your phone and verify approval, live taps/typing/scrolling on a non-sensitive test site, explicit handback, and agent resume. Physical-device push delivery remains a separate unverified check.
+After diagnostics, open the private pairing link on your phone and rehearse approval, live input, explicit handback and agent resume before using a real account. Physical-device push delivery remains a separate unverified check.
+
+## Rehearse a login handoff
+
+Start the bridge and pair the phone first. Keep both the bridge and your trusted connection running, then use another terminal in the repository on the agent computer:
+
+```bash
+npm run --silent bridge -- rehearse
+```
+
+For a custom installation, use its actual local port and configuration directory:
+
+```bash
+npm run --silent bridge -- rehearse --port 5318 --config-dir ./private-keys
+```
+
+`KEEP_SAFE_PORT` and `KEEP_SAFE_CONFIG_DIR` supply defaults, with explicit options taking precedence. Only port/configuration selection applies here; the phone continues using its existing paired connection. The command reads existing local configuration, uses the separate agent key on loopback, and creates no keys, lock, bridge or tunnel.
+
+1. On the paired phone, open **Practice browser handoff** from **Keep Safe rehearsal** and approve it.
+2. In the live browser, focus **Practice phrase**. You can use **Page controls**, then **Type text → Send** to enter the public fixed phrase `PRACTICE`. Never use a real username, password or verification code.
+3. Choose **Practice sign-in** in the live browser, or press its remote Enter key. Wait for **Practice sign-in complete**, then choose **Done, hand back**.
+4. The command verifies the returned browser remains signed in after reload. It reports success only after that check and closes the practice browser.
+
+The `practice.keep-safe.invalid` address exists only inside this isolated browser. Do not open it directly on the phone. Its pages are fulfilled locally, and its synthetic cookie stays in the temporary browser. The fixture has no named form field and the helper does not read its submitted body. It does not send browser input to an external site or to Vercel. Its network routes, deny proxy and restrictive content policy are separate from the managed browser's existing DNS/IP restrictions; no `--allow-local-urls` or bridge restart is needed.
+
+The request lasts five minutes. Decline, expiry, failure and Ctrl+C close the practice browser. Ctrl+C waits for cleanup; any unfinished request can still appear on the phone until you decline it or its original deadline expires. The agent command has no owner permission to decline it automatically. Finished request metadata follows normal history retention.
+
+Exit `0` means the synthetic login/resume check passed. Exit `1` means it did not complete or cleanup failed. Interrupt/termination/terminal hangup normally return `130`/`143`/`129` after cleanup. Use `npm run --silent bridge -- rehearse --help` for usage.
+
+A passing rehearsal proves the specific device/connection path you actually used and this synthetic handoff. Desktop mobile emulation does not prove physical-phone use. This check does not certify third-party login providers, password clearing, passkeys, physical push or a different network. Test push separately on a physical device. Each pilot participant must use their own isolated bridge and pairing, as described in the [validation plan](validation.md).

@@ -2,6 +2,13 @@
 
 ## 17 October 2026
 
+### Synthetic phone rehearsal
+
+- Add `bridge rehearse` for an agent-only, five-minute practice handoff with a fixed public phrase and same-browser sign-in verification after reload.
+- Isolate practice pages in a temporary browser with a deny proxy, bounded local routes and loopback debugging. Keep managed private-network restrictions unchanged.
+- Close the practice browser on success, denial, expiry, failure and interruption; document any unfinished request's original expiry.
+- Add real CLI and phone-sized success/failure, input-output privacy and network-isolation coverage. Physical-device and real-provider verification remain separate.
+
 ### Agent setup and validation plan
 
 - Generate MCP configurations for the bridge's selected port and key directory, with explicit loopback URLs and matching environment/option precedence.

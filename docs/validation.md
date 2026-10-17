@@ -29,7 +29,7 @@ This is a recruitment plan, not authorization to message people, publish source 
 
 Observe only synthetic credentials and pages. For an optional real-world trial, participants enter credentials privately with observation and recording stopped. Never ask for a password, OTP, cookie, pairing link or browser debug endpoint. Do not record screens, trace traffic or upload login-bearing logs. Participants can stop at any time.
 
-The existing local login fixture and browser tests are developer verification aids, not a packaged phone-pilot command. Prepare and verify a participant-safe fixture before step 4. Do not silently enable private-network access or expose internal services to make it work.
+Use the packaged [synthetic rehearsal](connection.md#rehearse-a-login-handoff) for step 4. It opens an isolated virtual practice page, uses the existing external-browser handoff protocol and verifies the returned synthetic authenticated session after reload. It needs no private-network exception or external fixture server. The original developer login fixture remains a separate automated test aid. A rehearsed desktop or mobile-emulated session is not a physical-phone or independent participant result.
 
 ## Measures and proposed gates
 
@@ -70,7 +70,7 @@ Ask permission before taking notes. Delete raw notes within 14 days of a session
 
 | Evidence | Observed result |
 | --- | --- |
-| Current local automated suite | 151 tests pass, including synthetic real-browser login, authenticated resume and generated custom-port MCP configuration. Release/CI evidence is recorded in progress. |
+| Current local automated suite | 172 tests pass, including synthetic real-browser login, authenticated resume, generated custom-port MCP configuration and the isolated rehearsal command. Release/CI evidence is recorded in progress. |
 | Physical phone, push and assistive technology | Not verified. |
 | Independent sessions and later-day returns | Not run. |
 | Paid demand, relay cost and contribution | Not measured. |

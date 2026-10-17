@@ -24,6 +24,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 - Web Push subscription support and an installable mobile web app.
 - An explicitly labeled interactive demo that never asks for real credentials.
 - Read-only connection diagnostics and a command generator for phone/tunnel setup.
+- A synthetic handoff rehearsal that checks browser resume without a real account.
 
 Passwords and browser inputs are not recorded. Managed browser cookies stay in memory on the developer's computer. Existing agent sessions remain owned by that browser. The hosted Vercel frontend does not receive website cookies.
 
@@ -83,6 +84,18 @@ Chrome 136+ requires a non-default user data directory when launching with remot
 Pair the app, then choose **Enable notifications** in Settings. The bridge generates Web Push keys automatically. On iPhone, add the app to the Home Screen and open it there before enabling notifications, as required by [WebKit's Web Push support](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).
 
 The subscription API and notification routing are implemented. Lock-screen delivery on a physical iPhone or Android device has not yet been verified.
+
+### Practice before using a real account
+
+After starting and pairing the bridge, run this in another terminal on the agent computer:
+
+```bash
+npm run --silent bridge -- rehearse
+```
+
+Approve **Practice browser handoff** on your phone. In the live browser, type only `PRACTICE` into **Practice phrase**, choose **Practice sign-in**, wait for its success page, then choose **Done, hand back**. The command checks that the returned browser remains signed in after reload and closes the practice browser.
+
+The practice page is synthetic and isolated. It does not contact an external website or need `--allow-local-urls`. Use the same `--port` and `--config-dir` as your running bridge when customized. The check uses existing agent authority and does not start another bridge or change keys. See the [rehearsal guide](docs/connection.md#rehearse-a-login-handoff) for cancellation, expiry and verification limits.
 
 ### Replace owner or agent keys
 
