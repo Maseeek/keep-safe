@@ -91,8 +91,12 @@ describe('revocable phone pairing', () => {
     await expect.poll(() => socket.closeCode).toBe(4001);
     expect((await bridge.request('/api/info', paired.token)).status).toBe(401);
     expect((await (await bridge.request('/api/devices')).json()).devices).toHaveLength(0);
-    expect(JSON.parse(await readFile(paths.devicesFile, 'utf8')).devices).toHaveLength(0);
-    expect(JSON.parse(await readFile(paths.subscriptionsFile, 'utf8'))).toEqual([]);
+    // Socket revocation is immediate; the interval's atomic file writes may
+    // still be finishing when a concurrent metadata request returns.
+    await expect.poll(async () => ({
+      devices: JSON.parse(await readFile(paths.devicesFile, 'utf8')).devices,
+      subscriptions: JSON.parse(await readFile(paths.subscriptionsFile, 'utf8')),
+    })).toEqual({ devices: [], subscriptions: [] });
   });
 
   it('revokes a live phone immediately, stops its control and releases control to another owner', async () => {

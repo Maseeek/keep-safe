@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ElementHandle, JSHandle, Page } from 'playwright';
+import type { CDPSession, ElementHandle, JSHandle, Page } from 'playwright';
 import type { PageControl, PageControlsSnapshot } from '../../shared/src/protocol';
 
 type Descriptor = Omit<PageControl, 'id'>;
@@ -11,7 +11,32 @@ interface Snapshot {
   url: string;
   origin: string;
   runner: JSHandle<DomRunner>;
+  navigation: NavigationGuard;
   targets: Map<string, { element: ElementHandle<Element>; descriptor: Descriptor }>;
+}
+
+interface NavigationGuard { session: CDPSession; release(): Promise<void> }
+
+async function watchNavigation(page: Page, invalidate: () => void): Promise<NavigationGuard> {
+  const session = await page.context().newCDPSession(page);
+  let mainFrameId: string | undefined;
+  const navigation = (event: { frameId: string }) => { if (!mainFrameId || event.frameId === mainFrameId) invalidate(); };
+  const popup = () => invalidate();
+  session.on('Page.frameRequestedNavigation', navigation);
+  session.on('Page.frameScheduledNavigation', navigation);
+  session.on('Page.windowOpen', popup);
+  const release = async () => {
+    session.off('Page.frameRequestedNavigation', navigation);
+    session.off('Page.frameScheduledNavigation', navigation);
+    session.off('Page.windowOpen', popup);
+    await session.detach().catch(() => {});
+  };
+  try {
+    await session.send('Page.enable');
+    // Read only the root frame identifier, never page content or frame URLs.
+    mainFrameId = (await session.send('Page.getFrameTree')).frameTree.frame.id;
+    return { session, release };
+  } catch (error) { await release(); throw error; }
 }
 
 /** Deliberate plain-JavaScript source: tsx/esbuild rewrites nested function names
@@ -126,7 +151,9 @@ export function createPageControls(activePage: () => Page) {
   function clear(): Promise<void> {
     generation++;
     const previous = current; current = undefined;
-    return Promise.allSettled([...(previous?.targets.values() ?? [])].map(target => target.element.dispose()).concat(previous ? [previous.runner.dispose()] : [])).then(() => {});
+    const releases = [...(previous?.targets.values() ?? [])].map(target => target.element.dispose());
+    if (previous) releases.push(previous.runner.dispose(), previous.navigation.release());
+    return Promise.allSettled(releases).then(() => {});
   }
   function samePage(snapshot: Snapshot) {
     return current === snapshot && activePage() === snapshot.page && !snapshot.page.isClosed() && snapshot.page.url() === snapshot.url;
@@ -134,16 +161,17 @@ export function createPageControls(activePage: () => Page) {
   return {
     clear,
     async inspect(): Promise<PageControlsSnapshot> {
+      const deadline = Date.now() + 2000;
       const disposing = clear();
       const version = generation;
       await disposing;
-      if (generation !== version) throw new Error('The page changed. Refresh the controls.');
+      if (generation !== version || Date.now() > deadline) throw new Error('The page changed. Refresh the controls.');
       const page = activePage(); const url = page.url(); const origin = new URL(url).origin;
       if (page.isClosed() || !['http:', 'https:'].includes(new URL(url).protocol)) throw new Error('Open a website page before inspecting controls.');
-      let result: JSHandle | undefined; let runner: JSHandle<DomRunner> | undefined; const temporary: JSHandle[] = []; const retained = new Map<string, { element: ElementHandle<Element>; descriptor: Descriptor }>(); let installed = false;
-      const deadline = Date.now() + 2000;
+      let result: JSHandle | undefined; let runner: JSHandle<DomRunner> | undefined; let navigation: NavigationGuard | undefined; const temporary: JSHandle[] = []; const retained = new Map<string, { element: ElementHandle<Element>; descriptor: Descriptor }>(); let installed = false;
       const work = (async () => {
         try {
+          navigation = await watchNavigation(page, () => { if (generation === version) void clear(); });
           runner = await page.evaluateHandle(inspectDOMSource) as JSHandle<DomRunner>;
           temporary.push(runner);
           result = await runner.evaluateHandle((run, args) => run(args), { operation: 'inspect' as const, deadline });
@@ -160,13 +188,16 @@ export function createPageControls(activePage: () => Page) {
             const id = randomUUID(); retained.set(id, { element, descriptor: descriptors[index] }); controls.push({ id, ...descriptors[index] });
           }
           if (generation !== version || activePage() !== page || page.url() !== url || page.isClosed()) throw new Error('The page changed. Refresh the controls.');
-          const snapshot: Snapshot = { id: randomUUID(), page, url, origin, runner, targets: retained };
+          const snapshot: Snapshot = { id: randomUUID(), page, url, origin, runner, navigation, targets: retained };
           current = snapshot; installed = true;
           return { snapshotId: snapshot.id, origin, controls, truncated };
         } finally {
           const kept = new Set<JSHandle>();
           if (installed) { for (const target of retained.values()) kept.add(target.element); if (runner) kept.add(runner); }
-          await Promise.allSettled([...temporary, ...(result ? [result] : [])].filter(handle => !kept.has(handle)).map(handle => handle.dispose()));
+          await Promise.allSettled([
+            ...[...temporary, ...(result ? [result] : [])].filter(handle => !kept.has(handle)).map(handle => handle.dispose()),
+            ...(!installed && navigation ? [navigation.release()] : []),
+          ]);
         }
       })();
       try { return await bounded(work, () => { if (generation === version) void clear(); }); }
@@ -179,11 +210,16 @@ export function createPageControls(activePage: () => Page) {
       const deadline = Date.now() + 2000;
       try {
         const work = (async () => {
+          // Use the guard's own CDP channel before and after focus so its
+          // synchronous renderer navigation events precede acknowledgement.
+          await snapshot.navigation.session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+          if (!samePage(snapshot)) return false;
           const focused = await snapshot.runner.evaluate((run, args) => run(args), { operation: 'focus' as const, element: target.element, expected: target.descriptor, deadline });
           if (focused !== true || !samePage(snapshot)) return false;
-          // A separate renderer round trip lets immediate focus-triggered
-          // navigation invalidate the snapshot before acknowledgement.
-          return snapshot.runner.evaluate((run, args) => run(args), { operation: 'verify' as const, element: target.element, expected: target.descriptor, deadline });
+          const verified = await snapshot.runner.evaluate((run, args) => run(args), { operation: 'verify' as const, element: target.element, expected: target.descriptor, deadline });
+          if (verified !== true || !samePage(snapshot)) return false;
+          await snapshot.navigation.session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+          return samePage(snapshot);
         })();
         const focused = await bounded(work, () => { if (current === snapshot) void clear(); });
         // Cross-process navigation/popup events and the current URL must still

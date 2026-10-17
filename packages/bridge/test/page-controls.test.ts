@@ -2,6 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 import { browserAvailable, openBrowser } from '../src/browser';
+import { createPageControls } from '../src/page-controls';
 import type { PageControlsSnapshot } from '../../shared/src/protocol';
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -116,10 +117,27 @@ it.skipIf(!installed)('does not acknowledge focus after focus handlers rename th
   let snapshot = await test.session.inspectControls!();
   await test.page.locator('#email').evaluate(element => element.addEventListener('focus', () => element.setAttribute('aria-label', 'Changed by focus handler')));
   await expect(focus(test, snapshot, 'Email address')).rejects.toThrow('no longer available');
-  await test.page.goto(test.origin + '/login'); snapshot = await test.session.inspectControls!();
-  await test.page.locator('#email').evaluate(element => element.addEventListener('focus', () => { location.href = '/changed'; }));
-  await expect(focus(test, snapshot, 'Email address')).rejects.toThrow();
-  await test.page.waitForURL(test.origin + '/changed');
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await test.page.goto(test.origin + '/login'); snapshot = await test.session.inspectControls!();
+    await test.page.locator('#email').evaluate(element => element.addEventListener('focus', () => { location.href = '/changed'; }));
+    await expect(focus(test, snapshot, 'Email address')).rejects.toThrow();
+    await test.page.waitForURL(test.origin + '/changed');
+  }
+});
+
+it.skipIf(!installed)('rejects focus-triggered navigation even when its request is synchronously cancelled', async () => {
+  const test = await fixture(simple, { '/changed': '<h1>Changed page</h1>' });
+  const controls = createPageControls(() => test.page);
+  cleanup.push(() => controls.clear());
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await test.page.goto(test.origin + '/login');
+    const snapshot = await controls.inspect();
+    await test.page.locator('#email').evaluate(element => element.addEventListener('focus', () => { location.href = '/changed'; window.stop(); }));
+    // Cancelling in the same task preserves the URL and focused element. The
+    // browser's earlier navigation intent must still invalidate this snapshot.
+    await expect(controls.focus(snapshot.snapshotId, control(snapshot, 'Email address').id)).rejects.toThrow();
+    expect(test.page.url()).toBe(test.origin + '/login');
+  }
 });
 
 it.skipIf(!installed)('invalidates targets across navigation, popups, popup recovery and explicit handback', async () => {

@@ -70,7 +70,7 @@ Ask permission before taking notes. Delete raw notes within 14 days of a session
 
 | Evidence | Observed result |
 | --- | --- |
-| Current local automated suite | 172 tests pass, including synthetic real-browser login, authenticated resume, generated custom-port MCP configuration and the isolated rehearsal command. Release/CI evidence is recorded in progress. |
+| Current local automated suite | 173 tests pass, including synthetic real-browser login, authenticated resume, generated custom-port MCP configuration, the isolated rehearsal command and navigation-intent focus rejection. Release/CI evidence is recorded in progress. |
 | Physical phone, push and assistive technology | Not verified. |
 | Independent sessions and later-day returns | Not run. |
 | Paid demand, relay cost and contribution | Not measured. |

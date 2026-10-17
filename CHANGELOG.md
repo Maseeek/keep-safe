@@ -2,6 +2,12 @@
 
 ## 17 October 2026
 
+### Focus acknowledgement during navigation
+
+- Invalidate page-control snapshots on early navigation intent, including synchronously cancelled navigation, before acknowledging remote focus.
+- Include previous snapshot disposal in the inspection deadline and preserve pending browser work through handback.
+- Add repeated real-browser navigation coverage and wait for background expiry persistence in its test without changing immediate revocation.
+
 ### Synthetic phone rehearsal
 
 - Add `bridge rehearse` for an agent-only, five-minute practice handoff with a fixed public phrase and same-browser sign-in verification after reload.
