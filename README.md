@@ -72,6 +72,8 @@ If the connection fails, run `npm run --silent bridge -- doctor` on the computer
 
 Generate the correct local configuration with `npm run --silent agent:config -- codex`, `claude`, or `antigravity`, then follow the [integration guide](docs/integrations.md). It exposes `request_login`, `get_login_request`, and `wait_for_login`. Agents using an existing Chromium browser pass its loopback `cdp_url`; otherwise Keep Safe opens a managed browser and returns its endpoint only after the owner completes the handoff.
 
+For a custom bridge port or key directory, pass the same settings to the generator, for example `npm run --silent agent:config -- codex --port 5318 --config-dir ./private-keys`. It also honors `KEEP_SAFE_PORT` and `KEEP_SAFE_CONFIG_DIR`; explicit options win. Selected relative directories resolve from the command's working directory. The generated agent URL stays on loopback, separate from the phone's HTTPS tunnel.
+
 Target clients include T3 Code, Claude, Codex, Antigravity, and other MCP-capable agents. This is a common protocol integration, not automatic access to every IDE's internal browser. Each native browser interface needs separate compatibility testing.
 
 Chrome 136+ requires a non-default user data directory when launching with remote debugging switches. Use a dedicated agent browser profile or Playwright's bundled Chromium, not your personal daily profile. See the [Chrome debugging change](https://developer.chrome.com/blog/remote-debugging-port).
@@ -146,6 +148,8 @@ During a live session, open **Page controls** to list supported labeled fields a
 - [Architecture, data handling, and security boundaries](docs/architecture.md)
 - [Agent integrations and HTTP protocol](docs/integrations.md)
 - [Phone connection and diagnostics](docs/connection.md)
+- [Product direction and future offer hypotheses](docs/product.md)
+- [Usability, repeat-use and demand validation plan](docs/validation.md)
 - [Delivery and recurring-work configuration](docs/delivery.md)
 - [Owner contact status](docs/contact.md)
 - [Progress](docs/progress.md), [backlog](docs/backlog.md), and [change history](CHANGELOG.md)

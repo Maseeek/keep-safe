@@ -17,7 +17,8 @@ Start the bridge first. Configure an MCP-capable client to launch the server wit
         "/absolute/path/to/keep-safe/packages/mcp/src/index.ts"
       ],
       "env": {
-        "KEEP_SAFE_CONFIG_DIR": "/absolute/path/to/keep-safe/.keep-safe"
+        "KEEP_SAFE_CONFIG_DIR": "/absolute/path/to/keep-safe/.keep-safe",
+        "KEEP_SAFE_BRIDGE_URL": "http://127.0.0.1:4318"
       }
     }
   }
@@ -26,7 +27,7 @@ Start the bridge first. Configure an MCP-capable client to launch the server wit
 
 This is the common JSON configuration shape, not a promise that every client uses that exact configuration file. Codex may use TOML; T3 Code and other clients may provide a settings interface. Use the client's current MCP configuration mechanism with the same command, arguments, and environment.
 
-The server loads the separate agent token from the private local configuration. It never receives the owner pairing token. For a remote bridge, set `KEEP_SAFE_BRIDGE_URL` to its HTTPS origin and provide `KEEP_SAFE_AGENT_TOKEN` through the client's private environment configuration. Do not paste a real token into tracked examples or a prompt.
+The server loads the separate agent token from the private local configuration. It never receives the owner pairing token. The generated examples connect to a local bridge. For a remote bridge, replace the generated `KEEP_SAFE_BRIDGE_URL` with its HTTPS origin and provide `KEEP_SAFE_AGENT_TOKEN` through the client's private environment configuration. Do not paste a real token into tracked examples or a prompt.
 
 ## Generate the configuration for your checkout
 
@@ -39,6 +40,18 @@ npm run --silent agent:config -- antigravity
 ```
 
 Start the bridge first. The MCP process reads its separate agent token from the local configuration directory, so the snippet contains no credential.
+
+If the bridge uses a different port or key directory, give the generator the same settings:
+
+```bash
+npm run --silent agent:config -- codex \
+  --port 4319 \
+  --config-dir ./private-keys
+```
+
+The output includes an explicit loopback `KEEP_SAFE_BRIDGE_URL` and an absolute `KEEP_SAFE_CONFIG_DIR`. `KEEP_SAFE_PORT` and `KEEP_SAFE_CONFIG_DIR` supply defaults when set; explicit flags take precedence. A selected relative directory resolves from the terminal's current working directory, just as it does for the bridge CLI. Without a directory flag or environment setting, the generator uses this checkout's `.keep-safe` directory even when invoked from elsewhere. The default port is 4318.
+
+Choose your actual running bridge's settings rather than starting another bridge. After changing the MCP configuration, restart the client's MCP server process so it loads the generated URL and key-directory settings. `npm run --silent agent:config -- --help` shows the options. Generation does not read keys, create directories, or change client configuration.
 
 After replacing an agent key with the offline `rotate-keys --agent` or `--all` command, restart the bridge and connected MCP server processes. Existing MCP processes cache the old agent token. See [key replacement and lock recovery](../README.md#replace-owner-or-agent-keys).
 

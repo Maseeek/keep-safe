@@ -2,6 +2,12 @@
 
 ## 17 October 2026
 
+### Agent setup and validation plan
+
+- Generate MCP configurations for the bridge's selected port and key directory, with explicit loopback URLs and matching environment/option precedence.
+- Verify the emitted configuration through a real stdio MCP process from another working directory, without manual environment corrections.
+- Add a consent-based product validation plan, measured go/no-go criteria and future hosted/team offer hypotheses. No billing, analytics, outreach or paid service is enabled.
+
 ### Remote page control navigation
 
 - Add bounded on-demand main-page field/button labels, roles and protected-field markers without reading field values or link addresses.

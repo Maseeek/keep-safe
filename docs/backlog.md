@@ -26,6 +26,8 @@
 - [x] Larger phone text and touch targets, full-origin inspection, named remote keys, and modal keyboard/focus recovery.
 - [ ] Complete remote webpage navigation and physical assistive-technology testing. A bounded value-free page-controls navigator is implemented; iframe/shadow/custom-widget support remains limited.
 - [x] Privacy-preserving memory-only history retention and owner cleanup, with pending browser work and unexpired handoffs protected. Persistent cookie/session retention remains outside this release.
-- [ ] Product validation plan and future hosted/team pricing proposal, without enabling billing or spending.
+- [x] Product validation plan and future hosted/team offer hypotheses, without enabling billing or spending. See [validation.md](validation.md) and [product.md](product.md); demand and prices remain unvalidated.
+- [ ] Owner-approved private pilot with physical phones, real repeat-use evidence and measured relay/support economics before any hosted paid service.
+- [ ] Participant-safe synthetic login/resume rehearsal before a real-phone pilot, without weakening the managed browser's private-network boundary.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.
