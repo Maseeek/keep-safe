@@ -70,7 +70,7 @@ Ask permission before taking notes. Delete raw notes within 14 days of a session
 
 | Evidence | Observed result |
 | --- | --- |
-| Current local automated suite | 216 tests pass, including synthetic real-browser login, authenticated resume, custom-port MCP configuration, isolated rehearsal, focus/navigation protection and per-pairing notification lifecycle. Push-provider delivery is mocked; release/CI evidence is recorded in progress. |
+| Current local automated suite | 250 tests pass, including synthetic real-browser login, authenticated resume, custom-port MCP configuration, isolated rehearsal, open-component control names/focus, password clearing and popup handback protection, and per-pairing notification lifecycle. Push-provider delivery is mocked; release/CI evidence is recorded in progress. |
 | Physical phone, push and assistive technology | Not verified. |
 | Independent sessions and later-day returns | Not run. |
 | Paid demand, relay cost and contribution | Not measured. |

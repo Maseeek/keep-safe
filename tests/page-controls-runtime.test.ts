@@ -2,37 +2,45 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 
-it('inspects and focuses real Chromium controls through the production tsx loader', async () => {
+it('inspects, focuses and clears nested open-root controls through the production tsx loader', async () => {
   const source = `
 import assert from 'node:assert/strict';
 import { openBrowser } from './packages/bridge/src/browser.ts';
-import { startLoginFixture } from './tests/fixtures/login-site.ts';
-const site = await startLoginFixture();
+import { chromium } from 'playwright';
+import { startShadowLoginFixture } from './tests/fixtures/shadow-login-site.ts';
+const site = await startShadowLoginFixture();
 let session;
 try {
   session = await openBrowser({ url: site.origin + '/login', allowLocalUrls: true });
   let controls = await session.inspectControls();
-  const email = controls.controls.find(control => control.name === 'Email');
+  const email = controls.controls.find(control => control.name === 'Component email');
   assert(email);
   await session.input({ type: 'focus', snapshotId: controls.snapshotId, controlId: email.id });
   await session.input({ type: 'text', text: 'runtime@example.invalid' });
   controls = await session.inspectControls();
-  const password = controls.controls.find(control => control.name === 'Synthetic password');
+  const password = controls.controls.find(control => control.name === 'Synthetic component password');
   assert(password && password.protected);
   await session.input({ type: 'focus', snapshotId: controls.snapshotId, controlId: password.id });
   await session.input({ type: 'text', text: 'synthetic-runtime-password' });
   controls = await session.inspectControls();
   assert(!JSON.stringify(controls).includes('runtime@example.invalid'));
   assert(!JSON.stringify(controls).includes('synthetic-runtime-password'));
-  const submit = controls.controls.find(control => control.name === 'Sign in');
+  const submit = controls.controls.find(control => control.name === 'Sign in component');
   assert(submit);
   await session.input({ type: 'focus', snapshotId: controls.snapshotId, controlId: submit.id });
   assert.equal(site.loginCount, 0);
   await session.input({ type: 'key', key: 'Enter' });
   const deadline = Date.now() + 3000;
-  while (!site.loginCount && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  while (!site.readyCount && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(site.loginCount, 1);
+  assert.equal(site.readyCount, 1);
   await session.prepareHandoff();
+  const assertion = await chromium.connectOverCDP(session.cdpUrl);
+  try {
+    const page = assertion.contexts().flatMap(context => context.pages()).find(page => page.url() === site.origin + '/login');
+    assert(page);
+    assert(await page.locator('input[type=password]').evaluate(input => input.value === ''));
+  } finally { await assertion.close(); }
   console.log('runtime-controls-ok');
 } finally { await session?.close(); await site.close(); }
 `;

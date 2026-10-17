@@ -34,12 +34,12 @@ export function ControlNavigator({ workspace, requestId, enabled, onFocusRequest
               <span id={`page-control-state-${control.id}`} className="page-control-role">{control.protected ? "Password field" : control.role}{control.checked === undefined ? "" : control.checked ? " · checked" : " · unchecked"}{control.disabled ? " · unavailable" : ""}</span>
             </button>
           </li>)}</ul> : <p>No supported visible controls found. Use the live browser keys or refresh after the page changes.</p>}
-          {snapshot.truncated ? <p>Showing the first 50 controls from a limited scan.</p> : null}
+          {snapshot.truncated ? <p>Showing {snapshot.controls.length} {snapshot.controls.length === 1 ? "control" : "controls"} from a limited scan.</p> : null}
         </> : null}
         <p className="page-control-focus" role="status" aria-live="polite">
           {workspace.focusBusy ? "Waiting for the browser to confirm focus…" : focused ? <><Check size={15} /> Focus confirmed on {controlName(focused, focusedIndex)}.</> : workspace.focusBlocked ? "Confirm a field before sending text." : ""}
         </p>
-        <p className="page-control-limit">Main page controls only. Frames and complex custom widgets may need the live browser. Physical screen-reader testing is still pending.</p>
+        <p className="page-control-limit">Main page and supported web components. Some embedded or custom forms still need browser taps or keys. Physical screen-reader testing is still pending.</p>
       </div> : null}
     </section>
   );

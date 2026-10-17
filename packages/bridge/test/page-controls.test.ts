@@ -158,7 +158,7 @@ it.skipIf(!installed)('invalidates targets across navigation, popups, popup reco
   await test.session.close(); await expect(test.session.inspectControls!()).rejects.toThrow('closed');
 });
 
-it.skipIf(!installed)('caps controls, candidates and names and omits iframe and shadow contents', async () => {
+it.skipIf(!installed)('caps controls, candidates and names before later iframe and shadow contents', async () => {
   const many = Array.from({ length: 210 }, (_value, index) => `<input aria-label="Field ${index}">`).join('');
   const test = await fixture(`<button aria-label="${'Long name '.repeat(50)}">Action</button>${many}<iframe srcdoc="<input aria-label='Iframe control'>"></iframe><div id="shadow"></div><script>document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<input aria-label="Shadow control">'</script>`);
   const snapshot = await test.session.inspectControls!();
@@ -168,4 +168,208 @@ it.skipIf(!installed)('caps controls, candidates and names and omits iframe and 
   await test.page.locator('input').evaluateAll(elements => { for (let index = 0; index < 205; index++) (elements[index] as HTMLElement).style.display = 'none'; });
   const candidateBound = await test.session.inspectControls!();
   expect(candidateBound.controls).toHaveLength(1); expect(candidateBound.truncated).toBe(true);
+});
+
+it.skipIf(!installed)('keeps duplicate label IDs scoped to each open root and verifies nested actual focus under strict CSP', async () => {
+  const test = await fixture('<span id="shared">Document field</span><span id="document-only">Wrong cross-root label</span><input aria-labelledby="shared"><div id="root-a"></div><div id="root-b"></div>', {}, { 'Content-Security-Policy': "default-src 'self'; script-src 'none'" });
+  await test.page.evaluate(() => {
+    const first = document.querySelector('#root-a')!.attachShadow({ mode: 'open' });
+    first.innerHTML = '<span id="shared">Shadow A field</span><input aria-labelledby="shared"><label for="native">Native A label</label><input id="native"><input aria-labelledby="document-only" aria-label="Scoped fallback"><div id="nested"></div>';
+    first.querySelector('#nested')!.attachShadow({ mode: 'open' }).innerHTML = '<label for="password">Nested password</label><input id="password" type="password" value="seeded-nested-password"><button id="continue">Nested continue</button>';
+    document.querySelector('#root-b')!.attachShadow({ mode: 'open' }).innerHTML = '<span id="shared">Shadow B field</span><input aria-labelledby="shared"><label for="native">Native B label</label><input id="native">';
+  });
+  const snapshot = await test.session.inspectControls!();
+  for (const name of ['Document field', 'Shadow A field', 'Shadow B field', 'Native A label', 'Native B label', 'Scoped fallback', 'Nested password', 'Nested continue']) expect(control(snapshot, name)).toBeDefined();
+  expect(snapshot.truncated).toBe(false);
+  expect(JSON.stringify(snapshot)).not.toContain('Wrong cross-root label');
+  expect(JSON.stringify(snapshot)).not.toContain('seeded-');
+  expect(control(snapshot, 'Nested password').protected).toBe(true);
+  await focus(test, snapshot, 'Nested password');
+  expect(await test.page.evaluate(() => {
+    const outer = document.querySelector('#root-a')!;
+    const nested = outer.shadowRoot!.querySelector('#nested')!;
+    return document.activeElement === outer && outer.shadowRoot!.activeElement === nested && nested.shadowRoot!.activeElement?.id === 'password';
+  })).toBe(true);
+  expect(await test.page.locator('#password').inputValue()).toBe('seeded-nested-password');
+  await focus(test, snapshot, 'Native B label');
+  expect(await test.page.locator('#root-b').evaluate(host => host.shadowRoot!.activeElement?.id)).toBe('native');
+});
+
+it.skipIf(!installed)('excludes hidden or inert shadow host chains and marks disabled hosts without focusing their fields', async () => {
+  const test = await fixture('<div id="outer"></div>');
+  await test.page.locator('#outer').evaluate(host => { host.attachShadow({ mode: 'open' }).innerHTML = '<div id="inner"></div>'; host.shadowRoot!.querySelector('#inner')!.attachShadow({ mode: 'open' }).innerHTML = '<input aria-label="Nested field">'; });
+  for (const change of ['hidden', 'inert', 'aria-hidden', 'display', 'visibility', 'opacity', 'disabled', 'aria-disabled']) {
+    await test.page.locator('#outer').evaluate(host => { host.removeAttribute('hidden'); host.removeAttribute('inert'); host.removeAttribute('aria-hidden'); host.removeAttribute('disabled'); host.removeAttribute('aria-disabled'); host.removeAttribute('style'); });
+    const before = await test.session.inspectControls!();
+    await test.page.locator('#outer').evaluate((host, change) => {
+      if (change === 'display') (host as HTMLElement).style.display = 'none';
+      else if (change === 'visibility') (host as HTMLElement).style.visibility = 'hidden';
+      else if (change === 'opacity') (host as HTMLElement).style.opacity = '0';
+      else host.setAttribute(change, change.startsWith('aria-') ? 'true' : '');
+    }, change);
+    await expect(focus(test, before, 'Nested field')).rejects.toThrow('no longer available');
+    const after = await test.session.inspectControls!();
+    if (change === 'disabled' || change === 'aria-disabled') expect(control(after, 'Nested field').disabled).toBe(true);
+    else expect(after.controls).toEqual([]);
+  }
+});
+
+it.skipIf(!installed)('checks slotted composed ancestors and rejects a slot moved within its root', async () => {
+  const test = await fixture('<div id="host"><input aria-label="Slotted field"></div>');
+  await test.page.locator('#host').evaluate(host => { host.attachShadow({ mode: 'open' }).innerHTML = '<div id="first"><slot></slot></div><div id="second"></div>'; });
+  let snapshot = await test.session.inspectControls!();
+  await focus(test, snapshot, 'Slotted field');
+  expect(await test.page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Slotted field');
+  await test.page.locator('#first').evaluate(element => element.setAttribute('aria-hidden', 'true'));
+  expect((await test.session.inspectControls!()).controls).toEqual([]);
+  await test.page.locator('#first').evaluate(element => { element.removeAttribute('aria-hidden'); element.setAttribute('aria-disabled', 'true'); });
+  expect(control(await test.session.inspectControls!(), 'Slotted field').disabled).toBe(true);
+  await test.page.locator('#first').evaluate(element => element.removeAttribute('aria-disabled'));
+  snapshot = await test.session.inspectControls!();
+  await test.page.locator('#host').evaluate(host => host.shadowRoot!.querySelector('#second')!.append(host.shadowRoot!.querySelector('slot')!));
+  await expect(focus(test, snapshot, 'Slotted field')).rejects.toThrow('no longer available');
+});
+
+it.skipIf(!installed)('names controls from assigned visible text and uses slot fallback only without assignments', async () => {
+  const test = await fixture('<div id="host"><span slot="action">Continue</span><span slot="label">Slotted field label</span><span>seeded-unassigned-host-text</span></div><div id="open-label">seeded-unassigned-label-text</div><input aria-labelledby="open-label"><div id="closed-label">seeded-unassigned-closed-text</div><input aria-labelledby="closed-label" aria-label="Closed label fallback">');
+  await test.page.evaluate(() => {
+    document.querySelector('#host')!.attachShadow({ mode: 'open' }).innerHTML = '<button id="continue"><slot name="action">seeded-unused-button-fallback</slot></button><span id="label"><slot name="label">seeded-unused-label-fallback</slot></span><input aria-labelledby="label"><button><slot name="empty">Useful fallback action</slot></button>';
+    document.querySelector('#open-label')!.attachShadow({ mode: 'open' }).innerHTML = '<span>Visible component label</span>';
+    document.querySelector('#closed-label')!.attachShadow({ mode: 'closed' }).innerHTML = '<span>Closed-only label</span>';
+  });
+  const snapshot = await test.session.inspectControls!();
+  for (const name of ['Continue', 'Slotted field label', 'Useful fallback action', 'Visible component label', 'Closed label fallback']) expect(control(snapshot, name)).toBeDefined();
+  expect(snapshot.truncated).toBe(false);
+  expect(JSON.stringify(snapshot)).not.toContain('seeded-');
+  expect(JSON.stringify(snapshot)).not.toContain('Closed-only label');
+  await focus(test, snapshot, 'Continue');
+  expect(await test.page.locator('#host').evaluate(host => host.shadowRoot!.activeElement?.id)).toBe('continue');
+});
+
+it.skipIf(!installed)('excludes values and editable content across assigned label ancestors', async () => {
+  const test = await fixture('<div id="host"><span slot="action">Safe action<textarea>seeded-slotted-textarea</textarea><input value="seeded-slotted-input"><span contenteditable>seeded-slotted-editable</span><span role="textbox">seeded-slotted-aria-value</span><span aria-hidden="true">seeded-slotted-hidden</span></span><span id="private-label" slot="private">seeded-slotted-private-label</span></div><input aria-labelledby="private-label" aria-label="Safe blocked-label fallback">');
+  await test.page.locator('#host').evaluate(host => { host.attachShadow({ mode: 'open' }).innerHTML = '<button><slot name="action">seeded-action-fallback</slot></button><div contenteditable><slot name="private">seeded-private-fallback</slot></div>'; });
+  const snapshot = await test.session.inspectControls!();
+  expect(control(snapshot, 'Safe action').role).toBe('button');
+  expect(control(snapshot, 'Safe blocked-label fallback').role).toBe('textbox');
+  expect(JSON.stringify(snapshot)).not.toContain('seeded-');
+});
+
+it.skipIf(!installed)('bounds slot-assignment discovery without reading fallback after an incomplete scan', async () => {
+  const test = await fixture('<div id="host"></div>');
+  await test.page.locator('#host').evaluate(host => {
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<button><slot name="action">seeded-forbidden-fallback</slot></button>';
+    for (let index = 0; index < 1000; index++) { const child = document.createElement('span'); child.slot = 'other'; child.textContent = 'seeded-unassigned-text'; host.append(child); }
+    const assigned = document.createElement('span'); assigned.slot = 'action'; assigned.textContent = 'Beyond label budget'; host.append(assigned);
+    HTMLSlotElement.prototype.assignedNodes = () => { throw new Error('Unbounded assignment materialization is forbidden in this fixture.'); };
+  });
+  const snapshot = await test.session.inspectControls!();
+  expect(snapshot.controls).toHaveLength(1);
+  expect(snapshot.controls[0]).toMatchObject({ role: 'button', name: '' });
+  expect(snapshot.truncated).toBe(true);
+  expect(JSON.stringify(snapshot)).not.toContain('seeded-');
+});
+
+it.skipIf(!installed)('rejects moved or replaced shadow targets even when their role and name stay the same', async () => {
+  const test = await fixture('<div id="first"></div><div id="second"></div>');
+  for (const change of ['another root', 'another container', 'replaced host', 'hidden root']) {
+    await test.page.goto(test.origin + '/login');
+    await test.page.evaluate(() => {
+      document.querySelector('#first')!.attachShadow({ mode: 'open' }).innerHTML = '<div id="a"><input aria-label="Stable field"></div><div id="b"></div>';
+      document.querySelector('#second')!.attachShadow({ mode: 'open' }).innerHTML = '<div></div>';
+    });
+    const snapshot = await test.session.inspectControls!();
+    await test.page.evaluate(change => {
+      const first = document.querySelector('#first')!; const second = document.querySelector('#second')!;
+      const target = first.shadowRoot!.querySelector('input')!;
+      if (change === 'another container') first.shadowRoot!.querySelector('#b')!.append(target);
+      else if (change === 'replaced host') {
+        const replacement = first.cloneNode(false) as Element; first.replaceWith(replacement);
+        replacement.attachShadow({ mode: 'open' }).innerHTML = '<input aria-label="Stable field">';
+      } else {
+        second.shadowRoot!.append(target);
+        if (change === 'hidden root') second.setAttribute('aria-hidden', 'true');
+      }
+    }, change);
+    await expect(focus(test, snapshot, 'Stable field')).rejects.toThrow('no longer available');
+  }
+});
+
+it.skipIf(!installed)('rejects deep focus retargeting and never activates a shadow button', async () => {
+  const test = await fixture('<div id="host"></div>');
+  await test.page.locator('#host').evaluate(host => {
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<div id="nested"></div><input id="redirected" aria-label="Redirected field">';
+    const nested = root.querySelector('#nested')!.attachShadow({ mode: 'open' });
+    nested.innerHTML = '<input aria-label="Original field"><button>Shadow action</button>';
+    nested.querySelector('input')!.addEventListener('focus', () => (root.querySelector('#redirected') as HTMLElement).focus());
+    nested.querySelector('button')!.addEventListener('click', () => host.setAttribute('data-clicked', 'yes'));
+  });
+  let snapshot = await test.session.inspectControls!();
+  await expect(focus(test, snapshot, 'Original field')).rejects.toThrow('no longer available');
+  snapshot = await test.session.inspectControls!();
+  await focus(test, snapshot, 'Shadow action');
+  expect(await test.page.locator('#host').getAttribute('data-clicked')).toBeNull();
+  expect(await test.page.locator('#host').evaluate(host => host.shadowRoot!.querySelector('#nested')!.shadowRoot!.activeElement?.tagName)).toBe('BUTTON');
+});
+
+it.skipIf(!installed)('does not expose editable or hidden labels, values, link destinations or closed shadow content', async () => {
+  const test = await fixture('<div id="host"></div><div id="closed"></div><div id="editable" contenteditable="true"></div>');
+  await test.page.evaluate(() => {
+    document.querySelector('#host')!.attachShadow({ mode: 'open' }).innerHTML = `<label id="safe">Static shadow label<textarea>seeded-shadow-textarea</textarea><span contenteditable>seeded-shadow-editable</span><span role="textbox">seeded-shadow-aria-value</span><span aria-hidden="true">seeded-shadow-hidden</span></label><input aria-labelledby="safe" value="seeded-shadow-input"><input type="password" aria-label="Shadow password" value="seeded-shadow-password"><select aria-label="Shadow choice"><option selected>seeded-shadow-option</option></select><a href="/seeded-shadow-url?token=seeded-shadow-secret">Shadow help</a>`;
+    document.querySelector('#closed')!.attachShadow({ mode: 'closed' }).innerHTML = '<input aria-label="Closed-only control" value="seeded-closed-input">';
+    document.querySelector('#editable')!.attachShadow({ mode: 'open' }).innerHTML = '<span id="editable-label">seeded-host-editable-label</span><input aria-labelledby="editable-label" aria-label="Safe editable fallback">';
+  });
+  const snapshot = await test.session.inspectControls!();
+  expect(control(snapshot, 'Static shadow label').role).toBe('textbox');
+  expect(control(snapshot, 'Shadow password').protected).toBe(true);
+  expect(control(snapshot, 'Safe editable fallback').role).toBe('textbox');
+  expect(control(snapshot, 'Shadow help').role).toBe('link');
+  const output = JSON.stringify(snapshot);
+  for (const secret of ['seeded-', 'Closed-only control', 'token=', '/login']) expect(output).not.toContain(secret);
+});
+
+it.skipIf(!installed)('bounds empty open roots and total DOM nodes without materializing the whole document', async () => {
+  const test = await fixture('<main></main>');
+  for (const mode of ['roots', 'nodes', 'depth', 'root depth']) {
+    await test.page.goto(test.origin + '/login');
+    await test.page.evaluate(mode => {
+      const main = document.querySelector('main')!;
+      if (mode === 'root depth') {
+        let root: Element | ShadowRoot = main;
+        for (let index = 0; index < 30; index++) { const host = document.createElement('div'); root.append(host); root = host.attachShadow({ mode: 'open' }); }
+        const tail = document.createElement('input'); tail.setAttribute('aria-label', 'Beyond shadow depth budget'); root.append(tail);
+      } else if (mode === 'depth') {
+        let parent = main;
+        for (let index = 0; index < 90; index++) { const next = document.createElement('div'); parent.append(next); parent = next; }
+        parent.innerHTML = '<input aria-label="Beyond depth budget">';
+      } else {
+        for (let index = 0; index < (mode === 'roots' ? 2000 : 10000); index++) {
+          const host = document.createElement('div'); main.append(host);
+          if (mode === 'roots') host.attachShadow({ mode: 'open' });
+        }
+        const tail = document.createElement('input'); tail.setAttribute('aria-label', 'Beyond traversal budget'); main.append(tail);
+      }
+      const original = Object.getOwnPropertyDescriptor(Element.prototype, 'shadowRoot')!.get!;
+      Object.defineProperty(Element.prototype, 'shadowRoot', { configurable: true, get() { document.documentElement.dataset.shadowReads = String(Number(document.documentElement.dataset.shadowReads || 0) + 1); return original.call(this); } });
+    }, mode);
+    const snapshot = await test.session.inspectControls!();
+    expect(snapshot.controls).toEqual([]); expect(snapshot.truncated).toBe(true);
+    const reads = Number(await test.page.locator('html').getAttribute('data-shadow-reads'));
+    expect(reads).toBeLessThanOrEqual(mode === 'roots' ? 110 : mode.includes('depth') ? 70 : 3000);
+  }
+});
+
+it.skipIf(!installed)('reports deadline truncation during a large DOM walk', async () => {
+  const test = await fixture('<main></main>');
+  await test.page.evaluate(() => {
+    const main = document.querySelector('main')!;
+    for (let index = 0; index < 2000; index++) main.append(document.createElement('div'));
+    const start = Date.now(); let calls = 0;
+    Date.now = () => { document.documentElement.dataset.clockCalls = String(++calls); return start + calls * 50; };
+  });
+  const snapshot = await test.session.inspectControls!();
+  expect(snapshot.controls).toEqual([]); expect(snapshot.truncated).toBe(true);
+  expect(Number(await test.page.locator('html').getAttribute('data-clock-calls'))).toBeLessThan(60);
 });

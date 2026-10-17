@@ -2,6 +2,15 @@
 
 ## 17 October 2026
 
+### Open web-component login controls
+
+- Include native fields and buttons in nested open roots, with root-scoped labels, composed visibility checks and confirmed deep focus.
+- Reject moved targets and report actual counts when a bounded scan is incomplete.
+- Clear and verify password fields inside open roots before handback without exporting their values. Withhold handback on errors, exhausted limits or immediate reinsertion.
+- Monitor popup intents before owner input and block handback while a popup's first navigation is unresolved. Require a retry when clearing opens another window.
+- Arm the managed browser before its first navigation and verify every tracked page/frame again after clearing, including restoration by later frames or popups.
+- Add phone-sized component sign-in, hidden-password cleanup and authenticated agent-resume coverage; keep closed-root and physical accessibility limits explicit.
+
 ### Notification enrollment and control
 
 - Check the current pairing's bridge enrollment before showing notifications as enabled; reject stale results from another connection.

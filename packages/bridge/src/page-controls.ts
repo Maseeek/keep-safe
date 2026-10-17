@@ -44,32 +44,118 @@ async function watchNavigation(page: Page, invalidate: () => void): Promise<Navi
  * directly; no page eval()/Function constructor or injected global is needed.
  * Do not add field values, full AX snapshots, or link address reads.
  */
-const inspectDOMSource = String.raw`(args) => {
+const inspectDOMSource = String.raw`(() => {
+ const paths = new WeakMap();
+ return (args) => {
   if (Date.now() > args.deadline) return false;
   const supported = ['textbox', 'button', 'checkbox', 'radio', 'combobox', 'link'];
   const selector = 'input,textarea,select,button,a[href],[role~="textbox"],[role~="button"],[role~="checkbox"],[role~="radio"],[role~="combobox"],[role~="link"]';
   const valueContent = 'input,textarea,select,option,[contenteditable]:not([contenteditable="false"]),[role~="textbox"],[role~="combobox"]';
   const ignoredText = valueContent + ',script,style,noscript,template';
   const normalized = (value) => (value ?? '').slice(0, 640).replace(/[\u0000-\u0020\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
-  function hidden(element) {
-    if (element.closest('[hidden],[inert],[aria-hidden="true"]')) return true;
-    for (let current = element; current; current = current.parentElement) {
-      const style = getComputedStyle(current);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0) return true;
+  let work = 0; let exhausted = false; let textLimited = false;
+  const seenRoots = new WeakSet(); let rootCount = 0;
+  function budget() {
+    if (++work > 50000 || Date.now() > args.deadline) { exhausted = true; return false; }
+    return true;
+  }
+  function parent(node) {
+    if ((node instanceof Element || node instanceof Text) && node.assignedSlot) return node.assignedSlot;
+    if (node instanceof ShadowRoot) return node.mode === 'open' ? node.host : null;
+    return node.parentNode;
+  }
+  function ancestors(element, test) {
+    let current = element; let depth = 0;
+    while (current && depth++ < 128) {
+      if (!budget() || (current instanceof ShadowRoot && current.mode !== 'open')) return true;
+      if (current instanceof Element && test(current)) return true;
+      current = parent(current);
     }
+    if (current) { exhausted = true; return true; }
     return false;
   }
+  function path(element) {
+    const nodes = [element.getRootNode()]; let node = element; let depth = 0;
+    while (node && depth++ < 128) {
+      if (!budget() || (node instanceof ShadowRoot && node.mode !== 'open')) return;
+      nodes.push(node); node = parent(node);
+    }
+    if (node) { exhausted = true; return; }
+    return nodes;
+  }
+  function samePath(element) {
+    const previous = paths.get(element); const current = path(element);
+    return !!previous && !!current && previous.length === current.length && previous.every((node, index) => node === current[index]);
+  }
+  function hidden(element) {
+    return ancestors(element, current => {
+      if (current.matches('[hidden],[inert],[aria-hidden="true"]')) return true;
+      const style = getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0) return true;
+      return false;
+    });
+  }
+  function openRoot(element) {
+    const root = element.shadowRoot;
+    if (root?.mode !== 'open') return null;
+    if (!seenRoots.has(root)) {
+      if (++rootCount > 100) { exhausted = true; return null; }
+      seenRoots.add(root);
+    }
+    return root;
+  }
   function labelText(element) {
-    if (element.matches(ignoredText) || element.closest(valueContent) || hidden(element)) return '';
-    let text = ''; let examined = 0; let node = element.firstChild;
-    while (node && text.length < 640 && examined++ < 200) {
-      const skip = node instanceof Element && (node.matches(ignoredText) || hidden(node));
-      if (node.nodeType === Node.TEXT_NODE) text += (node.textContent ?? '').slice(0, 640 - text.length) + ' ';
-      if (!skip && node.firstChild) node = node.firstChild;
-      else {
-        while (node && node !== element && !node.nextSibling) node = node.parentNode;
-        if (!node || node === element) break;
-        node = node.nextSibling;
+    if (!budget() || element.matches(ignoredText) || ancestors(element, current => current.matches(valueContent)) || hidden(element)) return '';
+    let text = ''; let examined = 0;
+    function visit() {
+      if (examined++ >= 200) { textLimited = true; return false; }
+      return budget();
+    }
+    function children(owner, depth, shadows) {
+      if (depth > 64 || shadows > 24) { textLimited = true; return; }
+      if (owner instanceof HTMLSlotElement) {
+        const root = owner.getRootNode();
+        if (root instanceof ShadowRoot && root.mode === 'open') {
+          // assignedNodes() allocates the whole assignment list. Scan only the
+          // host's direct children, under the same label/work budgets instead.
+          let child = root.host.firstChild;
+          while (child) {
+            if (!visit()) return;
+            if (child.assignedSlot === owner) return { next: child, slot: owner, depth, shadows };
+            child = child.nextSibling;
+          }
+        }
+      }
+      const root = openRoot(owner);
+      if (root && shadows >= 24) { textLimited = true; return; }
+      return { next: root ? root.firstChild : owner.firstChild, depth, shadows: shadows + (root ? 1 : 0) };
+    }
+    const lineage = path(element);
+    if (!lineage) return '';
+    const shadowAncestors = new Set(); let depth = -1;
+    for (const node of lineage) {
+      if (node instanceof ShadowRoot) shadowAncestors.add(node);
+      else if (node instanceof Element) depth++;
+    }
+    const initial = children(element, depth, shadowAncestors.size); const stack = initial ? [initial] : [];
+    while (stack.length && text.length < 640 && !exhausted) {
+      const frame = stack[stack.length - 1]; const node = frame.next;
+      if (!node) { stack.pop(); continue; }
+      if (!visit()) break;
+      frame.next = node.nextSibling;
+      if (frame.slot && node.assignedSlot !== frame.slot) continue;
+      if (node instanceof Text) {
+        if (ancestors(node, current => current.matches(valueContent)) || hidden(node)) continue;
+        // This also excludes unassigned light text under a closed host without
+        // reading its closed root. Bound the range before any text is read.
+        const length = Math.min(node.length, 640 - text.length);
+        if (!length) continue;
+        const range = document.createRange(); range.setStart(node, 0); range.setEnd(node, length);
+        const box = range.getBoundingClientRect();
+        if (box.width > 0 && box.height > 0) text += node.data.slice(0, length) + ' ';
+      } else if (node instanceof Element && !node.matches(ignoredText) && !ancestors(node, current => current.matches(valueContent)) && !hidden(node)) {
+        const next = children(node, frame.depth + 1, frame.shadows);
+        if (next) stack.push(next);
       }
     }
     return normalized(text);
@@ -81,8 +167,8 @@ const inspectDOMSource = String.raw`(args) => {
     return true;
   }
   function describe(element) {
-    if (!(element instanceof HTMLElement) || !visible(element)) return;
-    const explicit = element.getAttribute('role')?.split(/\s+/).find(role => supported.includes(role));
+    if (!budget() || !(element instanceof HTMLElement) || !visible(element)) return;
+    const explicit = element.getAttribute('role')?.slice(0, 128).split(/\s+/).find(role => supported.includes(role));
     let role = explicit;
     if (!role) {
       if (element instanceof HTMLInputElement) {
@@ -97,44 +183,77 @@ const inspectDOMSource = String.raw`(args) => {
     }
     if (!role) return;
     let name = '';
-    const labelledBy = element.getAttribute('aria-labelledby')?.split(/\s+/).slice(0, 8) ?? [];
-    if (labelledBy.length) name = normalized(labelledBy.map(id => { const label = document.getElementById(id); return label ? labelText(label) : ''; }).join(' '));
+    const labelledBy = element.getAttribute('aria-labelledby')?.slice(0, 1280).split(/\s+/).slice(0, 8) ?? [];
+    const root = element.getRootNode();
+    if (labelledBy.length && (root instanceof Document || (root instanceof ShadowRoot && root.mode === 'open'))) name = normalized(labelledBy.map(id => { const label = root.getElementById(id); return label ? labelText(label) : ''; }).join(' '));
     name ||= normalized(element.getAttribute('aria-label'));
     if (!name && 'labels' in element) {
       const labels = element.labels;
-      if (labels) name = normalized(Array.from(labels).slice(0, 8).map(labelText).join(' '));
+      if (labels) { const texts = []; for (let index = 0; index < Math.min(labels.length, 8); index++) texts.push(labelText(labels[index])); name = normalized(texts.join(' ')); }
     }
     if (!name && ['button', 'link', 'checkbox', 'radio'].includes(role)) name = labelText(element);
     name ||= normalized(element.getAttribute('title'));
     name ||= normalized(element.getAttribute('placeholder'));
-    const disabled = element.matches(':disabled') || !!element.closest('[aria-disabled="true"],[inert]');
+    const disabled = ancestors(element, current => current.matches(':disabled,[disabled],[aria-disabled="true"],[inert]'));
     const result = { role, name, protected: element instanceof HTMLInputElement && element.type === 'password', disabled };
     if (role === 'checkbox' || role === 'radio') {
       if (element instanceof HTMLInputElement) result.checked = element.checked;
       else { const checked = element.getAttribute('aria-checked'); if (checked === 'true' || checked === 'false') result.checked = checked === 'true'; }
     }
-    return result;
+    return exhausted ? undefined : result;
   }
   const sameTarget = (actual, expected) => actual && expected && !actual.disabled && !expected.disabled && actual.role === expected.role && actual.name === expected.name && actual.protected === expected.protected;
+  function activeTarget() {
+    let element = document.activeElement; let depth = 0;
+    while (element?.shadowRoot?.mode === 'open' && element.shadowRoot.activeElement && depth++ < 24) {
+      if (!budget()) return;
+      element = element.shadowRoot.activeElement;
+    }
+    if (element?.shadowRoot?.activeElement) return;
+    return element;
+  }
   if (args.operation === 'focus' || args.operation === 'verify') {
     const target = args.element;
-    if (!(target instanceof HTMLElement) || !sameTarget(describe(target), args.expected)) return false;
+    if (!(target instanceof HTMLElement) || !samePath(target) || !sameTarget(describe(target), args.expected)) return false;
     // Native focus only. Website focus handlers can still navigate or change DOM.
     if (Date.now() > args.deadline) return false;
     if (args.operation === 'focus') HTMLElement.prototype.focus.call(target);
-    return Date.now() <= args.deadline && document.activeElement === target && !!sameTarget(describe(target), args.expected);
+    return Date.now() <= args.deadline && activeTarget() === target && samePath(target) && !!sameTarget(describe(target), args.expected);
   }
   const metadata = []; const elements = [];
-  const candidates = document.querySelectorAll(selector);
-  let truncated = candidates.length > 200;
-  for (let index = 0; index < Math.min(candidates.length, 200); index++) {
-    const element = candidates[index]; const descriptor = describe(element);
-    if (!descriptor) continue;
-    if (metadata.length >= 50) { truncated = true; break; }
-    metadata.push(descriptor); elements.push(element);
+  // Incremental DFS retains only the bounded ancestor frames, never an entire
+  // document-wide NodeList or all children of a wide container.
+  const stack = [{ next: document.documentElement, depth: 0, shadows: 0 }];
+  let truncated = false; let visited = 0; let candidates = 0;
+  while (stack.length) {
+    if (!budget() || visited >= 3000) { truncated = true; break; }
+    const frame = stack[stack.length - 1]; const node = frame.next;
+    if (!node) { stack.pop(); continue; }
+    frame.next = node.nextSibling; visited++;
+    if (!(node instanceof Element)) continue;
+    if (node.matches(selector)) {
+      if (candidates++ >= 200) { truncated = true; break; }
+      const descriptor = describe(node);
+      if (exhausted) { truncated = true; break; }
+      if (descriptor) {
+        if (metadata.length >= 50) { truncated = true; break; }
+        const lineage = path(node);
+        if (exhausted) { truncated = true; break; }
+        if (lineage) { paths.set(node, lineage); metadata.push(descriptor); elements.push(node); }
+      }
+    }
+    const shadow = openRoot(node);
+    if (exhausted) { truncated = true; break; }
+    if ((node.firstChild || shadow?.firstChild) && frame.depth >= 64) { truncated = true; continue; }
+    if (node.firstChild) stack.push({ next: node.firstChild, depth: frame.depth + 1, shadows: frame.shadows });
+    if (shadow?.mode === 'open') {
+      if (frame.shadows >= 24) { truncated = true; continue; }
+      if (shadow.firstChild) stack.push({ next: shadow.firstChild, depth: frame.depth + 1, shadows: frame.shadows + 1 });
+    }
   }
-  return { metadata, elements, truncated };
-}`;
+  return { metadata, elements, truncated: truncated || exhausted || textLimited };
+ };
+})()`;
 
 async function bounded<T>(operation: Promise<T>, onTimeout: () => void): Promise<T> {
   let expired = false;

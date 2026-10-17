@@ -149,7 +149,9 @@ Leaving a request on mobile stops its live stream and discards pending scroll in
 
 Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Session status messages appear inside the mobile request so they do not cover the controls.
 
-During a live session, open **Page controls** to list supported labeled fields and buttons, choose one to focus, then use **Type text** or the remote keys. The list does not read field values or link addresses. It shows up to 50 controls from a bounded main-page scan and refreshes only when requested. Password fields are marked, while entered text remains outside the list. After an unconfirmed focus attempt, text sending stays blocked until a fresh confirmed focus or an explicit browser tap/Tab action.
+During a live session, open **Page controls** to list supported labeled fields and buttons, choose one to focus, then use **Type text** or the remote keys. The list includes native controls inside nested open web components. Labels resolve within their own root, so a matching ID elsewhere does not rename a field. The list does not read field values or link addresses. It shows up to 50 controls from a bounded main-page scan and refreshes only when requested; a limited scan reports its actual count. Password fields are marked, while entered text remains outside the list. After an unconfirmed focus attempt, text sending stays blocked until a fresh confirmed focus or an explicit browser tap/Tab action.
+
+Before handback, the bridge clears password inputs in document and open component roots across session pages and frames. Verification exports only an empty/nonempty verdict. An exceeded scan limit, immediate field reinsertion or clearing error withholds handback. A popup still loading its first page also blocks handback; wait for it to load and retry. A popup opened by a clearing event requires a retry. Closed components, activity before a browser window becomes tracked, and secrets retained by a destination website's own JavaScript remain outside this clearing boundary.
 
 ## Limits to know
 
@@ -158,7 +160,7 @@ During a live session, open **Page controls** to list supported labeled fields a
 - Requests and activity stay in memory. Eligible finished records clear after 24 hours, earlier manual/capacity cleanup, or bridge restart; pending browser cleanup can postpone deletion.
 - Agents must pause browser input while the owner is in control. Existing debugging clients cannot be forcibly stopped by Keep Safe.
 - Phone passkeys, biometrics, hardware security keys, native password-manager integration, and every third-party login provider are not universally supported or verified.
-- The webpage image has an optional structured control navigator, not a complete accessibility tree. Names are approximations from site-provided labels; frames, shadow DOM and complex custom widgets may be omitted. A website can react to normal focus events. Physical screen-reader use has not been verified, and full remote webpage navigation remains unfinished.
+- The webpage image has an optional structured control navigator, not a complete accessibility tree. Names are approximations from site-provided labels; frames, closed shadow roots and complex custom widgets may be omitted. Native controls in open roots are supported within scan limits. A website can react to normal focus events. Physical screen-reader use has not been verified, and full remote webpage navigation remains unfinished.
 - There is no hosted multi-user account service or billing yet. Future team/managed-relay plans are in [product direction](docs/product.md).
 
 ## Project records

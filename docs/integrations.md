@@ -111,7 +111,7 @@ Agent outcomes stay available until original expiry. Eligible metadata is remove
 
 The MCP `ttl_seconds` option accepts 60–1800 seconds. The HTTP `ttlSeconds` field accepts 1–1800 seconds, including short verification lifetimes. Both default to 600 seconds.
 
-Page-control snapshots contain names, roles and limited state, never field values or link addresses. They omit frames/shadow DOM and unsupported widgets. Refresh after page changes; stale or hidden/disabled/renamed targets are rejected. Snapshot and focus acknowledgements must match the current request, socket and pending action. Website focus handlers can still cause navigation or other page behavior. Inspection/focus timeouts invalidate targets but do not mean renderer cancellation: the operation remains in the handback barrier until Chromium actually settles.
+Page-control snapshots contain names, roles and limited state, never field values or link addresses. They include native controls in nested open roots within scan limits; frames, closed contents and unsupported widgets remain outside this navigator. Labels resolve within the control's root. Refresh after page changes; stale, moved, hidden, disabled or renamed targets are rejected. Snapshot and focus acknowledgements must match the current request, socket and pending action. Website focus handlers can still cause navigation or other page behavior. Inspection/focus timeouts invalidate targets but do not mean renderer cancellation: the operation remains in the handback barrier until Chromium actually settles.
 
 ## Compatibility scope
 
