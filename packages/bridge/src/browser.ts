@@ -12,7 +12,7 @@ export interface BrowserSession {
   readonly pageUrl?: string;
   frame(): Promise<BrowserFrame>;
   input(input: { type: string; [key: string]: unknown }): Promise<void>;
-  inspectControls?(): Promise<PageControlsSnapshot>;
+  inspectControls?(options?: { includeFrames?: boolean }): Promise<PageControlsSnapshot>;
   prepareHandoff?(): Promise<void>;
   close(): Promise<void>;
 }
@@ -312,11 +312,11 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
         await pageControls!.focus(input.snapshotId, input.controlId);
       }
     },
-    async inspectControls() {
+    async inspectControls(options) {
       selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       await ensureActivePageMonitor();
-      return pageControls!.inspect();
+      return pageControls!.inspect(options);
     },
     async prepareHandoff() {
       selectActivePage();

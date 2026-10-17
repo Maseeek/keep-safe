@@ -634,7 +634,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const inspectControls = () => {
     inspectionAttempt.current = crypto.randomUUID(); focusAttempt.current = null;
     setPageControls(null); setFocusedControl(null); setControlsError("");
-    const sent = send({ type: "inspect-controls", inspectionId: inspectionAttempt.current });
+    const sent = send({ type: "inspect-controls", inspectionId: inspectionAttempt.current, includeFrames: true });
     setControlsBusy(sent);
   };
   const focusControl = (snapshotId: string, controlId: string) => {

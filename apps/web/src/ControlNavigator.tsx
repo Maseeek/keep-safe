@@ -4,6 +4,7 @@ import type { Workspace } from "./workspace";
 import type { PageControl } from "../../../packages/shared/src/protocol";
 
 const controlName = (control: PageControl, index: number) => control.name || `Unnamed ${control.role} ${index + 1}`;
+const frameContext = (control: PageControl) => control.embedded ? `Embedded page · ${control.frameOrigin || "origin unavailable"}` : "";
 
 export function ControlNavigator({ workspace, requestId, enabled, onFocusRequested }: { workspace: Workspace; requestId: string; enabled: boolean; onFocusRequested: () => void }) {
   const [open, setOpen] = useState(false);
@@ -31,15 +32,15 @@ export function ControlNavigator({ workspace, requestId, enabled, onFocusRequest
             <button aria-label={`Focus ${controlName(control, index)}`} aria-describedby={`page-control-state-${control.id}`} disabled={!enabled || control.disabled || workspace.focusBusy || workspace.controlsBusy}
               onClick={() => { onFocusRequested(); workspace.focusControl(snapshot.snapshotId, control.id); }}>
               <span className="page-control-name">{control.protected ? <LockKeyhole size={14} /> : null}{controlName(control, index)}</span>
-              <span id={`page-control-state-${control.id}`} className="page-control-role">{control.protected ? "Password field" : control.role}{control.checked === undefined ? "" : control.checked ? " · checked" : " · unchecked"}{control.disabled ? " · unavailable" : ""}</span>
+              <span id={`page-control-state-${control.id}`} className="page-control-role">{control.protected ? "Password field" : control.role}{control.checked === undefined ? "" : control.checked ? " · checked" : " · unchecked"}{control.disabled ? " · unavailable" : ""}{control.embedded ? <span className="page-control-frame">{frameContext(control)}</span> : null}</span>
             </button>
           </li>)}</ul> : <p>No supported visible controls found. Use the live browser keys or refresh after the page changes.</p>}
           {snapshot.truncated ? <p>Showing {snapshot.controls.length} {snapshot.controls.length === 1 ? "control" : "controls"} from a limited scan.</p> : null}
         </> : null}
         <p className="page-control-focus" role="status" aria-live="polite">
-          {workspace.focusBusy ? "Waiting for the browser to confirm focus…" : focused ? <><Check size={15} /> Focus confirmed on {controlName(focused, focusedIndex)}.</> : workspace.focusBlocked ? "Confirm a field before sending text." : ""}
+          {workspace.focusBusy ? "Waiting for the browser to confirm focus…" : focused ? <><Check size={15} /><span>Focus confirmed on {controlName(focused, focusedIndex)}{focused.embedded ? ` in ${focused.frameOrigin || "the embedded page"}` : ""}.</span></> : workspace.focusBlocked ? "Confirm a field before sending text." : ""}
         </p>
-        <p className="page-control-limit">Main page and supported web components. Some embedded or custom forms still need browser taps or keys. Physical screen-reader testing is still pending.</p>
+        <p className="page-control-limit">Main page, supported embedded pages and web components. Some forms still need browser taps or keys. Physical screen-reader testing is still pending.</p>
       </div> : null}
     </section>
   );

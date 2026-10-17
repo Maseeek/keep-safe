@@ -1,41 +1,61 @@
 import { randomUUID } from 'node:crypto';
-import type { CDPSession, ElementHandle, JSHandle, Page } from 'playwright';
+import type { CDPSession, ElementHandle, Frame, JSHandle, Page } from 'playwright';
 import type { PageControl, PageControlsSnapshot } from '../../shared/src/protocol';
 
-type Descriptor = Omit<PageControl, 'id'>;
-type DomArgs = { operation: 'inspect' | 'focus' | 'verify'; element?: Element; expected?: Descriptor; deadline: number };
+type Descriptor = Omit<PageControl, 'id' | 'frameOrigin' | 'embedded'>;
+type DomArgs = { operation: 'inspect' | 'focus' | 'verify' | 'frame-bind' | 'frame-check' | 'frame-active'; element?: Element; expected?: Descriptor; deadline: number; limit?: number };
 type DomRunner = (args: DomArgs) => unknown;
+interface InspectedFrame {
+  frame: Frame;
+  url: string;
+  origin: string;
+  runner: JSHandle<DomRunner>;
+  navigation: NavigationGuard;
+  parent?: InspectedFrame;
+  element?: ElementHandle<Element>;
+}
 interface Snapshot {
   id: string;
   page: Page;
   url: string;
   origin: string;
-  runner: JSHandle<DomRunner>;
-  navigation: NavigationGuard;
-  targets: Map<string, { element: ElementHandle<Element>; descriptor: Descriptor }>;
+  frames: InspectedFrame[];
+  guards: NavigationGuard[];
+  targets: Map<string, { element: ElementHandle<Element>; descriptor: Descriptor; owner: InspectedFrame }>;
+  inFlight: number;
+  retired: boolean;
+  disposal?: Promise<void>;
 }
 
-interface NavigationGuard { session: CDPSession; release(): Promise<void> }
+interface NavigationGuard { session: CDPSession; frame: Frame; release(): Promise<void> }
+interface SecurityFrameTree { frame: { id: string; url: string; securityOrigin: string }; childFrames?: SecurityFrameTree[] }
 
-async function watchNavigation(page: Page, invalidate: () => void): Promise<NavigationGuard> {
-  const session = await page.context().newCDPSession(page);
-  let mainFrameId: string | undefined;
-  const navigation = (event: { frameId: string }) => { if (!mainFrameId || event.frameId === mainFrameId) invalidate(); };
+async function watchNavigation(target: Page | Frame, page: Page, invalidate: () => void): Promise<NavigationGuard> {
+  const session = await page.context().newCDPSession(target);
+  // A page session also carries navigation intents for its in-process children.
+  // Separate out-of-process frames receive their own guard below.
+  const navigation = () => invalidate();
   const popup = () => invalidate();
   session.on('Page.frameRequestedNavigation', navigation);
   session.on('Page.frameScheduledNavigation', navigation);
   session.on('Page.windowOpen', popup);
+  if (target === page) {
+    page.on('framenavigated', navigation); page.on('framedetached', navigation);
+    page.on('frameattached', navigation); page.on('popup', popup); page.on('close', popup);
+  }
   const release = async () => {
     session.off('Page.frameRequestedNavigation', navigation);
     session.off('Page.frameScheduledNavigation', navigation);
     session.off('Page.windowOpen', popup);
+    if (target === page) {
+      page.off('framenavigated', navigation); page.off('framedetached', navigation);
+      page.off('frameattached', navigation); page.off('popup', popup); page.off('close', popup);
+    }
     await session.detach().catch(() => {});
   };
   try {
     await session.send('Page.enable');
-    // Read only the root frame identifier, never page content or frame URLs.
-    mainFrameId = (await session.send('Page.getFrameTree')).frameTree.frame.id;
-    return { session, release };
+    return { session, frame: target === page ? page.mainFrame() : target as Frame, release };
   } catch (error) { await release(); throw error; }
 }
 
@@ -212,6 +232,18 @@ const inspectDOMSource = String.raw`(() => {
     if (element?.shadowRoot?.activeElement) return;
     return element;
   }
+  if (['frame-bind', 'frame-check', 'frame-active'].includes(args.operation)) {
+    const target = args.element;
+    if (!(target instanceof HTMLIFrameElement || target instanceof HTMLFrameElement) ||
+        target.hasAttribute('sandbox') || target.hasAttribute('srcdoc') || !visible(target) ||
+        ancestors(target, current => current.matches(':disabled,[disabled],[aria-disabled="true"],[inert]'))) return false;
+    if (args.operation === 'frame-bind') {
+      const lineage = path(target);
+      if (!lineage || exhausted) return false;
+      paths.set(target, lineage);
+    } else if (!samePath(target)) return false;
+    return !exhausted && Date.now() <= args.deadline && (args.operation !== 'frame-active' || activeTarget() === target);
+  }
   if (args.operation === 'focus' || args.operation === 'verify') {
     const target = args.element;
     if (!(target instanceof HTMLElement) || !samePath(target) || !sameTarget(describe(target), args.expected)) return false;
@@ -236,7 +268,7 @@ const inspectDOMSource = String.raw`(() => {
       const descriptor = describe(node);
       if (exhausted) { truncated = true; break; }
       if (descriptor) {
-        if (metadata.length >= 50) { truncated = true; break; }
+        if (metadata.length >= Math.min(args.limit ?? 50, 50)) { truncated = true; break; }
         const lineage = path(node);
         if (exhausted) { truncated = true; break; }
         if (lineage) { paths.set(node, lineage); metadata.push(descriptor); elements.push(node); }
@@ -267,19 +299,85 @@ async function bounded<T>(operation: Promise<T>, onTimeout: () => void): Promise
 export function createPageControls(activePage: () => Page) {
   let current: Snapshot | undefined;
   let generation = 0;
+  function dispose(snapshot: Snapshot): Promise<void> {
+    snapshot.disposal ??= Promise.allSettled([
+      ...[...snapshot.targets.values()].map(target => target.element.dispose()),
+      ...snapshot.frames.flatMap(frame => [frame.runner.dispose(), ...(frame.element ? [frame.element.dispose()] : [])]),
+      ...snapshot.guards.map(guard => guard.release()),
+    ]).then(() => {});
+    return snapshot.disposal;
+  }
   function clear(): Promise<void> {
     generation++;
     const previous = current; current = undefined;
-    const releases = [...(previous?.targets.values() ?? [])].map(target => target.element.dispose());
-    if (previous) releases.push(previous.runner.dispose(), previous.navigation.release());
-    return Promise.allSettled(releases).then(() => {});
+    if (!previous) return Promise.resolve();
+    previous.retired = true;
+    // Invalidate immediately, but do not detach a channel with queued renderer
+    // work. Its caller retains the input barrier until that work really settles.
+    // Returning here also lets expiry close Chromium and abort a busy renderer.
+    return previous.inFlight ? Promise.resolve() : dispose(previous);
   }
   function samePage(snapshot: Snapshot) {
     return current === snapshot && activePage() === snapshot.page && !snapshot.page.isClosed() && snapshot.page.url() === snapshot.url;
   }
+  async function barrier(guards: NavigationGuard[]) {
+    for (const guard of guards) await guard.session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+  }
+  async function frameChain(owner: InspectedFrame, page: Page, url: string, deadline: number, active = false): Promise<boolean> {
+    const trees = new Map<NavigationGuard, { frameTree: SecurityFrameTree }>();
+    async function securityOrigin(frame: InspectedFrame): Promise<boolean> {
+      // Frame has no public CDP identifier for an in-process child. Browser
+      // metadata identifies candidates. Every matching private URL must agree; a duplicate
+      // opaque/mismatched entry makes this conservative mapping fail closed.
+      let tree = trees.get(frame.navigation);
+      if (!tree) { tree = await frame.navigation.session.send('Page.getFrameTree'); trees.set(frame.navigation, tree); }
+      const expected = new URL(frame.url); expected.hash = '';
+      async function nonOpaque(candidate: SecurityFrameTree['frame']): Promise<boolean> {
+        try {
+          // Page.Frame.securityOrigin is URL-derived in Chromium. The browser
+          // storage-key query rejects the actual opaque security origin, even
+          // for response CSP sandboxing or a spoofed Window.origin. Discard the
+          // key immediately; no storage contents/cookies are read or exported.
+          await frame.navigation.session.send('Storage.getStorageKeyForFrame', { frameId: candidate.id });
+          return true;
+        } catch { return false; }
+      }
+      if (frame.navigation.frame === frame.frame) {
+        const actual = new URL(tree.frameTree.frame.url); actual.hash = '';
+        return actual.href === expected.href && tree.frameTree.frame.securityOrigin === frame.origin && await nonOpaque(tree.frameTree.frame);
+      }
+      const pending = [tree.frameTree]; let examined = 0; let matched = false;
+      while (pending.length) {
+        if (++examined > 256 || Date.now() > deadline) return false;
+        const node = pending.pop()!;
+        try {
+          const candidate = new URL(node.frame.url); candidate.hash = '';
+          if (candidate.href === expected.href) {
+            matched = true;
+            if (node.frame.securityOrigin !== frame.origin || !await nonOpaque(node.frame)) return false;
+          }
+        } catch { /* Non-URL entries cannot identify this HTTP(S) frame. */ }
+        const children = node.childFrames ?? [];
+        if (examined + pending.length + children.length > 256) return false;
+        pending.push(...children);
+      }
+      return matched;
+    }
+    let child = owner;
+    for (let depth = 0; depth <= 4; depth++) {
+      if (Date.now() > deadline || child.frame.isDetached() || child.frame.url() !== child.url) return false;
+      if (!await securityOrigin(child)) return false;
+      if (!child.parent) return child.frame === page.mainFrame() && child.url === url && !child.frame.parentFrame();
+      const parent = child.parent;
+      if (child.frame.parentFrame() !== parent.frame || !child.element || await child.element.contentFrame() !== child.frame) return false;
+      if (await parent.runner.evaluate((run, args) => run(args), { operation: active ? 'frame-active' as const : 'frame-check' as const, element: child.element, deadline }) !== true) return false;
+      child = parent;
+    }
+    return false;
+  }
   return {
     clear,
-    async inspect(): Promise<PageControlsSnapshot> {
+    async inspect(options: { includeFrames?: boolean } = {}): Promise<PageControlsSnapshot> {
       const deadline = Date.now() + 2000;
       const disposing = clear();
       const version = generation;
@@ -287,35 +385,79 @@ export function createPageControls(activePage: () => Page) {
       if (generation !== version || Date.now() > deadline) throw new Error('The page changed. Refresh the controls.');
       const page = activePage(); const url = page.url(); const origin = new URL(url).origin;
       if (page.isClosed() || !['http:', 'https:'].includes(new URL(url).protocol)) throw new Error('Open a website page before inspecting controls.');
-      let result: JSHandle | undefined; let runner: JSHandle<DomRunner> | undefined; let navigation: NavigationGuard | undefined; const temporary: JSHandle[] = []; const retained = new Map<string, { element: ElementHandle<Element>; descriptor: Descriptor }>(); let installed = false;
+      const temporary: JSHandle[] = [];
+      const frames: InspectedFrame[] = []; const guards: NavigationGuard[] = [];
+      const retained: Snapshot['targets'] = new Map(); let installed = false;
+      const valid = () => generation === version && activePage() === page && page.url() === url && !page.isClosed();
       const work = (async () => {
         try {
-          navigation = await watchNavigation(page, () => { if (generation === version) void clear(); });
-          runner = await page.evaluateHandle(inspectDOMSource) as JSHandle<DomRunner>;
-          temporary.push(runner);
-          result = await runner.evaluateHandle((run, args) => run(args), { operation: 'inspect' as const, deadline });
-          const metadataHandle = await result.getProperty('metadata'); temporary.push(metadataHandle);
-          const descriptors = await metadataHandle.jsonValue() as Descriptor[];
-          const truncatedHandle = await result.getProperty('truncated'); temporary.push(truncatedHandle);
-          const truncated = await truncatedHandle.jsonValue() as boolean;
-          const elements = await result.getProperty('elements'); temporary.push(elements);
-          const properties = await elements.getProperties(); temporary.push(...properties.values());
           const controls: PageControl[] = [];
-          for (let index = 0; index < Math.min(descriptors.length, 50); index++) {
-            const element = properties.get(String(index))?.asElement() as ElementHandle<Element> | null | undefined;
-            if (!element) continue;
-            const id = randomUUID(); retained.set(id, { element, descriptor: descriptors[index] }); controls.push({ id, ...descriptors[index] });
+          let truncated = false;
+          const invalidate = () => { if (generation === version) void clear(); };
+          const navigation = await watchNavigation(page, page, invalidate); guards.push(navigation);
+          const pending: Array<{ frame: Frame; parent?: InspectedFrame; depth: number }> = [{ frame: page.mainFrame(), depth: 0 }];
+          let examined = 0;
+          while (pending.length) {
+            if (!valid() || Date.now() > deadline) throw new Error('The page changed.');
+            if (examined++ >= 12 || controls.length >= 50) { truncated = true; break; }
+            const item = pending.shift()!; const frame = item.frame; const frameUrl = frame.url();
+            let frameOrigin: string;
+            try { const parsed = new URL(frameUrl); if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(); frameOrigin = parsed.origin; }
+            catch { truncated = true; continue; }
+            if (frame.isDetached()) { truncated = true; continue; }
+            let frameElement: ElementHandle<Element> | undefined; let guard = item.parent?.navigation ?? navigation;
+            if (item.parent) {
+              frameElement = await frame.frameElement() as ElementHandle<Element>; temporary.push(frameElement);
+              if (await item.parent.runner.evaluate((run, args) => run(args), { operation: 'frame-bind' as const, element: frameElement, deadline }) !== true) { truncated = true; continue; }
+              try { guard = await watchNavigation(frame, page, invalidate); guards.push(guard); }
+              catch (error) {
+                // This specific supported Playwright result means the nearest
+                // ancestor channel already carries this frame's early events.
+                if (!(error instanceof Error) || !error.message.includes("This frame does not have a separate CDP session, it is a part of the parent frame's session")) { truncated = true; continue; }
+              }
+            }
+            const runner = await frame.evaluateHandle(inspectDOMSource) as JSHandle<DomRunner>; temporary.push(runner);
+            const owner: InspectedFrame = { frame, url: frameUrl, origin: frameOrigin, runner, navigation: guard, parent: item.parent, element: frameElement };
+            if (!await frameChain(owner, page, url, deadline)) { truncated = true; continue; }
+            frames.push(owner);
+            const remaining = 50 - controls.length;
+            const result = await runner.evaluateHandle((run, args) => run(args), { operation: 'inspect' as const, deadline, limit: remaining }); temporary.push(result);
+            const metadataHandle = await result.getProperty('metadata'); temporary.push(metadataHandle);
+            const descriptors = await metadataHandle.jsonValue() as Descriptor[];
+            const truncatedHandle = await result.getProperty('truncated'); temporary.push(truncatedHandle);
+            truncated ||= await truncatedHandle.jsonValue() as boolean;
+            const elements = await result.getProperty('elements'); temporary.push(elements);
+            const properties = await elements.getProperties(); temporary.push(...properties.values());
+            if (!await frameChain(owner, page, url, deadline)) throw new Error('The embedded page changed.');
+            for (let index = 0; index < Math.min(descriptors.length, remaining); index++) {
+              const element = properties.get(String(index))?.asElement() as ElementHandle<Element> | null | undefined;
+              if (!element) continue;
+              const id = randomUUID(); retained.set(id, { element, descriptor: descriptors[index], owner });
+              controls.push({ id, ...descriptors[index], ...(item.parent ? { frameOrigin, embedded: true } : {}) });
+            }
+            // Frame APIs enumerate browser metadata, not document contents. The
+            // retained queue and all DOM/guard work stay within the total cap.
+            const children = options.includeFrames === true ? frame.childFrames() : [];
+            for (const child of children) {
+              if (item.depth >= 4 || examined + pending.length >= 12) { truncated = true; break; }
+              pending.push({ frame: child, parent: owner, depth: item.depth + 1 });
+            }
           }
-          if (generation !== version || activePage() !== page || page.url() !== url || page.isClosed()) throw new Error('The page changed. Refresh the controls.');
-          const snapshot: Snapshot = { id: randomUUID(), page, url, origin, runner, navigation, targets: retained };
+          for (const owner of frames) if (!await frameChain(owner, page, url, deadline)) throw new Error('The embedded page changed.');
+          await barrier(guards);
+          if (!valid() || Date.now() > deadline) throw new Error('The page changed. Refresh the controls.');
+          const snapshot: Snapshot = { id: randomUUID(), page, url, origin, frames, guards, targets: retained, inFlight: 0, retired: false };
           current = snapshot; installed = true;
           return { snapshotId: snapshot.id, origin, controls, truncated };
         } finally {
           const kept = new Set<JSHandle>();
-          if (installed) { for (const target of retained.values()) kept.add(target.element); if (runner) kept.add(runner); }
+          if (installed) {
+            for (const target of retained.values()) kept.add(target.element);
+            for (const frame of frames) { kept.add(frame.runner); if (frame.element) kept.add(frame.element); }
+          }
           await Promise.allSettled([
-            ...[...temporary, ...(result ? [result] : [])].filter(handle => !kept.has(handle)).map(handle => handle.dispose()),
-            ...(!installed && navigation ? [navigation.release()] : []),
+            ...temporary.filter(handle => !kept.has(handle)).map(handle => handle.dispose()),
+            ...(!installed ? guards.map(guard => guard.release()) : []),
           ]);
         }
       })();
@@ -327,18 +469,26 @@ export function createPageControls(activePage: () => Page) {
       const target = snapshot?.targets.get(controlId);
       if (!snapshot || snapshot.id !== snapshotId || !target || !samePage(snapshot)) throw new Error('These controls are stale. Refresh the controls and try again.');
       const deadline = Date.now() + 2000;
+      snapshot.inFlight++;
       try {
         const work = (async () => {
-          // Use the guard's own CDP channel before and after focus so its
-          // synchronous renderer navigation events precede acknowledgement.
-          await snapshot.navigation.session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
-          if (!samePage(snapshot)) return false;
-          const focused = await snapshot.runner.evaluate((run, args) => run(args), { operation: 'focus' as const, element: target.element, expected: target.descriptor, deadline });
-          if (focused !== true || !samePage(snapshot)) return false;
-          const verified = await snapshot.runner.evaluate((run, args) => run(args), { operation: 'verify' as const, element: target.element, expected: target.descriptor, deadline });
-          if (verified !== true || !samePage(snapshot)) return false;
-          await snapshot.navigation.session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
-          return samePage(snapshot);
+          try {
+            // Each distinct renderer channel orders its navigation intents
+            // before acknowledgement, including out-of-process children.
+            await barrier(snapshot.guards);
+            if (!samePage(snapshot) || !await frameChain(target.owner, snapshot.page, snapshot.url, deadline)) return false;
+            if (!samePage(snapshot)) return false;
+            const focused = await target.owner.runner.evaluate((run, args) => run(args), { operation: 'focus' as const, element: target.element, expected: target.descriptor, deadline });
+            if (focused !== true || !samePage(snapshot)) return false;
+            const verified = await target.owner.runner.evaluate((run, args) => run(args), { operation: 'verify' as const, element: target.element, expected: target.descriptor, deadline });
+            if (verified !== true || !samePage(snapshot)) return false;
+            if (!await frameChain(target.owner, snapshot.page, snapshot.url, deadline, true)) return false;
+            await barrier(snapshot.guards);
+            return samePage(snapshot);
+          } finally {
+            snapshot.inFlight--;
+            if (snapshot.retired && snapshot.inFlight === 0) await dispose(snapshot);
+          }
         })();
         const focused = await bounded(work, () => { if (current === snapshot) void clear(); });
         // Cross-process navigation/popup events and the current URL must still

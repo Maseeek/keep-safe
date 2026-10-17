@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 import { browserAvailable, openBrowser } from '../src/browser';
@@ -8,8 +8,8 @@ import type { PageControlsSnapshot } from '../../shared/src/protocol';
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 const installed = await browserAvailable();
-async function fixture(html: string, extra: Record<string, string> = {}, headers: Record<string, string> = {}) {
-  const server = createServer((request, response) => { response.setHeader('Content-Type', 'text/html'); for (const [name, value] of Object.entries(headers)) response.setHeader(name, value); response.end(extra[request.url ?? ''] ?? html); });
+async function fixture(html: string, extra: Record<string, string> = {}, headers: Record<string, string> = {}, routeHeaders: Record<string, Record<string, string>> = {}) {
+  const server = createServer((request, response) => { response.setHeader('Content-Type', 'text/html'); for (const [name, value] of Object.entries({ ...headers, ...routeHeaders[request.url ?? ''] })) response.setHeader(name, value); response.end(extra[request.url ?? ''] ?? html); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   cleanup.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -23,6 +23,247 @@ async function fixture(html: string, extra: Record<string, string> = {}, headers
 function control(snapshot: PageControlsSnapshot, name: string) { const result = snapshot.controls.find(control => control.name === name); expect(result, `Control ${name}`).toBeDefined(); return result!; }
 const focus = (test: Awaited<ReturnType<typeof fixture>>, snapshot: PageControlsSnapshot, name: string) => test.session.input({ type: 'focus', snapshotId: snapshot.snapshotId, controlId: control(snapshot, name).id });
 const simple = '<label for="email">Email address</label><input id="email"><label for="password">Password</label><input id="password" type="password"><button id="submit">Sign in</button>';
+
+async function embeddedFixture(crossOrigin = false, isolate = false) {
+  const test = await fixture('<input aria-label="Top field" id="outside"><div id="wrapper"><iframe id="embedded" src="/child"></iframe></div>', {
+    '/child': '<label>Embedded email<input id="child-email" value="seeded-child-email"></label><label>Embedded password<input type="password" value="seeded-child-password"></label><button>Embedded sign in</button><a href="/seeded-child-path?token=seeded-child-query">Embedded help</a><div id="shadow"></div>',
+    '/changed': '<input aria-label="Changed embedded field">',
+    '/nested': '<input aria-label="Nested embedded field">',
+  });
+  if (isolate) {
+    const browser = await chromium.launch({ headless: true, args: ['--site-per-process'], ...(process.env.KEEP_SAFE_CHROMIUM_PATH ? { executablePath: process.env.KEEP_SAFE_CHROMIUM_PATH } : {}) });
+    cleanup.push(() => browser.close());
+    test.page = await browser.newPage(); await test.page.goto(test.origin + '/login');
+  }
+  if (crossOrigin) await test.page.locator('#embedded').evaluate((element, origin) => { (element as HTMLIFrameElement).src = origin.replace('127.0.0.1', 'localhost') + '/child'; }, test.origin);
+  await test.page.frameLocator('#embedded').locator('#child-email').waitFor();
+  const frame = test.page.frames().find(frame => frame.parentFrame() === test.page.mainFrame())!;
+  await frame.waitForLoadState();
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  return { ...test, frame, controls };
+}
+
+it.skipIf(!installed).each([false, true])('inspects and focuses bounded embedded controls across origins (cross-origin=%s)', async crossOrigin => {
+  const test = await embeddedFixture(crossOrigin, crossOrigin);
+  const legacy = await test.controls.inspect();
+  expect(legacy.controls.map(control => control.name)).toEqual(['Top field']);
+  await test.frame.evaluate(() => { document.querySelector('#shadow')!.attachShadow({ mode: 'open' }).innerHTML = '<input id="nested-shadow" aria-label="Embedded component field" value="seeded-embedded-component">'; });
+  const snapshot = await test.controls.inspect({ includeFrames: true });
+  expect(snapshot.origin).toBe(test.origin); expect(snapshot.truncated).toBe(false);
+  const child = control(snapshot, 'Embedded email');
+  expect(child).toMatchObject({ embedded: true, frameOrigin: new URL(test.frame.url()).origin, protected: false });
+  expect(control(snapshot, 'Embedded password').protected).toBe(true);
+  expect(control(snapshot, 'Top field')).not.toHaveProperty('embedded');
+  expect(JSON.stringify(snapshot)).not.toContain('seeded-');
+  expect(JSON.stringify(snapshot)).not.toContain('/child');
+  if (crossOrigin) {
+    // Prove this is an out-of-process target, not just a different port/site.
+    const separate = await test.page.context().newCDPSession(test.frame); await separate.detach();
+    expect(child.frameOrigin).not.toBe(test.origin);
+  }
+  await test.controls.focus(snapshot.snapshotId, child.id);
+  expect(await test.frame.evaluate(() => document.activeElement?.id)).toBe('child-email');
+  expect(await test.page.evaluate(() => document.activeElement?.id)).toBe('embedded');
+  await test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded component field').id);
+  expect(await test.frame.locator('#shadow').evaluate(host => host.shadowRoot!.activeElement?.id)).toBe('nested-shadow');
+});
+
+it.skipIf(!installed).each(['iframe hidden', 'ancestor inert', 'ancestor aria-hidden', 'ancestor display', 'ancestor opacity', 'ancestor aria-disabled', 'iframe disabled'])('rejects frame focus and omits controls with %s', async change => {
+  const test = await embeddedFixture(); const snapshot = await test.controls.inspect({ includeFrames: true });
+  await test.page.evaluate(change => {
+    const frame = document.querySelector('#embedded')!; const wrapper = document.querySelector('#wrapper')!;
+    if (change === 'iframe hidden') frame.setAttribute('hidden', '');
+    else if (change === 'ancestor inert') wrapper.setAttribute('inert', '');
+    else if (change === 'ancestor aria-hidden') wrapper.setAttribute('aria-hidden', 'true');
+    else if (change === 'ancestor display') (wrapper as HTMLElement).style.display = 'none';
+    else if (change === 'ancestor opacity') (wrapper as HTMLElement).style.opacity = '0';
+    else if (change === 'ancestor aria-disabled') wrapper.setAttribute('aria-disabled', 'true');
+    else frame.setAttribute('disabled', '');
+  }, change);
+  await expect(test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded email').id)).rejects.toThrow('no longer available');
+  const hidden = await test.controls.inspect({ includeFrames: true });
+  expect(hidden.controls.some(control => control.embedded)).toBe(false); expect(hidden.truncated).toBe(true);
+});
+
+it.skipIf(!installed).each(['reload', 'navigation', 'replacement', 'reparent'])('rejects stale iframe targets after %s', async change => {
+  const test = await embeddedFixture(); const snapshot = await test.controls.inspect({ includeFrames: true });
+  if (change === 'reload') await test.frame.goto(test.frame.url());
+  else if (change === 'navigation') await test.frame.goto(test.origin + '/changed');
+  else await test.page.locator('#embedded').evaluate((element, change) => {
+    if (change === 'replacement') element.replaceWith(element.cloneNode());
+    else { const wrapper = document.createElement('div'); document.body.append(wrapper); wrapper.append(element); }
+  }, change);
+  await expect(test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded email').id)).rejects.toThrow();
+});
+
+it.skipIf(!installed)('verifies composed iframe ancestry and nested deep focus', async () => {
+  const test = await embeddedFixture();
+  await test.page.evaluate(() => {
+    const host = document.createElement('div'); host.id = 'shadow-frame-host'; document.body.append(host);
+    host.attachShadow({ mode: 'open' }).append(document.querySelector('#embedded')!);
+  });
+  await test.page.frameLocator('#embedded').locator('#child-email').waitFor();
+  const frame = test.page.frames().find(frame => frame.parentFrame() === test.page.mainFrame())!;
+  await frame.evaluate(() => { const frame = document.createElement('iframe'); frame.id = 'nested'; frame.src = '/nested'; document.body.append(frame); });
+  await frame.frameLocator('#nested').getByRole('textbox').waitFor();
+  const snapshot = await test.controls.inspect({ includeFrames: true });
+  await test.controls.focus(snapshot.snapshotId, control(snapshot, 'Nested embedded field').id);
+  expect(await test.page.locator('#shadow-frame-host').evaluate(host => host.shadowRoot!.activeElement?.id)).toBe('embedded');
+  expect(await frame.evaluate(() => document.activeElement?.id)).toBe('nested');
+  await test.page.locator('#shadow-frame-host').evaluate(host => { const wrapper = document.createElement('div'); document.body.append(wrapper); wrapper.append(host); });
+  await expect(test.controls.focus(snapshot.snapshotId, control(snapshot, 'Nested embedded field').id)).rejects.toThrow();
+});
+
+it.skipIf(!installed).each([false, true])('rejects cancelled iframe navigation intents even without a URL change (OOPIF=%s)', async isolated => {
+  const test = await embeddedFixture(isolated, isolated);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const snapshot = await test.controls.inspect({ includeFrames: true });
+    await test.frame.locator('#child-email').evaluate(element => element.addEventListener('focus', () => { location.href = '/changed'; window.stop(); }, { once: true }));
+    await expect(test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded email').id)).rejects.toThrow();
+    expect(new URL(test.frame.url()).pathname).toBe('/child');
+    await test.page.locator('#outside').focus();
+  }
+});
+
+it.skipIf(!installed)('rejects a local child focus that its handler moves back into the parent page', async () => {
+  const test = await embeddedFixture(); const snapshot = await test.controls.inspect({ includeFrames: true });
+  await test.frame.locator('#child-email').evaluate(element => element.addEventListener('focus', () => (window.parent.document.querySelector('#outside') as HTMLElement).focus()));
+  await expect(test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded email').id)).rejects.toThrow('no longer available');
+  expect(await test.page.evaluate(() => document.activeElement?.id)).toBe('outside');
+});
+
+it.skipIf(!installed).each([false, true])('omits a response-sandboxed opaque frame and its HTTP descendants even if Window.origin is spoofed (%s)', async spoof => {
+  const test = await fixture('<input aria-label="Top field"><iframe id="opaque" src="/opaque"></iframe>', {
+    '/opaque': '<input aria-label="Opaque child field"><iframe src="/descendant"></iframe>',
+    '/descendant': '<input aria-label="Opaque descendant field">',
+  }, {}, { '/opaque': { 'Content-Security-Policy': 'sandbox allow-scripts' } });
+  await test.page.frameLocator('#opaque').getByRole('textbox').waitFor();
+  const frame = test.page.frames().find(frame => new URL(frame.url()).pathname === '/opaque')!;
+  expect(await test.page.locator('#opaque').getAttribute('sandbox')).toBeNull();
+  expect(await frame.evaluate(expected => globalThis.origin === expected, test.origin)).toBe(false);
+  if (spoof) await frame.evaluate(() => Object.defineProperty(globalThis, 'origin', { configurable: true, value: location.origin }));
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const snapshot = await controls.inspect({ includeFrames: true });
+  expect(snapshot.controls.map(control => control.name)).toEqual(['Top field']); expect(snapshot.truncated).toBe(true);
+});
+
+it.skipIf(!installed)('uses browser-reported origins without reading a page-overridden Window.origin', async () => {
+  const test = await embeddedFixture(); const snapshot = await test.controls.inspect({ includeFrames: true });
+  await test.frame.evaluate(() => Object.defineProperty(globalThis, 'origin', { configurable: true, get() { throw new Error('seeded-sensitive-overridden-origin'); } }));
+  await test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded email').id);
+  const refreshed = await test.controls.inspect({ includeFrames: true });
+  expect(refreshed.controls.some(control => control.embedded)).toBe(true); expect(refreshed.truncated).toBe(false);
+  expect(JSON.stringify(refreshed)).not.toContain('seeded-');
+});
+
+it.skipIf(!installed)('omits ambiguous duplicate child URLs if any browser security origin is opaque', async () => {
+  const test = await fixture('<input aria-label="Top field"><iframe id="normal" src="/same#normal"></iframe><iframe id="opaque" sandbox="allow-scripts" src="/same#opaque"></iframe>', { '/same': '<input aria-label="Ambiguous child field">' });
+  await test.page.frameLocator('#normal').getByRole('textbox').waitFor();
+  await test.page.frameLocator('#opaque').getByRole('textbox').waitFor();
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const snapshot = await controls.inspect({ includeFrames: true });
+  expect(snapshot.controls.map(control => control.name)).toEqual(['Top field']); expect(snapshot.truncated).toBe(true);
+});
+
+it.skipIf(!installed)('shares the 50-control cap across the top page and embedded pages', async () => {
+  const fields = (name: string) => Array.from({ length: 30 }, (_value, index) => `<input aria-label="${name} ${index}" value="seeded-bounded-value">`).join('');
+  const test = await fixture(`${fields('Top')}<iframe src="/child"></iframe><iframe src="/child"></iframe>`, { '/child': fields('Child') });
+  for (const frame of test.page.frames()) await frame.waitForLoadState();
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const snapshot = await controls.inspect({ includeFrames: true });
+  expect(snapshot.controls).toHaveLength(50); expect(snapshot.truncated).toBe(true);
+  expect(snapshot.controls.filter(control => control.embedded)).toHaveLength(20);
+  expect(JSON.stringify(snapshot)).not.toContain('seeded-');
+});
+
+it.skipIf(!installed)('bounds frame DOM inspection to 12 frames and reports omitted frames', async () => {
+  const test = await fixture('<input aria-label="Top field">', { '/child': '<input aria-label="Child field">' });
+  await test.page.evaluate(() => { for (let index = 0; index < 14; index++) { const frame = document.createElement('iframe'); frame.src = '/child'; document.body.append(frame); } });
+  const children = test.page.frames().filter(frame => frame.parentFrame());
+  for (const frame of children) {
+    await frame.waitForLoadState();
+    await frame.evaluate(() => {
+      const original = Object.getOwnPropertyDescriptor(Element.prototype, 'shadowRoot')!.get!;
+      Object.defineProperty(Element.prototype, 'shadowRoot', { get() { document.documentElement.dataset.inspectionReads = String(Number(document.documentElement.dataset.inspectionReads || 0) + 1); return original.call(this); } });
+    });
+  }
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const snapshot = await controls.inspect({ includeFrames: true });
+  expect(snapshot.controls).toHaveLength(12); expect(snapshot.truncated).toBe(true);
+  const inspected = await Promise.all(children.map(frame => frame.evaluate(() => Number(document.documentElement.dataset.inspectionReads || 0) > 0)));
+  expect(inspected.filter(Boolean)).toHaveLength(11);
+});
+
+it.skipIf(!installed)('bounds nested frame depth and skips unsupported ancestor subtrees', async () => {
+  const test = await fixture('<input aria-label="Top field"><iframe id="first" src="/child"></iframe>', { '/child': '<input aria-label="Deep field">', ...Object.fromEntries(Array.from({ length: 5 }, (_value, index) => [`/level-${index}`, '<input aria-label="Deep field">'])) });
+  await test.page.frameLocator('#first').getByRole('textbox').waitFor();
+  let parent = test.page.frames().find(frame => frame.parentFrame())!;
+  for (let index = 0; index < 5; index++) {
+    await parent.evaluate(index => { const frame = document.createElement('iframe'); frame.id = 'next'; frame.src = `/level-${index}`; document.body.append(frame); }, index);
+    await parent.frameLocator('#next').getByRole('textbox').waitFor();
+    parent = parent.childFrames()[0]; await parent.waitForLoadState();
+  }
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const snapshot = await controls.inspect({ includeFrames: true });
+  expect(snapshot.controls).toHaveLength(5); expect(snapshot.truncated).toBe(true);
+  await test.page.locator('#first').evaluate(element => element.setAttribute('sandbox', 'allow-scripts allow-same-origin'));
+  const sandboxed = await controls.inspect({ includeFrames: true });
+  expect(sandboxed.controls.map(control => control.name)).toEqual(['Top field']); expect(sandboxed.truncated).toBe(true);
+});
+
+it.skipIf(!installed)('omits srcdoc pages and their ordinary HTTP descendants', async () => {
+  const test = await fixture('<input aria-label="Top field"><iframe id="inline"></iframe>', { '/child': '<input aria-label="HTTP descendant field">' });
+  await test.page.locator('#inline').evaluate(element => { (element as HTMLIFrameElement).srcdoc = '<input aria-label="Inline child field"><iframe src="/child"></iframe>'; });
+  await test.page.frameLocator('#inline').getByRole('textbox').waitFor();
+  await test.page.frameLocator('#inline').frameLocator('iframe').getByRole('textbox').waitFor();
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const snapshot = await controls.inspect({ includeFrames: true });
+  expect(snapshot.controls.map(control => control.name)).toEqual(['Top field']); expect(snapshot.truncated).toBe(true);
+});
+
+it.skipIf(!installed)('keeps an OOPIF focus barrier pending through timeout and explicit invalidation', async () => {
+  const test = await embeddedFixture(true, true); const snapshot = await test.controls.inspect({ includeFrames: true });
+  let started!: () => void; const rendererStarted = new Promise<void>(resolve => { started = resolve; });
+  test.page.on('console', message => { if (message.text() === 'synthetic-embedded-renderer-busy') started(); });
+  const busy = test.frame.evaluate(() => {
+    console.debug('synthetic-embedded-renderer-busy');
+    const deadline = Date.now() + 3500; while (Date.now() < deadline) { /* Synthetic busy renderer. */ }
+  });
+  await rendererStarted;
+  let settled = false;
+  const outcome = test.controls.focus(snapshot.snapshotId, control(snapshot, 'Embedded email').id).then(() => { settled = true; return 'accepted'; }, () => { settled = true; return 'rejected'; });
+  await new Promise(resolve => setTimeout(resolve, 2200)); await test.controls.clear();
+  expect(settled).toBe(false);
+  await busy; expect(await outcome).toBe('rejected');
+  expect(await test.frame.evaluate(() => document.activeElement?.id)).not.toBe('child-email');
+});
+
+it.skipIf(!installed)('retains retired navigation guards until every concurrent focus operation settles', async () => {
+  const test = await fixture(simple); const context = test.page.context();
+  const controls = createPageControls(() => test.page); cleanup.push(() => controls.clear());
+  const createSession = context.newCDPSession.bind(context); let guard!: import('playwright').CDPSession;
+  const sessionSpy = vi.spyOn(context, 'newCDPSession').mockImplementation(async (...args) => { guard = await createSession(...args); return guard; });
+  const snapshot = await controls.inspect(); sessionSpy.mockRestore();
+  let releaseFirst!: () => void; let releaseSecond!: () => void; let enteredBoth!: () => void; let entered = 0;
+  const gates = [new Promise<void>(resolve => { releaseFirst = resolve; }), new Promise<void>(resolve => { releaseSecond = resolve; })];
+  const started = new Promise<void>(resolve => { enteredBoth = resolve; });
+  const send = guard.send.bind(guard);
+  const sendSpy = vi.spyOn(guard, 'send').mockImplementation(async (method, params) => {
+    if (method === 'Runtime.evaluate' && entered < 2) { const gate = gates[entered++]; if (entered === 2) enteredBoth(); await gate; }
+    return send(method, params);
+  });
+  const detach = vi.spyOn(guard, 'detach');
+  const first = controls.focus(snapshot.snapshotId, control(snapshot, 'Email address').id).then(() => 'accepted', () => 'rejected');
+  const second = controls.focus(snapshot.snapshotId, control(snapshot, 'Password').id).then(() => 'accepted', () => 'rejected');
+  try {
+    await started; await controls.clear(); expect(detach).not.toHaveBeenCalled();
+    releaseFirst(); expect(await first).toBe('rejected'); expect(detach).not.toHaveBeenCalled();
+    releaseSecond(); expect(await second).toBe('rejected'); expect(detach).toHaveBeenCalledTimes(1);
+  } finally {
+    releaseFirst(); releaseSecond(); await Promise.allSettled([first, second]);
+    sendSpy.mockRestore(); detach.mockRestore(); sessionSpy.mockRestore();
+  }
+});
 
 it.skipIf(!installed)('inspects and focuses under a CSP that forbids page scripts and unsafe eval', async () => {
   const test = await fixture(simple, {}, { 'Content-Security-Policy': "default-src 'self'; script-src 'none'" });

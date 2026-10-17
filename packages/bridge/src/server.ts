@@ -270,7 +270,9 @@ export async function createBridge(options: BridgeOptions) {
     if (message.type === 'inspect-controls') {
       if (typeof message.inspectionId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.inspectionId)) throw new Error('Choose a valid page control inspection.');
       if (!entry.browser.inspectControls) throw new Error('This browser does not support page controls. Update the bridge or use the live browser keys.');
-      operation = entry.browser.inspectControls().then(snapshot => {
+      // Older dashboards cannot label embedded origins. Keep their inspection
+      // main-only unless the client explicitly requests frame-aware results.
+      operation = entry.browser.inspectControls({ includeFrames: message.includeFrames === true }).then(snapshot => {
         if (active(entry, client)) send(client, { type: 'controls', requestId: entry.request.id, inspectionId: message.inspectionId as string, snapshot });
       });
     } else {

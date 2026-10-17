@@ -47,13 +47,15 @@ async function fixture(block: 'inspect' | 'focus' | undefined = undefined, optio
   };
   const events: string[] = [];
   const inputs: Array<{ type: string; [key: string]: unknown }> = [];
+  const inspectionOptions: Array<{ includeFrames?: boolean } | undefined> = [];
   let inspections = 0;
   let inspected = false;
   let password = 'synthetic-private-field-value';
   const browser: BrowserSession = {
     cdpUrl: 'http://127.0.0.1:9333',
     frame: async () => ({ data: 'aW1hZ2U=', width: 390, height: 720, url: 'https://example.com/login' }),
-    inspectControls: async () => {
+    inspectControls: async options => {
+      inspectionOptions.push(options);
       inspections++; events.push('inspect started');
       if (block === 'inspect') { started.resolve(); await gate.promise; }
       inspected = true; events.push('inspect finished'); finished.resolve();
@@ -83,10 +85,21 @@ async function fixture(block: 'inspect' | 'focus' | undefined = undefined, optio
     client.send({ type: 'watch', requestId: item.id }); await client.next('frame');
     return client;
   }
-  return { ...bridge, request, create, watch, snapshot, inputs, events, gate, started, finished, advance: (ms: number) => { clock += ms; }, get inspections() { return inspections; }, get password() { return password; } };
+  return { ...bridge, request, create, watch, snapshot, inputs, inspectionOptions, events, gate, started, finished, advance: (ms: number) => { clock += ms; }, get inspections() { return inspections; }, get password() { return password; } };
 }
 
 describe('page controls owner authorization and lifecycle', () => {
+  it('keeps legacy dashboards main-only unless they explicitly opt into embedded-origin metadata', async () => {
+    const bridge = await fixture(); const item = await bridge.create(); const controller = await bridge.watch(item);
+    for (const includeFrames of [undefined, false, 'true', 1, true]) {
+      controller.send({ type: 'inspect-controls', inspectionId: randomUUID(), ...(includeFrames === undefined ? {} : { includeFrames }) });
+      await controller.next('controls');
+    }
+    expect(bridge.inspectionOptions).toEqual([
+      { includeFrames: false }, { includeFrames: false }, { includeFrames: false }, { includeFrames: false }, { includeFrames: true },
+    ]);
+  });
+
   it('requires owner authentication and an active controller before inspecting any browser', async () => {
     const bridge = await fixture();
     const anonymous = await phone(bridge.url);

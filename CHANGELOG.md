@@ -2,6 +2,13 @@
 
 ## 17 October 2026
 
+### Embedded login controls
+
+- Navigate native fields and buttons in supported embedded HTTP(S) pages, with each frame's origin shown visibly and in accessible descriptions.
+- Confirm focus through exact frame and ancestor chains; reject stale frames and child navigation before acknowledging focus.
+- Keep older dashboards main-only unless they explicitly request frame-aware metadata. Bound the complete scan and omit unsupported or opaque frame subtrees.
+- Add synthetic same-/cross-origin mobile login and agent-resume checks, without exporting field values or full frame URLs.
+
 ### Open web-component login controls
 
 - Include native fields and buttons in nested open roots, with root-scoped labels, composed visibility checks and confirmed deep focus.

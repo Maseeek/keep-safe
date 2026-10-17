@@ -3927,8 +3927,11 @@ svg {
 .page-control-name { display: flex; gap: 7px; align-items: center; font-size: 14px; line-height: 1.6; }
 .page-control-name svg { flex-shrink: 0; }
 .page-control-role { display: block; color: #53644c; font-size: 13px; line-height: 1.7; }
+.page-control-frame { display: block; overflow-wrap: anywhere; }
 .page-control-content .page-control-error { color: #884b37; }
 .page-control-focus { display: flex; align-items: center; gap: 7px; }
+.page-control-focus > span { min-width: 0; overflow-wrap: anywhere; }
+.page-control-focus > svg { flex-shrink: 0; }
 .page-control-content .page-control-limit { font-size: 13px; }
 @media (max-width: 760px) {
   .history-controls { flex-direction: column; align-items: stretch; padding: 20px; gap: 16px; }

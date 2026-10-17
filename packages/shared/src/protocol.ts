@@ -41,6 +41,9 @@ export interface PageControl {
   protected: boolean;
   disabled: boolean;
   checked?: boolean;
+  /** Present for a control inside an embedded HTTP(S) page; no path or query. */
+  frameOrigin?: string;
+  embedded?: boolean;
 }
 
 export interface PageControlsSnapshot {
@@ -75,7 +78,7 @@ export type ClientMessage =
   | { type: 'auth'; token: string }
   | { type: 'watch'; requestId: string }
   | { type: 'unwatch' }
-  | { type: 'inspect-controls'; inspectionId: string }
+  | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
   | { type: 'focus'; snapshotId: string; controlId: string }
   | { type: 'click'; x: number; y: number }
   | { type: 'scroll'; deltaX: number; deltaY: number }
