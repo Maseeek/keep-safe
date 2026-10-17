@@ -190,3 +190,11 @@
 - Reworked real stdio integration to launch the generated custom-port/custom-directory configuration from another working directory using only its emitted environment. Added invalid-option, safe-error, path-space, precedence, file-preservation and real TOML parsing checks. The documented Codex example was also run and parsed successfully.
 - Typecheck, production build and all 151 tests across 23 files pass locally. Local documentation links resolve. T3 preview initialization twice returned `The calling provider no longer owns an active thread run.` Production verification will use the documented built-app browser fallback.
 - The bridge implementation did not change, so its running process and keys do not need a restart. No additional email: the 17 October daily summary was already confirmed sent. Hourly continuation remains enabled; its next returned run is 17 October at 02:00:48 UTC, subject to host availability and the 24 October 08:00 UTC stop.
+
+### Setup and validation release verified at 01:12 UTC
+
+- Pushed application commit `0bcd4f2d7625727c5a22be38d0d701682e317282`. Vercel MCP production deployment `dpl_FxMim9Jveqr1xQneWuXDatgM5nBp` is READY for that exact commit, intended team/project and existing production alias [keep-safe-eight.vercel.app](https://keep-safe-eight.vercel.app).
+- GitHub CI `38989668817` passed on Node 22. Typecheck, production build and all 151 tests pass locally and in CI, including the unmodified emitted-config stdio flow.
+- Verified production HTTP 200 and the expected frontend bundle at 320px, 390px and 1440px. Demo approval/sign-in/handback, viewport bounds and JavaScript checks pass. The frontend bundle did not change in this release; the generator correction runs on the agent computer.
+- The retained local bridge remains healthy and was not restarted. No keys, active sessions or local authority were changed. No additional email was sent, and additional spend remains £0. Repository visibility is PRIVATE.
+- Product validation and future offer documents are prepared, not evidence of adoption. Physical-phone push, assistive technology, human trials, paid demand and relay/support economics remain unverified or unmeasured. Next useful work is a safe synthetic rehearsal flow before an owner-approved pilot, with the browser's private-network boundary preserved.
