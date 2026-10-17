@@ -68,6 +68,8 @@ Exit status is `1` when any check fails and `0` when none fail. Warnings can rem
 
 Public probes run from this computer. They do **not** prove the remote endpoint belongs to you, that another network can reach it, that browser security restrictions permit the connection, or that physical push works. Tunnel protection that needs an interactive browser login can also block cross-origin API and WebSocket requests. Do not bypass an access policy just to make a diagnostic pass.
 
+For a same-computer check using the hosted dashboard and a loopback bridge, allow the dashboard's local-network access prompt if Chromium shows it. A phone still needs the computer's reachable HTTPS address; localhost on the phone refers to the phone.
+
 After diagnostics, open the private pairing link on your phone and rehearse approval, live input, explicit handback and agent resume before using a real account. Physical-device push delivery remains a separate unverified check.
 
 ## Rehearse a login handoff
