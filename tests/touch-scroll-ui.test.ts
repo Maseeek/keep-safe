@@ -32,6 +32,10 @@ async function mouseActivate(cdp: CDPSession, locator: Locator) {
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
 }
+async function appliedClicks(test: { remote: Page; readonly inputClicks: number }, expected: number) {
+  await expect.poll(() => test.remote.evaluate(() => Number(document.body.dataset.clicks))).toBe(expected);
+  expect(test.inputClicks).toBe(expected);
+}
 
 describe('trusted touch scrolling through the phone interface', () => {
   let browser: Browser;
@@ -78,20 +82,28 @@ describe('trusted touch scrolling through the phone interface', () => {
     } finally { await cdp.detach(); await context.close(); await bridge.close(); await site.close(); }
   }, 45000);
 
-  async function controlledPhone() {
+  async function controlledPhone(options: { holdClickAt?: number } = {}) {
     const remote = await browser.newPage({ viewport: { width: 3000, height: 720 } });
     await remote.setContent('<style>body{margin:0;width:7000px;height:16000px;background:linear-gradient(white,#cdddc5)}button{position:fixed;inset:0;width:100%;height:100%;background:transparent;border:0}</style><button id="probe">Synthetic gesture target</button><script>document.body.dataset.clicks="0";document.querySelector("button").onclick=()=>{document.body.dataset.clicks=String(Number(document.body.dataset.clicks)+1);};</script>');
     const images = [(await remote.screenshot({ type: 'jpeg' })).toString('base64')];
     await remote.evaluate(() => { document.body.style.backgroundImage = 'linear-gradient(#eeeeee,#cdddc5)'; }); images.push((await remote.screenshot({ type: 'jpeg' })).toString('base64'));
     expect(images[0]).not.toBe(images[1]);
     let frames = 0; let inputScrolls = 0; let outputScrolls = 0; let inputClicks = 0; let sumY = 0; let maxDelta = 0; let anchors = true;
+    let releaseClick!: () => void;
+    const clickGate = new Promise<void>(resolve => { releaseClick = resolve; });
     let frameUrl = 'https://example.com/touch';
     const bridge = await createBridge({ ownerToken, agentToken, port: 0, staticDir: resolve('apps/web/dist'), browserFactory: async () => ({
       frame: async () => ({ data: images[frames++ % 2], width: 3000, height: 720, url: frameUrl }),
-      inspectControls: async () => ({ snapshotId: '00000000-0000-4000-8000-000000000001', origin: 'https://example.com', truncated: false, controls: [{ id: '00000000-0000-4000-8000-000000000002', name: 'Synthetic focus target', role: 'button', protected: false, disabled: false }] }),
+      inspectControls: async () => ({ snapshotId: '00000000-0000-4000-8000-000000000001', origin: new URL(frameUrl).origin, truncated: false, controls: [{ id: '00000000-0000-4000-8000-000000000002', name: 'Synthetic focus target', role: 'button', protected: false, disabled: false }] }),
       input: async message => {
         if (message.type === 'focus') throw new Error('Synthetic failed focus.');
-        if (message.type === 'click') { inputClicks++; await remote.mouse.click(Number(message.x), Number(message.y)); }
+        if (message.type === 'click') {
+          // Receipt precedes application in Chromium. Tests must observe the
+          // page instead of treating this accepted-message count as completion.
+          inputClicks++;
+          if (inputClicks === options.holdClickAt) await clickGate;
+          await remote.mouse.click(Number(message.x), Number(message.y));
+        }
         if (message.type === 'scroll') {
           inputScrolls++; sumY += Number(message.deltaY); maxDelta = Math.max(maxDelta, Math.abs(Number(message.deltaX)), Math.abs(Number(message.deltaY)));
           anchors &&= typeof message.x === 'number' && typeof message.y === 'number';
@@ -108,15 +120,15 @@ describe('trusted touch scrolling through the phone interface', () => {
     const request = await client.create({ agent: 'Touch control fixture', title: 'Synthetic gesture checks', url: frameUrl, ttlSeconds: 120 });
     await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: ownerToken })}`);
     await page.getByRole('button', { name: /Touch control fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open', exact: true }).click(); await page.locator('.remote-screen img').waitFor();
-    return { remote, bridge, context, page, cdp, client, request, get frames() { return frames; }, get inputScrolls() { return inputScrolls; }, get outputScrolls() { return outputScrolls; }, get inputClicks() { return inputClicks; }, get sumY() { return sumY; }, get maxDelta() { return maxDelta; }, get anchors() { return anchors; }, setUrl: (url: string) => { frameUrl = url; },
-      close: async () => { await touch(cdp, 'touchCancel').catch(() => {}); await cdp.detach(); await context.close(); await bridge.close(); if (!remote.isClosed()) await remote.close(); } };
+    return { remote, bridge, context, page, cdp, client, request, releaseClick, get frames() { return frames; }, get inputScrolls() { return inputScrolls; }, get outputScrolls() { return outputScrolls; }, get inputClicks() { return inputClicks; }, get sumY() { return sumY; }, get maxDelta() { return maxDelta; }, get anchors() { return anchors; }, setUrl: (url: string) => { frameUrl = url; },
+      close: async () => { releaseClick(); await touch(cdp, 'touchCancel').catch(() => {}); await cdp.detach(); await context.close(); await bridge.close(); if (!remote.isClosed()) await remote.close(); } };
   }
 
   it('scales and coalesces trusted swipes without clicks, focus recovery or cancelled-touch replay', async () => {
     const test = await controlledPhone(); const { page, cdp } = test;
     try {
       let box = await imageBox(page); await tap(cdp, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
-      await expect.poll(() => test.inputClicks).toBe(1); expect(await test.remote.evaluate(() => Number(document.body.dataset.clicks))).toBe(1);
+      await appliedClicks(test, 1);
       await page.getByRole('button', { name: 'Type text', exact: true }).click(); await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       await page.getByRole('button', { name: 'Focus Synthetic focus target', exact: true }).click(); await page.getByRole('alert').filter({ hasText: 'The requested action was not accepted' }).waitFor();
       const text = page.getByLabel('Tap a field in the browser, then send text'); expect(await text.isDisabled()).toBe(true);
@@ -128,7 +140,7 @@ describe('trusted touch scrolling through the phone interface', () => {
       await touch(cdp, 'touchEnd'); await page.clock.runFor(60);
       await expect.poll(() => test.inputScrolls).toBe(1);
       expect(test.sumY).toBeCloseTo(30 * 720 / box.height, 0); expect(test.maxDelta).toBeLessThanOrEqual(3000); expect(test.anchors).toBe(true);
-      await expect.poll(() => test.remote.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+      await expect.poll(() => test.remote.evaluate(() => window.scrollY)).toBe(test.sumY);
       expect(test.inputClicks).toBe(1); expect(await text.isDisabled()).toBe(true);
       let count = test.outputScrolls; const offset = await test.remote.evaluate(() => window.scrollY);
       await touch(cdp, 'touchStart', [from]); await touch(cdp, 'touchMove', [to]); await touch(cdp, 'touchCancel'); await page.clock.runFor(100);
@@ -143,7 +155,8 @@ describe('trusted touch scrolling through the phone interface', () => {
       await touch(cdp, 'touchStart', [from]); await touch(cdp, 'touchMove', [{ x: from.x, y: from.y - 330 }]); await touch(cdp, 'touchEnd');
       await page.clock.runFor(49); expect(test.outputScrolls).toBe(count);
       await page.clock.runFor(1); await expect.poll(() => test.outputScrolls).toBe(count + 1);
-      expect(test.maxDelta).toBe(3000); await expect.poll(() => test.remote.evaluate(() => window.scrollY)).toBeGreaterThan(offset); count++;
+      await expect.poll(() => test.inputScrolls).toBe(count + 1);
+      expect(test.maxDelta).toBe(3000); await expect.poll(() => test.remote.evaluate(() => window.scrollY)).toBe(test.sumY); count++;
       expect(test.inputClicks).toBe(1); expect(await text.isDisabled()).toBe(true);
       await page.clock.resume(); await page.getByRole('button', { name: 'More keys', exact: true }).click();
       await imageBox(page); const local = await page.locator('.detail-section').evaluate(element => element.scrollTop); const remote = await test.remote.evaluate(() => window.scrollY);
@@ -153,20 +166,31 @@ describe('trusted touch scrolling through the phone interface', () => {
   }, 30000);
 
   it('preserves genuine mouse and pen taps while rejecting a press from an older page source', async () => {
-    const test = await controlledPhone(); const { page, cdp } = test;
+    const test = await controlledPhone({ holdClickAt: 2 }); const { page, cdp } = test;
     try {
       const box = await imageBox(page); const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
       for (const pointerType of ['mouse', 'pen'] as const) {
         await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1, pointerType });
         await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1, pointerType });
-        await expect.poll(() => test.inputClicks).toBe(pointerType === 'mouse' ? 1 : 2);
+        if (pointerType === 'pen') {
+          await expect.poll(() => test.inputClicks).toBe(2);
+          // Deterministically reproduce the CI gap: pen input was accepted,
+          // but its browser operation is still held and has not activated.
+          expect(await test.remote.evaluate(() => Number(document.body.dataset.clicks))).toBe(1);
+          test.releaseClick();
+        }
+        await appliedClicks(test, pointerType === 'mouse' ? 1 : 2);
       }
       expect(await test.remote.evaluate(() => Number(document.body.dataset.clicks))).toBe(2);
       await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
       test.setUrl('https://other.example.com/touch'); await expect.poll(() => page.locator('.address').innerText()).toBe('https://other.example.com');
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
-      // A subsequent genuine tap is an observable same-socket boundary.
-      await tap(cdp, point); await expect.poll(() => test.inputClicks).toBe(3);
+      await tap(cdp, point); await appliedClicks(test, 3);
+      // The inspection reply drains every earlier action on this same socket,
+      // including any erroneous stale-source click before the genuine tap.
+      await page.getByRole('button', { name: 'Page controls', exact: true }).click();
+      await page.getByRole('button', { name: 'Focus Synthetic focus target', exact: true }).waitFor();
+      expect(test.inputClicks).toBe(3);
       expect(await test.remote.evaluate(() => Number(document.body.dataset.clicks))).toBe(3); expect(test.outputScrolls).toBe(0);
     } finally { await test.close(); }
   }, 30000);

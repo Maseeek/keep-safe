@@ -2,6 +2,11 @@
 
 ## 18 October 2026
 
+### Remote input verification
+
+- Wait for exact click and scroll effects in the remote browser before checking their result. Keep accepted-message counters separate from completion.
+- Hold the pen action in a synthetic regression to reproduce the acceptance/application gap, and drain earlier socket actions before asserting stale-source click rejection. Preserve the original counts, scroll limits and timeouts.
+
 ### Background browser pause
 
 - Pause live viewing and input when the app receives hidden/page-leaving signals; discard unsent text and its reveal setting.
