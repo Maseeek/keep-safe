@@ -237,6 +237,12 @@ describe('explicit browser resume after mobile background pause', () => {
       expect(await page.evaluate(id => (window as unknown as HarnessWindow).backgroundWorkspace.resumeBrowser(id), next.id)).toBe(true);
       await expect.poll(() => page.evaluate(() => (window as unknown as HarnessWindow).backgroundWorkspace.frame?.url)).toBe('https://other.example.com/login');
       expect((await otherClient.get(next.id)).browser).toBeUndefined(); expect((await test.client.get(second.id)).browser).toBeUndefined();
-    } finally { await otherBridge?.close(); await test.close(); }
+    } finally {
+      // Stop the real hook's reconnect producer before tearing down either
+      // endpoint. Otherwise an in-flight reconnect can race bridge shutdown.
+      await test.context.close();
+      await otherBridge?.close();
+      await test.close();
+    }
   });
 });

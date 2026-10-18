@@ -89,6 +89,35 @@ async function fixture(block: 'inspect' | 'focus' | undefined = undefined, optio
 }
 
 describe('page controls owner authorization and lifecycle', () => {
+  it('rejects reconnects as soon as shutdown begins while browser cleanup is held', async () => {
+    const closingStarted = deferred(); const closingGate = deferred();
+    let closing: Promise<void> | undefined;
+    const bridge = await createBridge({ ownerToken: owner, agentToken: agent, port: 0, browserFactory: async () => ({
+      frame: async () => ({ data: 'aW1hZ2U=', width: 390, height: 720, url: 'https://example.com/login' }),
+      input: async () => {},
+      close: async () => { closingStarted.resolve(); await closingGate.promise; },
+    }) });
+    cleanup.push(async () => { closingGate.resolve(); await (closing ?? bridge.close()); });
+    const headers = { Authorization: `Bearer ${agent}`, 'Content-Type': 'application/json' };
+    const created = await fetch(bridge.url + '/api/requests', { method: 'POST', headers, body: JSON.stringify({ agent: 'Synthetic shutdown fixture', title: 'Shutdown ownership', url: 'https://example.com/login' }) });
+    expect(created.status).toBe(201); const item = await created.json() as LoginRequest;
+    const approved = await fetch(`${bridge.url}/api/requests/${item.id}/approve`, { method: 'POST', headers: { Authorization: `Bearer ${owner}` } });
+    expect(approved.ok).toBe(true); await approved.arrayBuffer();
+    const controller = await phone(bridge.url, owner); await controller.next('ready');
+    controller.send({ type: 'watch', requestId: item.id }); await controller.next('frame');
+    closing = bridge.close(); await closingStarted.promise;
+    const reconnect = new WebSocket(bridge.url.replace('http:', 'ws:') + '/ws');
+    cleanup.push(async () => { reconnect.terminate(); });
+    reconnect.on('error', () => {});
+    const outcome = await new Promise<number>(resolve => {
+      reconnect.once('open', () => resolve(101));
+      reconnect.once('unexpected-response', (_request, response) => { response.resume(); reconnect.terminate(); resolve(response.statusCode ?? 0); });
+    });
+    expect(outcome).toBe(503);
+    closingGate.resolve(); await closing;
+    await expect.poll(() => controller.closeCode).toBeDefined();
+  });
+
   it('keeps legacy dashboards main-only unless they explicitly opt into embedded-origin metadata', async () => {
     const bridge = await fixture(); const item = await bridge.create(); const controller = await bridge.watch(item);
     for (const includeFrames of [undefined, false, 'true', 1, true]) {

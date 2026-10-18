@@ -248,7 +248,7 @@ export async function createBridge(options: BridgeOptions) {
   async function handleMessage(client: Client, raw: Buffer) {
     // Receipt can precede a close while an earlier browser operation holds the
     // queue. A retired socket must never reacquire controller ownership later.
-    if (client.ws.readyState !== WebSocket.OPEN) return;
+    if (stopping || client.ws.readyState !== WebSocket.OPEN) return;
     let message: Record<string, unknown>;
     try { message = JSON.parse(raw.toString()) as Record<string, unknown>; if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error(); }
     catch { throw new Error('Invalid message.'); }
@@ -337,6 +337,7 @@ export async function createBridge(options: BridgeOptions) {
     for (const client of clients) if (client.deviceId === id) { unwatch(client); client.ws.close(4001, 'Phone pairing expired or revoked'); }
     for (const [endpoint, subscription] of subscriptions) if (subscription.deviceId === id) subscriptions.delete(endpoint);
   }
+  let stopping = false;
   const server = createServer((request, response) => { void (async () => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -531,6 +532,7 @@ export async function createBridge(options: BridgeOptions) {
   })().catch(error => { if (!response.headersSent) json(response, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : 'The bridge could not complete this request.' }); else response.end(); }); });
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 32_768, perMessageDeflate: false });
   server.on('upgrade', (request, socket, head) => {
+    if (stopping) { socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n', () => socket.destroy()); return; }
     const url = new URL(request.url ?? '/', 'http://localhost');
     if (url.pathname !== '/ws' || url.search || (request.headers.origin && !origins.has(request.headers.origin))) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
     if (clients.size >= 10) { socket.destroy(); return; }
@@ -561,6 +563,9 @@ export async function createBridge(options: BridgeOptions) {
   return {
     server, url, port: address.port, info,
     async close() {
+      // Browser cleanup can await a renderer. Reject reconnects before the first
+      // await, so no new socket can outlive the set terminated below.
+      stopping = true;
       clearInterval(expiryTimer);
       clearInterval(heartbeat);
       for (const client of clients) { clearTimeout(client.timer); unwatch(client); client.ws.terminate(); }

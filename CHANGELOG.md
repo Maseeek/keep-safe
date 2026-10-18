@@ -8,6 +8,7 @@
 - Require an explicit Resume browser action, a fresh image and renewed field confirmation. Keep the request's original expiry and explicit handback.
 - Retire old control connections and ignore their late frames/focus replies. Reconnect for queue updates without silently reclaiming paused browser control.
 - Discard queued commands from closed sockets so a delayed watch cannot block the next owner. Preserve accepted browser work through password clearing and handback.
+- Reject reconnects before bridge shutdown waits for browser cleanup, preventing a new socket from keeping shutdown open.
 
 ### Direct touch scrolling
 
