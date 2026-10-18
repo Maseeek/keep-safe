@@ -6,6 +6,7 @@ import {
   ArrowUp,
   Check,
   CheckCheck,
+  ChevronDown,
   ChevronRight,
   Clock3,
   ExternalLink,
@@ -68,6 +69,22 @@ interface Props {
   onBack: () => void;
 }
 
+const additionalKeys = [
+  { key: "Space", label: "Space" },
+  { key: "Escape", label: "Esc" },
+  { key: "Shift+Tab", label: "Shift+Tab" },
+  { key: "ArrowUp", label: "↑ Up" },
+  { key: "ArrowDown", label: "↓ Down" },
+  { key: "ArrowLeft", label: "← Left" },
+  { key: "ArrowRight", label: "→ Right" },
+  { key: "Home", label: "Home" },
+  { key: "End", label: "End" },
+  { key: "PageUp", label: "Page Up" },
+  { key: "PageDown", label: "Page Down" },
+  { key: "Delete", label: "Delete" },
+  { key: "ControlOrMeta+A", label: "Select all" },
+] as const;
+
 export function BrowserPanel({
   request,
   workspace,
@@ -78,6 +95,7 @@ export function BrowserPanel({
 }: Props) {
   const [text, setText] = useState("");
   const [showKeyboard, setShowKeyboard] = useState(false);
+  const [showMoreKeys, setShowMoreKeys] = useState(false);
   const [demoStep, setDemoStep] = useState(0);
   const [denyOpen, setDenyOpen] = useState(false);
   const [showText, setShowText] = useState(false);
@@ -95,6 +113,8 @@ export function BrowserPanel({
     workspace.frame?.requestId === request.id ? workspace.frame : null;
   const canInput =
     active && workspace.status === "connected" && !!liveFrame && !expired && !workspace.focusBusy;
+  const keyInputBlocked = !canInput || workspace.focusBusy || workspace.focusBlocked;
+  const moreKeysId = `remote-more-keys-${request.id}`;
   const address = browserAddress(liveFrame?.url ?? request.url);
   const requestedAddress = browserAddress(request.url);
 
@@ -107,11 +127,13 @@ export function BrowserPanel({
     setText("");
     setDemoStep(0);
     setShowKeyboard(false);
+    setShowMoreKeys(false);
     setDenyOpen(false);
     setShowOrigin(false);
   }, [request.id]);
   useEffect(() => {
     if (!active || expired || workspace.status !== "connected") setText("");
+    if (!active || expired) setShowMoreKeys(false);
   }, [active, expired, workspace.status]);
   useEffect(() => { if (workspace.focusBlocked) setText(""); }, [workspace.focusBlocked]);
   useEffect(() => {
@@ -394,16 +416,26 @@ export function BrowserPanel({
         <div className="remote-controls">
           {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} /> : null}
           <div className="remote-toolbar">
-            <button
-              className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
-              onClick={() => setShowKeyboard(!showKeyboard)}
-              aria-expanded={showKeyboard}
-              aria-controls={showKeyboard ? "remote-text-form" : undefined}
-            >
-              <Keyboard size={16} />
-              Type text
-            </button>
-            <div className="keyboard-keys">
+            <div className="remote-toolbar-actions">
+              <button
+                className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
+                onClick={() => setShowKeyboard(!showKeyboard)}
+                aria-expanded={showKeyboard}
+                aria-controls={showKeyboard ? "remote-text-form" : undefined}
+              >
+                <Keyboard size={16} />
+                Type text
+              </button>
+              <button
+                className={`button button-light button-small ${showMoreKeys ? "selected" : ""}`}
+                aria-expanded={showMoreKeys}
+                aria-controls={showMoreKeys ? moreKeysId : undefined}
+                onClick={() => setShowMoreKeys(!showMoreKeys)}
+              >
+                More keys <ChevronDown size={15} aria-hidden="true" className={showMoreKeys ? "more-keys-chevron expanded" : "more-keys-chevron"} />
+              </button>
+            </div>
+            <div className="keyboard-keys" role="group" aria-label="Common browser controls">
               <button
                 title="Press Tab in browser"
                 aria-label="Press Tab in browser"
@@ -416,7 +448,7 @@ export function BrowserPanel({
                 title="Press Enter in browser"
                 aria-label="Press Enter in browser"
                 onClick={() => workspace.send({ type: "key", key: "Enter" })}
-                disabled={!canInput}
+                disabled={keyInputBlocked}
               >
                 &#x21b5;
               </button>
@@ -426,7 +458,7 @@ export function BrowserPanel({
                 onClick={() =>
                   workspace.send({ type: "key", key: "Backspace" })
                 }
-                disabled={!canInput}
+                disabled={keyInputBlocked}
               >
                 &#x232b;
               </button>
@@ -452,6 +484,19 @@ export function BrowserPanel({
               </button>
             </div>
           </div>
+          {showMoreKeys ? (
+            <div className="more-browser-keys" id={moreKeysId} role="group" aria-label="More browser keys">
+              <p>Send a key to the browser’s selected control. The scroll buttons above move the page.</p>
+              <div className="more-key-grid">
+                {additionalKeys.map(({ key, label }) => {
+                  const name = key === "ControlOrMeta+A" ? "Select all in browser" : `Press ${key} in browser`;
+                  return <button key={key} title={name} aria-label={name}
+                    disabled={!canInput || (key !== "Shift+Tab" && keyInputBlocked)}
+                    onClick={() => workspace.send({ type: "key", key })}>{label}</button>;
+                })}
+              </div>
+            </div>
+          ) : null}
           {showKeyboard ? (
             <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
               <label htmlFor="remote-input">
@@ -493,8 +538,8 @@ export function BrowserPanel({
           ) : null}
           <p className="input-hint">
             <MousePointer2 size={12} />
-            Tap to click. Use arrows to scroll. Type text into the selected
-            field.
+            Tap to click. Scroll buttons move the page. Use More keys for
+            keyboard controls.
           </p>
         </div>
       ) : null}

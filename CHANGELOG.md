@@ -1,5 +1,14 @@
 # Change history
 
+## 18 October 2026
+
+### Remote keyboard controls
+
+- Add a compact More keys panel for Space, Escape, Shift+Tab, arrows, navigation, Delete and Select all, using existing bridge commands.
+- Distinguish keyboard arrows from page scrolling and provide wrapping, named touch targets.
+- Keep pending or failed focus blocked across ordinary keys, refresh and reconnect. Permit recovery through confirmed focus, an explicit browser tap, Tab or Shift+Tab.
+- Verify native checkbox/radio/select activation, remote Escape, password clearing and authenticated resume at phone sizes. Add direct transport checks for rapid input, abandoned acknowledgements and reconnect recovery.
+
 ## 17 October 2026
 
 ### Embedded login controls

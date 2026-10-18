@@ -32,5 +32,6 @@
 - [x] Per-computer notification enrollment checks, independent disable controls and explicit browser-key switching, with pairing preserved. Physical delivery remains a separate open requirement.
 - [x] Open web-component control navigation and verified password clearing before handback, with bounded scans and value-free focus metadata. Closed roots and website-retained JavaScript data remain outside this support boundary.
 - [x] Embedded native control navigation with explicit frame origins, legacy-client opt-in protection, bounded frame scans and confirmed top-to-child focus. Physical accessibility and broader widget support remain open.
+- [x] Mobile keyboard panel for native checkbox/radio/select activation, Escape and navigation keys, with failed-focus protection across refresh/reconnect. Real Chromium phone-sized login and resume checks pass; physical keyboard/assistive-technology evidence remains open.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

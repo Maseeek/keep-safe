@@ -2019,31 +2019,51 @@ svg {
 }
 .remote-toolbar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px;
   align-items: center;
   margin-top: 12px;
 }
+.remote-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.remote-toolbar-actions > .button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+}
 .remote-toolbar .button-small {
-  padding: 8px 9px;
-  font-size: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
 }
 .keyboard-keys {
   display: flex;
-  gap: 3px;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
 }
-.keyboard-keys button {
-  height: 27px;
-  min-width: 26px;
-  padding: 4px 6px;
+.keyboard-keys button,
+.more-key-grid button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 6px;
   background: #f6f9f0;
   border: 1px solid #e5ecda;
   border-radius: 4px;
-  color: #9aaf82;
+  color: #46613b;
   display: grid;
   place-items: center;
-  font-size: 9px;
+  font-size: 13px;
 }
+.more-keys-chevron { transition: transform 150ms ease; }
+.more-keys-chevron.expanded { transform: rotate(180deg); }
+.more-browser-keys { margin-top: 10px; padding: 12px; border: 1px solid #dce5d6; border-radius: 6px; background: #fafcf7; }
+.more-browser-keys > p { margin: 0 0 10px; color: #52634a; font-size: 13px; line-height: 1.6; }
+.more-key-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); gap: 8px; }
+.more-key-grid button { min-width: 0; overflow-wrap: anywhere; }
 .remote-text-form {
   border: 1px solid #e6ecdd;
   background: #fafcf6;

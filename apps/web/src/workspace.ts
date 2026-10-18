@@ -314,17 +314,23 @@ export function useWorkspace(onError: (message: string) => void) {
   const [focusedControl, setFocusedControl] = useState<{ requestId: string; snapshotId: string; controlId: string } | null>(null);
   const [controlsBusy, setControlsBusy] = useState(false);
   const [focusBusy, setFocusBusy] = useState(false);
-  const [focusBlocked, setFocusBlocked] = useState(false);
+  const [focusBlocked, setFocusBlockedState] = useState(false);
+  const focusBlockedRef = useRef(false);
+  const setFocusBlocked = useCallback((blocked: boolean) => {
+    focusBlockedRef.current = blocked;
+    setFocusBlockedState(blocked);
+  }, []);
   const [controlsError, setControlsError] = useState("");
   const [error, setError] = useState("");
   const socket = useRef<WebSocket | null>(null);
   const watchId = useRef<string | null>(null);
   const inspectionAttempt = useRef<string | null>(null);
   const focusAttempt = useRef<{ snapshotId: string; controlId: string } | null>(null);
-  const clearControls = useCallback(() => {
+  const clearControls = useCallback((resetFocus = true) => {
+    const blocked = !resetFocus && (focusBlockedRef.current || focusAttempt.current !== null);
     inspectionAttempt.current = null; focusAttempt.current = null;
-    setPageControls(null); setFocusedControl(null); setControlsBusy(false); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
-  }, []);
+    setPageControls(null); setFocusedControl(null); setControlsBusy(false); setFocusBusy(false); setFocusBlocked(blocked); setControlsError("");
+  }, [setFocusBlocked]);
   const errorCallback = useRef(onError);
   errorCallback.current = onError;
 
@@ -453,7 +459,9 @@ export function useWorkspace(onError: (message: string) => void) {
       ws.onclose = (event) => {
         if (stopped) return;
         setFrame(null);
-        clearControls();
+        // Reconnecting to the same request does not confirm a failed/pending
+        // browser focus. A full source/watch change resets the gate separately.
+        clearControls(false);
         if (event.code === 4001 || event.code === 4401) {
           invalidatePairing(
             connection,
@@ -502,7 +510,7 @@ export function useWorkspace(onError: (message: string) => void) {
       current?.close();
       socket.current = null;
     };
-  }, [connection, api, invalidatePairing, clearControls]);
+  }, [connection, api, invalidatePairing, clearControls, setFocusBlocked]);
 
   const connect = async (
     value: Connection,
@@ -613,12 +621,22 @@ export function useWorkspace(onError: (message: string) => void) {
       );
       return false;
     }
+    const recoversFocus = message.type === "click" ||
+      (message.type === "key" && (message.key === "Tab" || message.key === "Shift+Tab"));
+    if ((focusBlockedRef.current || focusAttempt.current !== null) && !recoversFocus &&
+        (message.type === "text" || message.type === "key")) {
+      const notice = "Confirm a field before sending input.";
+      setControlsError(notice);
+      errorCallback.current(notice);
+      return false;
+    }
     if (message.type === "click" || message.type === "key") {
-      focusAttempt.current = null; setFocusedControl(null); setFocusBusy(false); setFocusBlocked(false);
+      focusAttempt.current = null; setFocusedControl(null); setFocusBusy(false);
+      if (recoversFocus) { setFocusBlocked(false); setControlsError(""); }
     }
     socket.current.send(JSON.stringify(message));
     return true;
-  }, []);
+  }, [setFocusBlocked]);
   const watch = useCallback((requestId: string | null) => {
     if (watchId.current === requestId) return;
     watchId.current = requestId;
@@ -633,7 +651,7 @@ export function useWorkspace(onError: (message: string) => void) {
   }, [clearControls]);
   const inspectControls = () => {
     inspectionAttempt.current = crypto.randomUUID(); focusAttempt.current = null;
-    setPageControls(null); setFocusedControl(null); setControlsError("");
+    setPageControls(null); setFocusedControl(null); setFocusBusy(false); setControlsError("");
     const sent = send({ type: "inspect-controls", inspectionId: inspectionAttempt.current, includeFrames: true });
     setControlsBusy(sent);
   };

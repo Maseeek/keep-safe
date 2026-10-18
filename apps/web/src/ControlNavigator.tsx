@@ -25,7 +25,7 @@ export function ControlNavigator({ workspace, requestId, enabled, onFocusRequest
         </div>
         <p>Focus a labeled field or button, then use Type text or the remote keys. Field values and link addresses are not read.</p>
         {workspace.controlsBusy ? <p role="status"><LoaderCircle size={15} className="spin" /> Reading controls…</p> : null}
-        {workspace.controlsError ? <p className="page-control-error" role="alert">{workspace.controlsError} Choose a field again, or use a browser tap or Tab before typing.</p> : null}
+        {workspace.controlsError ? <p className="page-control-error" role="alert">{workspace.controlsError} Choose a field again, or use a browser tap, Tab or Shift+Tab before sending input.</p> : null}
         {snapshot ? <>
           <p className="page-control-origin">From {snapshot.origin}</p>
           {snapshot.controls.length ? <ul className="page-control-list">{snapshot.controls.map((control, index) => <li key={control.id}>
@@ -38,7 +38,7 @@ export function ControlNavigator({ workspace, requestId, enabled, onFocusRequest
           {snapshot.truncated ? <p>Showing {snapshot.controls.length} {snapshot.controls.length === 1 ? "control" : "controls"} from a limited scan.</p> : null}
         </> : null}
         <p className="page-control-focus" role="status" aria-live="polite">
-          {workspace.focusBusy ? "Waiting for the browser to confirm focus…" : focused ? <><Check size={15} /><span>Focus confirmed on {controlName(focused, focusedIndex)}{focused.embedded ? ` in ${focused.frameOrigin || "the embedded page"}` : ""}.</span></> : workspace.focusBlocked ? "Confirm a field before sending text." : ""}
+          {workspace.focusBusy ? "Waiting for the browser to confirm focus…" : focused ? <><Check size={15} /><span>Focus confirmed on {controlName(focused, focusedIndex)}{focused.embedded ? ` in ${focused.frameOrigin || "the embedded page"}` : ""}.</span></> : workspace.focusBlocked ? "Confirm a field before sending text or keys. A browser tap, Tab or Shift+Tab also restores input." : ""}
         </p>
         <p className="page-control-limit">Main page, supported embedded pages and web components. Some forms still need browser taps or keys. Physical screen-reader testing is still pending.</p>
       </div> : null}
