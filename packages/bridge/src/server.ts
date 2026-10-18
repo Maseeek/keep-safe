@@ -6,7 +6,7 @@ import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
 import type { BridgeInfo, HistoryCleanupResult, LoginRequest, ServerMessage } from '../../shared/src/protocol';
-import { browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
+import { BrowserFrameChangedError, BrowserNavigationError, browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
 import { atomicJsonWriter, createDeviceStore } from './devices';
 
 export interface BridgeOptions {
@@ -37,6 +37,9 @@ interface Entry {
   inputBarrier?: Promise<void>;
   draining?: Promise<void>;
   closing?: Promise<void>;
+  frameEpoch?: string;
+  navigating?: boolean;
+  navigationAvailable?: boolean;
 }
 interface Client { ws: WebSocket; authenticated: boolean; master?: boolean; deviceId?: string; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>; frames?: ReturnType<typeof setInterval>; pendingFrame: boolean; operations: Promise<void>; count: number; window: number }
 interface StoredSubscription extends PushSubscription { deviceId?: string }
@@ -125,7 +128,7 @@ export async function createBridge(options: BridgeOptions) {
   const subscriptionsWriter = atomicJsonWriter(options.subscriptionsFile);
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.1.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl]) if (value) origins.add(new URL(value).origin);
   if (options.subscriptionsFile) {
@@ -207,12 +210,17 @@ export async function createBridge(options: BridgeOptions) {
   function checkEntry(id: string) { const entry = entries.get(id); if (!entry) throw new HttpError(404, 'Request not found.'); return entry; }
   function active(entry: Entry, client: Client) { return validClient(client) && !entry.finalizing && !entry.draining && !terminal.has(entry.request.status) && now() < Date.parse(entry.request.expiresAt) && entry.controller === client && client.watching === entry.request.id && client.ws.readyState === WebSocket.OPEN; }
   async function frame(entry: Entry, client: Client) {
-    if (client.pendingFrame || !entry.browser || !active(entry, client)) return;
+    if (client.pendingFrame || entry.navigating || !entry.browser || !active(entry, client)) return;
     client.pendingFrame = true;
+    const epoch = entry.frameEpoch ??= randomUUID();
     try {
       const result = await entry.browser.frame();
-      if (active(entry, client)) { entry.size = { width: result.width, height: result.height }; send(client, { type: 'frame', requestId: entry.request.id, ...result }); }
-    } catch { if (active(entry, client)) { send(client, { type: 'error', message: 'The browser could not be displayed. Reopen the session to try again.' }); unwatch(client); } }
+      if (active(entry, client) && !entry.navigating && entry.frameEpoch === epoch) {
+        entry.size = { width: result.width, height: result.height };
+        entry.navigationAvailable = !!entry.browser?.navigate && result.navigationAvailable === true;
+        send(client, { type: 'frame', requestId: entry.request.id, ...result, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable });
+      }
+    } catch (error) { if (!(error instanceof BrowserFrameChangedError) && active(entry, client) && !entry.navigating && entry.frameEpoch === epoch) { send(client, { type: 'error', message: 'The browser could not be displayed. Reopen the session to try again.' }); unwatch(client); } }
     finally { client.pendingFrame = false; }
   }
   function resumeController(entry: Entry) {
@@ -270,7 +278,36 @@ export async function createBridge(options: BridgeOptions) {
     const entry = client.watching ? entries.get(client.watching) : undefined;
     if (!entry?.browser || !active(entry, client)) throw new Error('Open an approved session before sending input.');
     let operation: Promise<void>;
-    if (message.type === 'inspect-controls') {
+    if (message.type === 'navigate') {
+      if (typeof message.navigationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(message.navigationId) ||
+          !['back', 'forward', 'reload'].includes(message.direction as string) ||
+          Object.keys(message).some(key => !['type', 'direction', 'navigationId'].includes(key))) throw new Error('Choose a valid browser navigation.');
+      const browser = entry.browser;
+      const epoch = entry.frameEpoch = randomUUID();
+      entry.size = undefined;
+      const supported = !!browser.navigate && entry.navigationAvailable === true;
+      entry.navigationAvailable = false;
+      entry.navigating = true;
+      operation = Promise.resolve().then(async () => {
+        let ok = false; let notice = 'The website could not be navigated. Check the new image before trying again.';
+        try {
+          if (!supported) throw new Error('Navigation is unavailable.');
+          await browser.navigate!(message.direction as 'back' | 'forward' | 'reload');
+          ok = true;
+        } catch (error) {
+          if (!supported) notice = 'Navigation is available only in a managed Keep Safe browser.';
+          else if (error instanceof BrowserNavigationError) notice = error.reason === 'form'
+            ? 'Navigation was blocked to avoid repeating a form submission. Use the website controls instead.'
+            : error.reason === 'history' ? 'There is no available page in that direction.'
+            : error.reason === 'timeout' ? 'Navigation took too long and was stopped. Check the new image before trying again.'
+            : error.reason === 'changed' ? 'The browser changed during navigation. Check the new image before trying again.' : notice;
+        } finally { entry.navigating = false; }
+        if (active(entry, client) && entry.frameEpoch === epoch) {
+          send(client, { type: 'navigated', requestId: entry.request.id, navigationId: message.navigationId as string, frameEpoch: epoch, ok, ...(!ok ? { message: notice } : {}) });
+          await frame(entry, client);
+        }
+      });
+    } else if (message.type === 'inspect-controls') {
       if (typeof message.inspectionId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.inspectionId)) throw new Error('Choose a valid page control inspection.');
       if (!entry.browser.inspectControls) throw new Error('This browser does not support page controls. Update the bridge or use the live browser keys.');
       // Older dashboards cannot label embedded origins. Keep their inspection

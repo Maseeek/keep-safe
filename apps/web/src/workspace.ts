@@ -21,6 +21,18 @@ export interface BrowserFrame {
   width: number;
   height: number;
   url: string;
+  frameEpoch?: string;
+  navigationAvailable?: boolean;
+}
+type NavigationDirection = "back" | "forward" | "reload";
+interface NavigationAttempt {
+  navigationId: string;
+  requestId: string;
+  source: Connection;
+  socket: WebSocket;
+  previousEpoch?: string;
+  result?: { frameEpoch: string; ok: boolean; message?: string };
+  timer?: ReturnType<typeof setTimeout>;
 }
 export type ConnectionStatus =
   | "demo"
@@ -308,10 +320,19 @@ export function useWorkspace(onError: (message: string) => void) {
   const currentRequests = useRef(requests);
   currentRequests.current = requests;
   const [info, setInfo] = useState<BridgeInfo | null>(null);
+  const currentInfo = useRef(info);
+  currentInfo.current = info;
   const [status, setStatus] = useState<ConnectionStatus>(
     initial.connection ? "connecting" : "demo",
   );
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
+  const [navigationBusy, setNavigationBusy] = useState(false);
+  const [navigationError, setNavigationError] = useState("");
+  const [navigationAvailable, setNavigationAvailable] = useState(false);
+  const [navigationUncertain, setNavigationUncertain] = useState(false);
+  const uncertainNavigation = useRef<{ source: Connection; requestId: string; resumed: boolean } | null>(null);
+  const navigationAttempt = useRef<NavigationAttempt | null>(null);
+  const expectedFrameEpoch = useRef<string | null>(null);
   const [pageControls, setPageControls] = useState<{ requestId: string; snapshot: PageControlsSnapshot } | null>(null);
   const [focusedControl, setFocusedControl] = useState<{ requestId: string; snapshotId: string; controlId: string } | null>(null);
   const [controlsBusy, setControlsBusy] = useState(false);
@@ -330,7 +351,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const transportSource = useRef<Connection | null>(null);
   const watchId = useRef<string | null>(null);
   const transportWatchId = useRef<string | null>(null);
-  const freshFrame = useRef<{ socket: WebSocket; requestId: string } | null>(null);
+  const freshFrame = useRef<{ socket: WebSocket; requestId: string; navigationAvailable?: boolean; frameEpoch?: string } | null>(null);
   const [browserVisible, setBrowserVisible] = useState(() => document.visibilityState !== "hidden");
   const pageVisible = useRef(browserVisible);
   const [browserPaused, setBrowserPaused] = useState(() => !browserVisible);
@@ -348,6 +369,23 @@ export function useWorkspace(onError: (message: string) => void) {
     list.some(request => request.id === requestId && ["approved", "active"].includes(request.status) &&
       Date.parse(request.expiresAt) > Date.now()), []);
   const visible = useCallback(() => pageVisible.current && document.visibilityState !== "hidden", []);
+  const abandonNavigation = useCallback((message = "", resetUncertain = false) => {
+    const previous = navigationAttempt.current;
+    if (previous && message) {
+      uncertainNavigation.current = { source: previous.source, requestId: previous.requestId, resumed: false };
+      setNavigationUncertain(true);
+    }
+    if (resetUncertain) { uncertainNavigation.current = null; setNavigationUncertain(false); }
+    if (previous?.timer) clearTimeout(previous.timer);
+    navigationAttempt.current = null;
+    expectedFrameEpoch.current = null;
+    setNavigationBusy(false);
+    setNavigationError(message);
+  }, []);
+  useEffect(() => () => {
+    if (navigationAttempt.current?.timer) clearTimeout(navigationAttempt.current.timer);
+    navigationAttempt.current = null;
+  }, []);
   const retireTransport = useCallback(() => {
     const previous = socket.current;
     // Invalidate callbacks synchronously, before React effect cleanup or close.
@@ -355,13 +393,15 @@ export function useWorkspace(onError: (message: string) => void) {
     socketSource.current = null;
     transportWatchId.current = null;
     freshFrame.current = null;
+    if (navigationAttempt.current)
+      abandonNavigation("Navigation was not confirmed. Check the website before trying again.");
     if (previous?.readyState === WebSocket.OPEN) previous.send(JSON.stringify({ type: "unwatch" }));
     previous?.close();
     if (currentConnection.current) {
       setStatus("connecting");
       setTransportEpoch(epoch => epoch + 1);
     }
-  }, []);
+  }, [abandonNavigation]);
   const pauseBrowser = useCallback(() => {
     const alreadyPaused = paused.current;
     paused.current = true;
@@ -407,12 +447,14 @@ export function useWorkspace(onError: (message: string) => void) {
       setConnection(null);
       setInfo(null);
       setFrame(null);
+      abandonNavigation("", true);
+      setNavigationAvailable(false);
       clearControls();
       setRequests(demoRequests());
       setStatus("demo");
       setError("");
     },
-    [clearControls],
+    [clearControls, abandonNavigation],
   );
 
   const api = useCallback(
@@ -472,6 +514,7 @@ export function useWorkspace(onError: (message: string) => void) {
       if (stopped || currentConnection.current !== connection) return;
       transportWatchId.current = null;
       freshFrame.current = null;
+      expectedFrameEpoch.current = null;
       setStatus(attempts ? "reconnecting" : "connecting");
       current = new WebSocket(connection.url.replace(/^http/, "ws") + "/ws");
       socket.current = current;
@@ -507,24 +550,57 @@ export function useWorkspace(onError: (message: string) => void) {
         } else if (message.type === "requests") {
           currentRequests.current = message.requests;
           setRequests(message.requests);
+          if (navigationAttempt.current && !activeRequest(navigationAttempt.current.requestId, message.requests)) {
+            abandonNavigation();
+            freshFrame.current = null;
+          }
         }
-        else if (message.type === "controls" && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.inspectionId === inspectionAttempt.current) {
+        else if (message.type === "controls" && !navigationAttempt.current && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.inspectionId === inspectionAttempt.current) {
           inspectionAttempt.current = null;
           setPageControls({ requestId: message.requestId, snapshot: message.snapshot });
           setFocusedControl(null); setControlsBusy(false); setControlsError("");
-        } else if (message.type === "focused" && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
+        } else if (message.type === "focused" && !navigationAttempt.current && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
           focusAttempt.current = null;
           setFocusedControl(message); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
+        }
+        else if (message.type === "navigated" && receivingBrowser()) {
+          const pending = navigationAttempt.current;
+          if (!pending || pending.socket !== ws || pending.source !== connection ||
+            pending.requestId !== message.requestId || pending.navigationId !== message.navigationId ||
+            pending.result || typeof message.frameEpoch !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.frameEpoch) ||
+            message.frameEpoch === pending.previousEpoch || typeof message.ok !== "boolean") return;
+          pending.result = { frameEpoch: message.frameEpoch, ok: message.ok, message: message.message };
+          expectedFrameEpoch.current = message.frameEpoch;
         }
         else if (
           message.type === "frame" &&
           receivingBrowser() &&
           message.requestId === watchId.current
         ) {
-          freshFrame.current = { socket: ws, requestId: message.requestId };
+          const pending = navigationAttempt.current;
+          if (pending && (!pending.result || message.frameEpoch !== pending.result.frameEpoch)) return;
+          if (expectedFrameEpoch.current && message.frameEpoch !== expectedFrameEpoch.current) return;
+          if (pending) {
+            if (pending.timer) clearTimeout(pending.timer);
+            setNavigationError(pending.result?.ok ? "" : pending.result?.message || "The website could not be navigated. Check the page before trying again.");
+            navigationAttempt.current = null;
+            setNavigationBusy(false);
+          }
+          freshFrame.current = { socket: ws, requestId: message.requestId, navigationAvailable: message.navigationAvailable, frameEpoch: message.frameEpoch };
+          if (uncertainNavigation.current?.resumed && uncertainNavigation.current.source === connection && uncertainNavigation.current.requestId === message.requestId) {
+            uncertainNavigation.current = null;
+            setNavigationUncertain(false);
+          }
+          setNavigationAvailable(message.navigationAvailable === true);
           setFrame(message);
         }
         else if (message.type === "error" && !paused.current && visible()) {
+          if (navigationAttempt.current) {
+            pauseBrowser();
+            errorCallback.current("Navigation was not confirmed. Resume and check the website before trying again.");
+            return;
+          }
           // A fresh watch may be refused while an earlier accepted operation
           // drains, or another phone owns the browser. Keep explicit retry.
           if (transportWatchId.current && !freshFrame.current) pauseBrowser();
@@ -543,6 +619,11 @@ export function useWorkspace(onError: (message: string) => void) {
         if (!currentSocket()) return;
         transportWatchId.current = null;
         freshFrame.current = null;
+        if (navigationAttempt.current) {
+          paused.current = true;
+          setBrowserPaused(true);
+          abandonNavigation("Navigation was not confirmed. Resume and check the website before trying again.");
+        }
         setFrame(null);
         // Reconnecting to the same request does not confirm a failed/pending
         // browser focus. A full source/watch change resets the gate separately.
@@ -568,6 +649,8 @@ export function useWorkspace(onError: (message: string) => void) {
       currentRequests.current = [];
       setRequests([]);
       setInfo(null);
+      abandonNavigation("", true);
+      setNavigationAvailable(false);
     }
     setFrame(null);
     clearControls(sourceChanged);
@@ -598,7 +681,7 @@ export function useWorkspace(onError: (message: string) => void) {
       current?.close();
       if (socket.current === current) socket.current = null;
     };
-  }, [connection, api, invalidatePairing, clearControls, setFocusBlocked, transportEpoch, visible, activeRequest, pauseBrowser]);
+  }, [connection, api, invalidatePairing, clearControls, setFocusBlocked, transportEpoch, visible, activeRequest, pauseBrowser, abandonNavigation]);
 
   const connect = async (
     value: Connection,
@@ -670,6 +753,8 @@ export function useWorkspace(onError: (message: string) => void) {
     storeNotice("");
     setPairingNotice("");
     watchId.current = null;
+    abandonNavigation("", true);
+    setNavigationAvailable(false);
     setConnection(next);
   };
   const disconnect = () => {
@@ -681,6 +766,8 @@ export function useWorkspace(onError: (message: string) => void) {
     setConnection(null);
     setInfo(null);
     setFrame(null);
+    abandonNavigation("", true);
+    setNavigationAvailable(false);
     clearControls();
     setRequests(demoRequests());
     setStatus("demo");
@@ -703,12 +790,14 @@ export function useWorkspace(onError: (message: string) => void) {
     }
   };
   const send = useCallback((message: ClientMessage) => {
+    // Navigation must use its correlated intent/epoch lifecycle below.
+    if (message.type === "navigate") return false;
     const remoteAction = ["click", "scroll", "text", "key", "inspect-controls", "focus"].includes(message.type);
-    if (remoteAction && (paused.current || !visible() || !watchId.current ||
+    if (remoteAction && (navigationAttempt.current || paused.current || !visible() || !watchId.current ||
       transportWatchId.current !== watchId.current || !activeRequest(watchId.current) ||
       freshFrame.current?.socket !== socket.current || freshFrame.current?.requestId !== watchId.current ||
       socketSource.current !== currentConnection.current)) {
-      errorCallback.current(paused.current || !visible()
+      errorCallback.current(navigationAttempt.current ? "Wait for website navigation to finish." : paused.current || !visible()
         ? "Resume the browser before sending input."
         : "Wait for a fresh browser image before sending input.");
       return false;
@@ -738,6 +827,14 @@ export function useWorkspace(onError: (message: string) => void) {
   const watch = useCallback((requestId: string | null) => {
     if (watchId.current === requestId) return;
     watchId.current = requestId;
+    if (navigationAttempt.current) {
+      pauseBrowser();
+    } else abandonNavigation();
+    if (requestId && uncertainNavigation.current && uncertainNavigation.current.requestId !== requestId) {
+      uncertainNavigation.current = null;
+      setNavigationUncertain(false);
+    }
+    setNavigationAvailable(false);
     transportWatchId.current = null;
     freshFrame.current = null;
     setFrame(null);
@@ -751,11 +848,45 @@ export function useWorkspace(onError: (message: string) => void) {
         ),
       );
     }
-  }, [clearControls, visible, activeRequest]);
+  }, [clearControls, visible, activeRequest, abandonNavigation, pauseBrowser]);
+  const navigateBrowser = useCallback((direction: NavigationDirection) => {
+    const ws = socket.current;
+    const source = currentConnection.current;
+    const requestId = watchId.current;
+    if (!["back", "forward", "reload"].includes(direction) || navigationAttempt.current ||
+      paused.current || !visible() || !source || !requestId || !activeRequest(requestId) ||
+      !ws || ws.readyState !== WebSocket.OPEN || socketSource.current !== source ||
+      transportWatchId.current !== requestId || freshFrame.current?.socket !== ws ||
+      freshFrame.current?.requestId !== requestId || freshFrame.current?.navigationAvailable !== true ||
+      currentInfo.current?.navigationAvailable !== true) return false;
+    const pending: NavigationAttempt = { navigationId: crypto.randomUUID(), requestId, source, socket: ws, previousEpoch: freshFrame.current.frameEpoch };
+    navigationAttempt.current = pending;
+    freshFrame.current = null;
+    expectedFrameEpoch.current = null;
+    setNavigationBusy(true);
+    setNavigationError("");
+    setFrame(null);
+    clearControls(false);
+    setFocusBlocked(true);
+    pending.timer = setTimeout(() => {
+      if (navigationAttempt.current !== pending) return;
+      pauseBrowser();
+      errorCallback.current("Navigation was not confirmed. Resume and check the website before trying again.");
+    }, 15000);
+    try {
+      ws.send(JSON.stringify({ type: "navigate", direction, navigationId: pending.navigationId }));
+      return true;
+    } catch {
+      pauseBrowser();
+      return false;
+    }
+  }, [visible, activeRequest, clearControls, setFocusBlocked, pauseBrowser]);
   const resumeBrowser = useCallback((requestId: string) => {
     if (!paused.current || !visible() || !currentConnection.current ||
       watchId.current !== requestId || !activeRequest(requestId)) return false;
     paused.current = false;
+    if (uncertainNavigation.current?.source === currentConnection.current && uncertainNavigation.current.requestId === requestId)
+      uncertainNavigation.current.resumed = true;
     setBrowserPaused(false);
     setFrame(null);
     clearControls(false);
@@ -766,14 +897,14 @@ export function useWorkspace(onError: (message: string) => void) {
     return true;
   }, [visible, activeRequest, clearControls, setFocusBlocked, retireTransport]);
   const inspectControls = () => {
-    if (paused.current || !visible() || freshFrame.current?.socket !== socket.current) return;
+    if (navigationAttempt.current || paused.current || !visible() || freshFrame.current?.socket !== socket.current) return;
     inspectionAttempt.current = crypto.randomUUID(); focusAttempt.current = null;
     setPageControls(null); setFocusedControl(null); setFocusBusy(false); setControlsError("");
     const sent = send({ type: "inspect-controls", inspectionId: inspectionAttempt.current, includeFrames: true });
     setControlsBusy(sent);
   };
   const focusControl = (snapshotId: string, controlId: string) => {
-    if (paused.current || !visible() || freshFrame.current?.socket !== socket.current) return;
+    if (navigationAttempt.current || paused.current || !visible() || freshFrame.current?.socket !== socket.current) return;
     focusAttempt.current = { snapshotId, controlId }; setFocusBlocked(true);
     setFocusedControl(null); setControlsError("");
     setFocusBusy(send({ type: "focus", snapshotId, controlId }));
@@ -791,6 +922,12 @@ export function useWorkspace(onError: (message: string) => void) {
     requestId: string,
     actionName: "approve" | "deny" | "complete",
   ) => {
+    if (actionName === "complete") {
+      if (navigationAttempt.current?.requestId === requestId)
+        throw new Error("Wait for website navigation to finish before handing back.");
+      if (uncertainNavigation.current?.source === currentConnection.current && uncertainNavigation.current.requestId === requestId)
+        throw new Error("Resume and check the website before handing back.");
+    }
     if (!connection) {
       setRequests((previous) =>
         previous.map((request) =>
@@ -856,6 +993,7 @@ export function useWorkspace(onError: (message: string) => void) {
     info,
     status,
     frame,
+    navigationBusy, navigationError, navigationAvailable, navigationUncertain, navigateBrowser,
     browserPaused, browserVisible, resumeBrowser,
     pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,
     error,

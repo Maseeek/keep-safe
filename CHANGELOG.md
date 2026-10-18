@@ -2,6 +2,14 @@
 
 ## 18 October 2026
 
+### Website navigation
+
+- Add website Back, Forward and Reload to managed browser sessions, with named mobile buttons and capability checks for older bridges and attached browsers.
+- Discard local drafts and invalidate old images, controls and focus before navigation. Require a matching result, a fresh image and renewed field confirmation before input resumes.
+- Clear current password fields before departure, block document form resubmission and retain actual browser work through timeout recovery and explicit handback.
+- Make concurrent browser-close calls wait for the same cleanup, including navigation failure overlapping expiry.
+- Keep attached external browsers on their existing website controls; no complete browser-history sanitization or physical-device evidence is claimed.
+
 ### Remote input verification
 
 - Wait for exact click and scroll effects in the remote browser before checking their result. Keep accepted-message counters separate from completion.

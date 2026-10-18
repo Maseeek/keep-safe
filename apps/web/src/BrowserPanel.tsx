@@ -16,6 +16,7 @@ import {
   LockKeyhole,
   MousePointer2,
   Pause,
+  RotateCw,
   ShieldCheck,
   TriangleAlert,
   X,
@@ -115,7 +116,9 @@ export function BrowserPanel({
     workspace.frame?.requestId === request.id ? workspace.frame : null;
   const canInput =
     active && workspace.status === "connected" && !!liveFrame && !expired && !workspace.focusBusy &&
-    !workspace.browserPaused && workspace.browserVisible;
+    !workspace.browserPaused && workspace.browserVisible && !workspace.navigationBusy;
+  const canNavigate = active && !expired && !!liveFrame && workspace.status === "connected" &&
+    !workspace.browserPaused && workspace.browserVisible && !workspace.navigationBusy;
   const keyInputBlocked = !canInput || workspace.focusBusy || workspace.focusBlocked;
   const moreKeysId = `remote-more-keys-${request.id}`;
   const address = browserAddress(liveFrame?.url ?? request.url);
@@ -143,7 +146,7 @@ export function BrowserPanel({
     setText("");
     setShowText(false);
   }, []);
-  useLayoutEffect(clearLocalInput, [clearLocalInput, request.id, workspace.connection, liveFrame?.url]);
+  useLayoutEffect(clearLocalInput, [clearLocalInput, request.id, workspace.connection, liveFrame?.url, workspace.navigationBusy]);
   useEffect(() => {
     const clearDraft = () => {
       clearLocalInput();
@@ -188,6 +191,10 @@ export function BrowserPanel({
     setText("");
     workspace.send({ type: "text", text: value });
   };
+  const navigate = (direction: "back" | "forward" | "reload") => {
+    clearLocalInput();
+    workspace.navigateBrowser(direction);
+  };
 
   return (
     <section
@@ -207,6 +214,8 @@ export function BrowserPanel({
           <span />
           {active && !isDemo && workspace.browserPaused
             ? "View paused"
+            : active && workspace.navigationBusy
+              ? "Loading website"
             : active
             ? "You\u2019re in control"
             : finished || expired
@@ -267,13 +276,23 @@ export function BrowserPanel({
             <span>{address.label}</span>
           </button>
           <span className="frame-mode">
-            {isDemo ? "DEMO" : active && workspace.browserPaused ? "PAUSED" : active ? "LIVE" : "PRIVATE"}
+            {isDemo ? "DEMO" : active && workspace.browserPaused ? "PAUSED" : active && workspace.navigationBusy ? "LOADING" : active ? "LIVE" : "PRIVATE"}
           </span>
         </div>
         {showOrigin ? (
           <div className="full-browser-origin" id="full-browser-origin">
             <strong>{address.label}</strong>
             <span>{address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
+          </div>
+        ) : null}
+        {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && workspace.navigationAvailable ? (
+          <div className="website-navigation" role="group" aria-label="Website navigation">
+            <span>Website navigation</span>
+            <div>
+              <button aria-label="Back in the website" disabled={!canNavigate} onClick={() => navigate("back")}><ArrowLeft size={16} aria-hidden="true" /> Back</button>
+              <button aria-label="Forward in the website" disabled={!canNavigate} onClick={() => navigate("forward")}><ArrowRight size={16} aria-hidden="true" /> Forward</button>
+              <button aria-label="Reload website" disabled={!canNavigate} onClick={() => navigate("reload")}><RotateCw size={15} aria-hidden="true" /> Reload</button>
+            </div>
           </div>
         ) : null}
         {finished || expired ? (
@@ -374,6 +393,12 @@ export function BrowserPanel({
               <Eye size={16} aria-hidden="true" /> Resume browser
             </button>
           </div>
+        ) : workspace.navigationBusy ? (
+          <div className="browser-state" role="status">
+            <LoaderCircle className="spin" size={28} aria-hidden="true" />
+            <h3>Loading website…</h3>
+            <p>Waiting for the browser to confirm navigation and show a fresh image. Then choose a field again before typing.</p>
+          </div>
         ) : liveFrame ? (
           <div className="remote-screen">
             <RemoteSurface frame={liveFrame} enabled={canInput} controlIdentity={workspace.connection}
@@ -402,8 +427,15 @@ export function BrowserPanel({
           </div>
         )}
       </div>
+      {active && !isDemo && workspace.navigationError ? <p className="website-navigation-error" role="alert">{workspace.navigationError}</p> : null}
+      {active && !isDemo && workspace.navigationUncertain ? <p className="website-navigation-hint" role="status">Resume and check the website before handing back.</p> : null}
       {active && !isDemo && !expired && !workspace.browserPaused ? (
         <div className="remote-controls">
+          {!workspace.navigationBusy && liveFrame && (!workspace.info?.navigationAvailable || !workspace.navigationAvailable) ? (
+            <p className="website-navigation-hint">{workspace.info?.navigationAvailable
+              ? "Use the website’s own links and buttons in this browser."
+              : "Update the bridge on your computer for website Back, Forward and Reload."}</p>
+          ) : null}
           {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} /> : null}
           <div className="remote-toolbar">
             <div className="remote-toolbar-actions">
@@ -551,6 +583,8 @@ export function BrowserPanel({
             }
             disabled={
               busy ||
+              (active && workspace.navigationBusy) ||
+              (active && workspace.navigationUncertain) ||
               (!isDemo && workspace.status !== "connected") ||
               (active && !isDemo && !liveFrame && !workspace.browserPaused)
             }

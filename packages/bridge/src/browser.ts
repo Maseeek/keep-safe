@@ -1,22 +1,30 @@
 import { access } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { chromium, type Browser, type BrowserContext, type CDPSession, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type CDPSession, type Page, type Route } from 'playwright';
 import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
 import { createPageControls } from './page-controls';
-import type { PageControlsSnapshot } from '../../shared/src/protocol';
+import type { NavigationDirection, PageControlsSnapshot } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
 
-export interface BrowserFrame { data: string; width: number; height: number; url: string }
+export interface BrowserFrame { data: string; width: number; height: number; url: string; navigationAvailable?: boolean }
 export interface BrowserSession {
   readonly cdpUrl?: string;
   readonly pageUrl?: string;
   frame(): Promise<BrowserFrame>;
   input(input: { type: string; [key: string]: unknown }): Promise<void>;
   inspectControls?(options?: { includeFrames?: boolean }): Promise<PageControlsSnapshot>;
+  navigate?(direction: NavigationDirection): Promise<void>;
   prepareHandoff?(): Promise<void>;
   close(): Promise<void>;
 }
 export type BrowserFactory = (input: { url: string; cdpUrl?: string; allowLocalUrls: boolean }) => Promise<BrowserSession>;
+
+export class BrowserNavigationError extends Error {
+  constructor(readonly reason: 'form' | 'timeout' | 'history' | 'changed' | 'failed') {
+    super('The browser navigation did not complete.');
+  }
+}
+export class BrowserFrameChangedError extends Error {}
 
 export function validateCdpUrl(raw: unknown): string | undefined {
   if (raw === undefined) return undefined;
@@ -171,6 +179,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
   const pageStack: Page[] = [page];
   const sessionPages = new Set<Page>([page]);
   let closed = false;
+  let closingSession: Promise<void> | undefined;
   let popupGeneration = 0;
   let documentGeneration = 0;
   // Playwright reports a new page only after its first non-initial navigation.
@@ -259,23 +268,26 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
     // intent merely because its own page closed before the popup became public.
     if ([...popupMonitors.values()].some(monitor => monitor.pending > 0)) throw new Error('Password fields could not be cleared before handoff.');
   };
-  const closeSession = async () => {
-    if (closed) return;
+  const closeSession = () => {
+    if (closingSession) return closingSession;
     closed = true;
-    for (const remove of listeners.splice(0)) remove();
-    for (const monitor of popupMonitors.values()) monitor.session?.off('Page.windowOpen', monitor.opened);
-    await pageControls?.clear();
-    // Closing a connected Playwright browser disconnects; it does not terminate the agent's browser.
-    if (owned) await context.close().catch(() => {});
-    await browser.close().catch(() => {});
-    // Disconnect first so a busy renderer cannot leave monitor setup queued
-    // forever while cleanup is waiting for that same renderer to respond.
-    for (const monitor of popupMonitors.values()) {
-      await monitor.ready;
-      await monitor.session?.detach().catch(() => {});
-    }
-    popupMonitors.clear();
-    await proxy?.close();
+    closingSession = (async () => {
+      for (const remove of listeners.splice(0)) remove();
+      for (const monitor of popupMonitors.values()) monitor.session?.off('Page.windowOpen', monitor.opened);
+      await pageControls?.clear();
+      // Closing a connected Playwright browser disconnects; it does not terminate the agent's browser.
+      if (owned) await context.close().catch(() => {});
+      await browser.close().catch(() => {});
+      // Disconnect first so a busy renderer cannot leave monitor setup queued
+      // forever while cleanup is waiting for that same renderer to respond.
+      for (const monitor of popupMonitors.values()) {
+        await monitor.ready;
+        await monitor.session?.detach().catch(() => {});
+      }
+      popupMonitors.clear();
+      await proxy?.close();
+    })();
+    return closingSession;
   };
   instrument(page);
   pageControls = createPageControls(() => { selectActivePage(); return page; });
@@ -288,16 +300,116 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
       await initialPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     } catch (error) { await closeSession(); throw error; }
   }
+  const navigate = async (direction: NavigationDirection) => {
+    selectActivePage();
+    const target = page;
+    if (!owned || closed || target.isClosed()) throw new BrowserNavigationError('failed');
+    const source = target.url();
+    const initialPopupGeneration = popupGeneration;
+    const monitor = await ensurePopupMonitor(target);
+    const session = monitor.session!;
+    let posted = false; let timedOut = false; let loading = false; let started = false; let issued = false;
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    let stopWork: Promise<unknown> | undefined;
+    const stop = () => { stopWork ??= session.send('Page.stopLoading'); return stopWork; };
+    const guard = async (route: Route) => {
+      const request = route.request();
+      if (request.isNavigationRequest() && !['GET', 'HEAD'].includes(request.method())) {
+        posted = true; await route.abort('blockedbyclient');
+      } else await route.fallback();
+    };
+    let mainFrameId = '';
+    let preparationIntent = false;
+    const requested = (event: { frameId: string }) => { if (!issued && event.frameId === mainFrameId) preparationIntent = true; };
+    const began = (event: { frameId: string }) => { if (event.frameId === mainFrameId) { loading = true; if (issued) started = true; } };
+    const ended = (event: { frameId: string }) => { if (event.frameId === mainFrameId) { loading = false; if (issued && started) finish(); } };
+    const within = (event: { frameId: string }) => { if (issued && direction !== 'reload' && event.frameId === mainFrameId) finish(); };
+    const timer = setTimeout(() => { timedOut = true; void stop().catch(() => {}); finish(); }, 10_000);
+    const history = async () => {
+      // Only numeric entry identities survive this private protocol response.
+      // No URL, title, body or browser history is returned to the phone.
+      const result = await session.send('Page.getNavigationHistory');
+      if (result.entries.length > 256) throw new BrowserNavigationError('history');
+      const offset = direction === 'back' ? -1 : direction === 'forward' ? 1 : 0;
+      return { current: result.entries[result.currentIndex]?.id, target: result.entries[result.currentIndex + offset]?.id, length: result.entries.length };
+    };
+    try {
+      await context.route('**/*', guard);
+      await pageControls!.clear();
+      // Stop any old loading request before arming completion for this action.
+      await session.send('Page.stopLoading');
+      await session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+      const tree = await session.send('Page.getFrameTree');
+      mainFrameId = tree.frameTree.frame.id;
+      const loader = tree.frameTree.frame.loaderId;
+      session.on('Page.frameRequestedNavigation', requested);
+      session.on('Page.frameStartedLoading', began);
+      session.on('Page.frameStoppedLoading', ended);
+      session.on('Page.navigatedWithinDocument', within);
+      const before = await history();
+      if (before.target === undefined) throw new BrowserNavigationError('history');
+      const generation = documentGeneration;
+      await clearPagePasswords(target, Date.now() + 3000);
+      await session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+      const after = await history();
+      const latest = await session.send('Page.getFrameTree');
+      selectActivePage();
+      if (timedOut) throw new BrowserNavigationError('timeout');
+      if (posted) throw new BrowserNavigationError('form');
+      if (closed || target.isClosed() || page !== target || target.url() !== source ||
+          popupGeneration !== initialPopupGeneration || documentGeneration !== generation || preparationIntent ||
+          latest.frameTree.frame.loaderId !== loader || before.current !== after.current || before.target !== after.target || before.length !== after.length)
+        throw new BrowserNavigationError('changed');
+      issued = true;
+      // Native history helpers re-read history after password clearing. Use the
+      // captured browser-owned numeric entry instead of recomputing a target.
+      if (direction === 'reload') await session.send('Page.reload', { loaderId: loader });
+      else await session.send('Page.navigateToHistoryEntry', { entryId: before.target });
+      await finished;
+      if (timedOut) await stop();
+      await session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+      if (loading) { await closeSession(); throw new BrowserNavigationError('failed'); }
+      selectActivePage();
+      if (timedOut) throw new BrowserNavigationError('timeout');
+      if (posted) throw new BrowserNavigationError('form');
+      if (direction !== 'reload' && (await history()).current !== before.target) throw new BrowserNavigationError('changed');
+      if (closed || target.isClosed() || target !== page || popupGeneration !== initialPopupGeneration) throw new BrowserNavigationError('changed');
+    } catch (error) {
+      // No wait is abandoned. Stop is browser-owned cancellation; the renderer
+      // barrier and observed loading state must settle before method-guard removal.
+      if (!closed && !target.isClosed()) {
+        try {
+          await stop();
+          await session.send('Runtime.evaluate', { expression: 'void 0', returnByValue: true });
+          if (loading) await closeSession();
+        } catch { await closeSession(); }
+      }
+      throw error instanceof BrowserNavigationError ? error : new BrowserNavigationError(posted ? 'form' : timedOut ? 'timeout' : 'failed');
+    } finally {
+      clearTimeout(timer);
+      if (stopWork) await stopWork.catch(() => {});
+      session.off('Page.frameRequestedNavigation', requested);
+      session.off('Page.frameStartedLoading', began);
+      session.off('Page.frameStoppedLoading', ended);
+      session.off('Page.navigatedWithinDocument', within);
+      await pageControls!.clear();
+      await context.unroute('**/*', guard).catch(() => {});
+    }
+  };
   return {
     cdpUrl,
     get pageUrl() { selectActivePage(); return page.url(); },
     async frame() {
       selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
-      await ensureActivePageMonitor();
-      const image = await page.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, animations: 'disabled' });
-      const size = page.viewportSize() ?? await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-      return { data: image.toString('base64'), ...size, url: page.url() };
+      const target = page; const source = target.url(); const generation = documentGeneration; const popups = popupGeneration;
+      await ensurePopupMonitor(target);
+      const image = await target.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, animations: 'disabled' });
+      const size = target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      selectActivePage();
+      if (target !== page || target.isClosed() || target.url() !== source || generation !== documentGeneration || popups !== popupGeneration) throw new BrowserFrameChangedError();
+      return { data: image.toString('base64'), ...size, url: source, navigationAvailable: owned };
     },
     async input(input) {
       selectActivePage();
@@ -330,6 +442,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
       await ensureActivePageMonitor();
       return pageControls!.inspect(options);
     },
+    ...(owned ? { navigate } : {}),
     async prepareHandoff() {
       selectActivePage();
       await pageControls!.clear();

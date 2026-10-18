@@ -35,5 +35,6 @@
 - [x] Mobile keyboard panel for native checkbox/radio/select activation, Escape and navigation keys, with failed-focus protection across refresh/reconnect. Real Chromium phone-sized login and resume checks pass; physical keyboard/assistive-technology evidence remains open.
 - [x] Direct mobile swipe scrolling with positioned nested-area input, tap/gesture separation and lifecycle cancellation. Chromium touch-emulated login/resume is verified; physical-device gesture and pinch behavior remain open.
 - [x] Background browser pause with draft clearing, explicit resume, renewed focus and safe controller release. Controlled lifecycle signals with real sockets/Chromium pass; physical-phone suspension and app-switcher behavior remain unverified.
+- [x] Managed-browser Back, Forward and Reload, with document form-resubmission blocking, draft clearing, fresh-image/focus requirements and explicit recovery after interrupted navigation. Attached browsers retain website controls; broader widgets and physical accessibility remain open.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

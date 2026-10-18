@@ -32,7 +32,10 @@ export interface BridgeInfo {
   vapidPublicKey?: string;
   historyRetentionHours?: number;
   pageControlsAvailable?: boolean;
+  navigationAvailable?: boolean;
 }
+
+export type NavigationDirection = 'back' | 'forward' | 'reload';
 
 export interface PageControl {
   id: string;
@@ -80,6 +83,7 @@ export type ClientMessage =
   | { type: 'unwatch' }
   | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
   | { type: 'focus'; snapshotId: string; controlId: string }
+  | { type: 'navigate'; direction: NavigationDirection; navigationId: string }
   | { type: 'click'; x: number; y: number }
   | { type: 'scroll'; deltaX: number; deltaY: number; x?: number; y?: number }
   | { type: 'text'; text: string }
@@ -88,7 +92,8 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'ready'; info: BridgeInfo; requests: LoginRequest[] }
   | { type: 'requests'; requests: LoginRequest[] }
-  | { type: 'frame'; requestId: string; data: string; width: number; height: number; url: string }
+  | { type: 'frame'; requestId: string; data: string; width: number; height: number; url: string; frameEpoch?: string; navigationAvailable?: boolean }
+  | { type: 'navigated'; requestId: string; navigationId: string; frameEpoch: string; ok: boolean; message?: string }
   | { type: 'controls'; requestId: string; inspectionId: string; snapshot: PageControlsSnapshot }
   | { type: 'focused'; requestId: string; snapshotId: string; controlId: string }
   | { type: 'error'; message: string };

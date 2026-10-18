@@ -15,6 +15,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 - Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
 - Live browser streaming with taps, direct touch swipes, scrolling, text entry, and keyboard controls.
 - Background pause with discarded drafts and an explicit return to live control.
+- Website Back, Forward and Reload in managed browser sessions, with fresh-image and renewed-focus checks.
 - Optional page-controls list with names, roles, password-field markers and confirmed remote focus.
 - Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
@@ -150,6 +151,8 @@ Leaving a request on mobile stops its live stream and discards pending scroll in
 
 When the browser reports that Keep Safe is hidden or leaving the page, viewing and input pause, the control connection closes, and unsent text plus its reveal setting are cleared. The website may continue running on your computer; the request keeps its original expiry and the agent still waits for handback. Returning does not restart the stream. Choose **Resume browser**, wait for a new image, then confirm a field or tap/Tab before typing. **Done, hand back** remains an explicit choice while paused once the computer is connected. Update the bridge for the closed-connection queue fix. Mobile suspension and app-switcher snapshots still require physical-device testing; timely lifecycle events are browser-dependent.
 
+In a managed browser session, **Website navigation** provides **Back**, **Forward** and **Reload**. These control the website shown in the image. Navigation discards unsent text and its reveal setting, waits for confirmation and a fresh image, then requires a field selection or intentional browser tap/Tab before typing. Current password fields are cleared before leaving the page. Navigation that would resend a document form submission is blocked; if navigation cannot be confirmed, the app pauses for an explicit resume and page check. It never retries the navigation automatically. Update the local bridge to enable these controls. Attached external browsers use the website's own links and buttons because their existing history, cache and service workers are outside this safeguard.
+
 Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Open **More keys** for Space, Escape, Shift+Tab, arrow keys, Home/End, Page Up/Down, Delete and Select all. These send keyboard commands to the selected remote control; the separate scroll buttons move the page. Session status messages appear inside the mobile request so they do not cover the controls.
 
 Swipe inside the live browser image to scroll the website; swipe outside it to move Keep Safe. Short taps click the website. Cancelled gestures and multi-finger input do not become remote taps. Browser pinch zoom remains separate from remote scrolling. Update the computer bridge for scrolling at the touched position inside nested panels or embedded pages; older bridges retain their previous wheel position. Automated touch checks use Chromium emulation; physical phones and screen readers still need testing.
@@ -167,7 +170,7 @@ Before handback, the bridge clears password inputs in document and open componen
 - Requests and activity stay in memory. Eligible finished records clear after 24 hours, earlier manual/capacity cleanup, or bridge restart; pending browser cleanup can postpone deletion.
 - Agents must pause browser input while the owner is in control. Existing debugging clients cannot be forcibly stopped by Keep Safe.
 - Phone passkeys, biometrics, hardware security keys, native password-manager integration, and every third-party login provider are not universally supported or verified.
-- The webpage image has an optional structured control navigator, not a complete accessibility tree. Names are approximations from site-provided labels; unsupported frames, closed shadow roots and complex custom widgets may be omitted. Native controls in open roots and supported embedded pages are bounded by scan limits. A website can react to normal focus events. Physical screen-reader use has not been verified, and full remote webpage navigation remains unfinished.
+- The webpage image has an optional structured control navigator, not a complete accessibility tree. Names are approximations from site-provided labels; unsupported frames, closed shadow roots and complex custom widgets may be omitted. Native controls in open roots and supported embedded pages are bounded by scan limits. A website can react to normal focus events. Physical screen-reader use and broader custom-widget navigation remain unfinished.
 - There is no hosted multi-user account service or billing yet. Future team/managed-relay plans are in [product direction](docs/product.md).
 
 ## Project records
