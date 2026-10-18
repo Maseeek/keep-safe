@@ -188,3 +188,23 @@ it('keeps the owner check direct when environment proxy routing is enabled', asy
   for (const secret of [config.ownerToken, config.agentToken, config.vapid.privateKey]) expect((doctor.stdout + doctor.stderr).includes(secret)).toBe(false);
   await daemon.stop();
 });
+
+it('defaults --app-url to the hosted production origin when --public-url is supplied', async () => {
+  const path = await directory();
+  await loadConfig(path);
+  const selectedPort = await port();
+  const localUrl = `http://127.0.0.1:${selectedPort}`;
+  const daemon = launch(['--config-dir', path, '--port', String(selectedPort), '--public-url', 'https://tunnel.example.com', '--no-static']);
+  await expect.poll(() => healthy(localUrl), { timeout: 5000 }).toBe(true);
+  const preflight = await fetch(localUrl + '/api/requests', {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://keep-safe-eight.vercel.app',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'Authorization',
+    },
+  });
+  expect(preflight.status).toBe(204);
+  expect(preflight.headers.get('access-control-allow-origin')).toBe('https://keep-safe-eight.vercel.app');
+  await daemon.stop();
+});

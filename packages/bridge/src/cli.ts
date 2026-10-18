@@ -79,7 +79,7 @@ async function main() {
   }
   const selectedPublicUrl = values.get('--public-url') ?? process.env.KEEP_SAFE_PUBLIC_URL;
   const publicUrl = connectionOrigin(selectedPublicUrl ?? `http://127.0.0.1:${port}`);
-  const appUrl = connectionOrigin(values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? (command === 'setup' ? hostedAppOrigin : publicUrl));
+  const appUrl = connectionOrigin(values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? (command === 'setup' || selectedPublicUrl ? hostedAppOrigin : publicUrl));
   if (command === 'setup') {
     const report = connectionSetup({ port, configDirectory, appUrl, publicUrl: selectedPublicUrl ? publicUrl : undefined });
     if (flags.has('--json')) console.log(JSON.stringify(report, null, 2));
