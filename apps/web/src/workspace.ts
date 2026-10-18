@@ -305,6 +305,8 @@ export function useWorkspace(onError: (message: string) => void) {
   const [requests, setRequests] = useState<LoginRequest[]>(() =>
     initial.connection ? [] : demoRequests(),
   );
+  const currentRequests = useRef(requests);
+  currentRequests.current = requests;
   const [info, setInfo] = useState<BridgeInfo | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>(
     initial.connection ? "connecting" : "demo",
@@ -323,7 +325,16 @@ export function useWorkspace(onError: (message: string) => void) {
   const [controlsError, setControlsError] = useState("");
   const [error, setError] = useState("");
   const socket = useRef<WebSocket | null>(null);
+  const socketSource = useRef<Connection | null>(null);
+  const [transportEpoch, setTransportEpoch] = useState(0);
+  const transportSource = useRef<Connection | null>(null);
   const watchId = useRef<string | null>(null);
+  const transportWatchId = useRef<string | null>(null);
+  const freshFrame = useRef<{ socket: WebSocket; requestId: string } | null>(null);
+  const [browserVisible, setBrowserVisible] = useState(() => document.visibilityState !== "hidden");
+  const pageVisible = useRef(browserVisible);
+  const [browserPaused, setBrowserPaused] = useState(() => !browserVisible);
+  const paused = useRef(browserPaused);
   const inspectionAttempt = useRef<string | null>(null);
   const focusAttempt = useRef<{ snapshotId: string; controlId: string } | null>(null);
   const clearControls = useCallback((resetFocus = true) => {
@@ -333,6 +344,57 @@ export function useWorkspace(onError: (message: string) => void) {
   }, [setFocusBlocked]);
   const errorCallback = useRef(onError);
   errorCallback.current = onError;
+  const activeRequest = useCallback((requestId: string, list = currentRequests.current) =>
+    list.some(request => request.id === requestId && ["approved", "active"].includes(request.status) &&
+      Date.parse(request.expiresAt) > Date.now()), []);
+  const visible = useCallback(() => pageVisible.current && document.visibilityState !== "hidden", []);
+  const retireTransport = useCallback(() => {
+    const previous = socket.current;
+    // Invalidate callbacks synchronously, before React effect cleanup or close.
+    socket.current = null;
+    socketSource.current = null;
+    transportWatchId.current = null;
+    freshFrame.current = null;
+    if (previous?.readyState === WebSocket.OPEN) previous.send(JSON.stringify({ type: "unwatch" }));
+    previous?.close();
+    if (currentConnection.current) {
+      setStatus("connecting");
+      setTransportEpoch(epoch => epoch + 1);
+    }
+  }, []);
+  const pauseBrowser = useCallback(() => {
+    const alreadyPaused = paused.current;
+    paused.current = true;
+    setBrowserPaused(true);
+    setFrame(null);
+    clearControls(false);
+    freshFrame.current = null;
+    transportWatchId.current = null;
+    if (!alreadyPaused) retireTransport();
+  }, [clearControls, retireTransport]);
+  useEffect(() => {
+    const hide = () => {
+      pageVisible.current = false;
+      setBrowserVisible(false);
+      pauseBrowser();
+    };
+    const show = () => {
+      pageVisible.current = document.visibilityState !== "hidden";
+      setBrowserVisible(pageVisible.current);
+      if (!pageVisible.current) pauseBrowser();
+      // Becoming visible never grants browser control. Resume is explicit.
+    };
+    const visibility = () => document.visibilityState === "hidden" ? hide() : show();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pagehide", hide);
+    window.addEventListener("pageshow", show);
+    visibility();
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pagehide", hide);
+      window.removeEventListener("pageshow", show);
+    };
+  }, [pauseBrowser]);
 
   const invalidatePairing = useCallback(
     (activeConnection: Connection | null, message: string) => {
@@ -399,21 +461,30 @@ export function useWorkspace(onError: (message: string) => void) {
   }, [connection, invalidatePairing]);
 
   useEffect(() => {
-    if (!connection) return;
+    if (!connection) { transportSource.current = null; return; }
+    const sourceChanged = transportSource.current !== connection;
+    transportSource.current = connection;
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let current: WebSocket | undefined;
     let attempts = 0;
     const open = () => {
-      if (stopped) return;
+      if (stopped || currentConnection.current !== connection) return;
+      transportWatchId.current = null;
+      freshFrame.current = null;
       setStatus(attempts ? "reconnecting" : "connecting");
       current = new WebSocket(connection.url.replace(/^http/, "ws") + "/ws");
       socket.current = current;
+      socketSource.current = connection;
       const ws = current;
-      ws.onopen = () =>
-        ws.send(JSON.stringify({ type: "auth", token: connection.token }));
+      const currentSocket = () => !stopped && socket.current === ws && currentConnection.current === connection;
+      const receivingBrowser = () => currentSocket() && !paused.current && visible() &&
+        !!watchId.current && watchId.current === transportWatchId.current && activeRequest(watchId.current);
+      ws.onopen = () => {
+        if (currentSocket()) ws.send(JSON.stringify({ type: "auth", token: connection.token }));
+      };
       ws.onmessage = (event) => {
-        if (stopped) return;
+        if (!currentSocket()) return;
         let message: ServerMessage;
         try {
           message = JSON.parse(String(event.data)) as ServerMessage;
@@ -425,39 +496,53 @@ export function useWorkspace(onError: (message: string) => void) {
           setStatus("connected");
           setError("");
           setInfo(message.info);
+          currentRequests.current = message.requests;
           setRequests(message.requests);
-          if (watchId.current)
+          if (watchId.current && !paused.current && visible() && activeRequest(watchId.current, message.requests)) {
+            transportWatchId.current = watchId.current;
             ws.send(
               JSON.stringify({ type: "watch", requestId: watchId.current }),
             );
-        } else if (message.type === "requests") setRequests(message.requests);
-        else if (message.type === "controls" && message.requestId === watchId.current && message.inspectionId === inspectionAttempt.current) {
+          }
+        } else if (message.type === "requests") {
+          currentRequests.current = message.requests;
+          setRequests(message.requests);
+        }
+        else if (message.type === "controls" && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.inspectionId === inspectionAttempt.current) {
           inspectionAttempt.current = null;
           setPageControls({ requestId: message.requestId, snapshot: message.snapshot });
           setFocusedControl(null); setControlsBusy(false); setControlsError("");
-        } else if (message.type === "focused" && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
+        } else if (message.type === "focused" && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
           focusAttempt.current = null;
           setFocusedControl(message); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
         }
         else if (
           message.type === "frame" &&
+          receivingBrowser() &&
           message.requestId === watchId.current
-        )
+        ) {
+          freshFrame.current = { socket: ws, requestId: message.requestId };
           setFrame(message);
-        else if (message.type === "error") {
+        }
+        else if (message.type === "error" && !paused.current && visible()) {
+          // A fresh watch may be refused while an earlier accepted operation
+          // drains, or another phone owns the browser. Keep explicit retry.
+          if (transportWatchId.current && !freshFrame.current) pauseBrowser();
           inspectionAttempt.current = null; focusAttempt.current = null;
           setControlsBusy(false); setFocusBusy(false); setControlsError(message.message);
           errorCallback.current(message.message);
         }
       };
       ws.onerror = () => {
-        if (stopped) return;
+        if (!currentSocket()) return;
         setError(
           "Cannot reach your computer. Check that the bridge and your secure tunnel are running.",
         );
       };
       ws.onclose = (event) => {
-        if (stopped) return;
+        if (!currentSocket()) return;
+        transportWatchId.current = null;
+        freshFrame.current = null;
         setFrame(null);
         // Reconnecting to the same request does not confirm a failed/pending
         // browser focus. A full source/watch change resets the gate separately.
@@ -479,24 +564,27 @@ export function useWorkspace(onError: (message: string) => void) {
         );
       };
     };
-    setRequests([]);
-    setInfo(null);
+    if (sourceChanged) {
+      currentRequests.current = [];
+      setRequests([]);
+      setInfo(null);
+    }
     setFrame(null);
-    clearControls();
+    clearControls(sourceChanged);
     setError("");
     // HTTP verifies pairing too, and provides a useful error when a socket is blocked.
-    Promise.all([
+    if (sourceChanged) void Promise.all([
       api<BridgeInfo>("/api/info"),
       api<LoginRequest[] | { requests: LoginRequest[] }>("/api/requests"),
     ])
       .then(([bridgeInfo, result]) => {
-        if (!stopped) {
+        if (!stopped && currentConnection.current === connection) {
           setInfo(bridgeInfo);
           setRequests(Array.isArray(result) ? result : result.requests);
         }
       })
       .catch((reason: unknown) => {
-        if (!stopped)
+        if (!stopped && currentConnection.current === connection)
           setError(
             reason instanceof Error
               ? reason.message
@@ -508,9 +596,9 @@ export function useWorkspace(onError: (message: string) => void) {
       stopped = true;
       clearTimeout(retry);
       current?.close();
-      socket.current = null;
+      if (socket.current === current) socket.current = null;
     };
-  }, [connection, api, invalidatePairing, clearControls, setFocusBlocked]);
+  }, [connection, api, invalidatePairing, clearControls, setFocusBlocked, transportEpoch, visible, activeRequest, pauseBrowser]);
 
   const connect = async (
     value: Connection,
@@ -615,6 +703,16 @@ export function useWorkspace(onError: (message: string) => void) {
     }
   };
   const send = useCallback((message: ClientMessage) => {
+    const remoteAction = ["click", "scroll", "text", "key", "inspect-controls", "focus"].includes(message.type);
+    if (remoteAction && (paused.current || !visible() || !watchId.current ||
+      transportWatchId.current !== watchId.current || !activeRequest(watchId.current) ||
+      freshFrame.current?.socket !== socket.current || freshFrame.current?.requestId !== watchId.current ||
+      socketSource.current !== currentConnection.current)) {
+      errorCallback.current(paused.current || !visible()
+        ? "Resume the browser before sending input."
+        : "Wait for a fresh browser image before sending input.");
+      return false;
+    }
     if (socket.current?.readyState !== WebSocket.OPEN) {
       errorCallback.current(
         "Your computer is disconnected. Input was not sent.",
@@ -636,26 +734,46 @@ export function useWorkspace(onError: (message: string) => void) {
     }
     socket.current.send(JSON.stringify(message));
     return true;
-  }, [setFocusBlocked]);
+  }, [setFocusBlocked, visible, activeRequest]);
   const watch = useCallback((requestId: string | null) => {
     if (watchId.current === requestId) return;
     watchId.current = requestId;
+    transportWatchId.current = null;
+    freshFrame.current = null;
     setFrame(null);
     clearControls();
-    if (socket.current?.readyState === WebSocket.OPEN)
+    if (socket.current?.readyState === WebSocket.OPEN && socketSource.current === currentConnection.current) {
+      const canWatch = requestId && !paused.current && visible() && activeRequest(requestId);
+      if (canWatch) transportWatchId.current = requestId;
       socket.current.send(
         JSON.stringify(
-          requestId ? { type: "watch", requestId } : { type: "unwatch" },
+          canWatch ? { type: "watch", requestId } : { type: "unwatch" },
         ),
       );
-  }, [clearControls]);
+    }
+  }, [clearControls, visible, activeRequest]);
+  const resumeBrowser = useCallback((requestId: string) => {
+    if (!paused.current || !visible() || !currentConnection.current ||
+      watchId.current !== requestId || !activeRequest(requestId)) return false;
+    paused.current = false;
+    setBrowserPaused(false);
+    setFrame(null);
+    clearControls(false);
+    // Another controller or the website may have moved focus while paused.
+    // A fresh image alone does not confirm a safe destination for text/keys.
+    setFocusBlocked(true);
+    retireTransport();
+    return true;
+  }, [visible, activeRequest, clearControls, setFocusBlocked, retireTransport]);
   const inspectControls = () => {
+    if (paused.current || !visible() || freshFrame.current?.socket !== socket.current) return;
     inspectionAttempt.current = crypto.randomUUID(); focusAttempt.current = null;
     setPageControls(null); setFocusedControl(null); setFocusBusy(false); setControlsError("");
     const sent = send({ type: "inspect-controls", inspectionId: inspectionAttempt.current, includeFrames: true });
     setControlsBusy(sent);
   };
   const focusControl = (snapshotId: string, controlId: string) => {
+    if (paused.current || !visible() || freshFrame.current?.socket !== socket.current) return;
     focusAttempt.current = { snapshotId, controlId }; setFocusBlocked(true);
     setFocusedControl(null); setControlsError("");
     setFocusBusy(send({ type: "focus", snapshotId, controlId }));
@@ -738,6 +856,7 @@ export function useWorkspace(onError: (message: string) => void) {
     info,
     status,
     frame,
+    browserPaused, browserVisible, resumeBrowser,
     pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,
     error,
     pairingNotice,

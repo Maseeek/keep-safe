@@ -188,6 +188,27 @@ describe('page controls owner authorization and lifecycle', () => {
     expect(controller.messages.some(message => message.type === 'controls')).toBe(false);
   });
 
+  it.each(['inspect', 'focus'] as const)('discards queued watches from a closed controller after held %s settles', async block => {
+    const bridge = await fixture(block); const item = await bridge.create(); const controller = await bridge.watch(item);
+    if (block === 'focus') {
+      controller.send({ type: 'inspect-controls', inspectionId: randomUUID() }); await controller.next('controls');
+      controller.send({ type: 'focus', snapshotId: bridge.snapshot.snapshotId, controlId: bridge.snapshot.controls[0].id });
+    } else controller.send({ type: 'inspect-controls', inspectionId: randomUUID() });
+    await bridge.started.promise;
+    // This command reaches the queue before the close event, but cannot execute
+    // until the already accepted browser operation releases its barrier.
+    controller.send({ type: 'watch', requestId: item.id });
+    controller.socket.close(); await expect.poll(() => controller.closeCode).toBeDefined();
+    const next = await phone(bridge.url, owner); await next.next('ready');
+    next.send({ type: 'watch', requestId: item.id }); await next.next('error');
+    expect((await (await bridge.request(`/api/requests/${item.id}`, agent)).json()).browser).toBeUndefined();
+    bridge.gate.resolve(); await bridge.finished.promise; await tick();
+    next.send({ type: 'watch', requestId: item.id }); await next.next('frame');
+    expect(controller.messages.some(message => message.type === 'controls' || message.type === 'focused')).toBe(false);
+    expect(bridge.password).toBe('synthetic-private-field-value');
+    expect((await (await bridge.request(`/api/requests/${item.id}`, agent)).json()).status).toBe('active');
+  });
+
   it.each(['inspect', 'focus'] as const)('blocks another controller while an orphaned %s is still pending', async block => {
     const bridge = await fixture(block); const item = await bridge.create(); const controller = await bridge.watch(item);
     if (block === 'focus') {

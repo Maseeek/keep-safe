@@ -34,5 +34,6 @@
 - [x] Embedded native control navigation with explicit frame origins, legacy-client opt-in protection, bounded frame scans and confirmed top-to-child focus. Physical accessibility and broader widget support remain open.
 - [x] Mobile keyboard panel for native checkbox/radio/select activation, Escape and navigation keys, with failed-focus protection across refresh/reconnect. Real Chromium phone-sized login and resume checks pass; physical keyboard/assistive-technology evidence remains open.
 - [x] Direct mobile swipe scrolling with positioned nested-area input, tap/gesture separation and lifecycle cancellation. Chromium touch-emulated login/resume is verified; physical-device gesture and pinch behavior remain open.
+- [x] Background browser pause with draft clearing, explicit resume, renewed focus and safe controller release. Controlled lifecycle signals with real sockets/Chromium pass; physical-phone suspension and app-switcher behavior remain unverified.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

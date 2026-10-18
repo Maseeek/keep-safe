@@ -14,6 +14,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 
 - Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
 - Live browser streaming with taps, direct touch swipes, scrolling, text entry, and keyboard controls.
+- Background pause with discarded drafts and an explicit return to live control.
 - Optional page-controls list with names, roles, password-field markers and confirmed remote focus.
 - Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
@@ -146,6 +147,8 @@ npm run build      # typecheck and production frontend build
 Tests cover request authorization, state transitions, expiry, private-network restrictions, browser ownership, password-field clearing, MCP wire compatibility, and real Chromium login/resume flows. Built-app mobile tests exercise both the demo and a real login through the phone controls. CI runs on pushes and pull requests with read-only repository permissions.
 
 Leaving a request on mobile stops its live stream and discards pending scroll input. Reopening resumes the same unexpired browser. Temporary connection and input-rate failures reconnect without deleting a valid pairing.
+
+When the browser reports that Keep Safe is hidden or leaving the page, viewing and input pause, the control connection closes, and unsent text plus its reveal setting are cleared. The website may continue running on your computer; the request keeps its original expiry and the agent still waits for handback. Returning does not restart the stream. Choose **Resume browser**, wait for a new image, then confirm a field or tap/Tab before typing. **Done, hand back** remains an explicit choice while paused once the computer is connected. Update the bridge for the closed-connection queue fix. Mobile suspension and app-switcher snapshots still require physical-device testing; timely lifecycle events are browser-dependent.
 
 Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Open **More keys** for Space, Escape, Shift+Tab, arrow keys, Home/End, Page Up/Down, Delete and Select all. These send keyboard commands to the selected remote control; the separate scroll buttons move the page. Session status messages appear inside the mobile request so they do not cover the controls.
 

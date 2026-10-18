@@ -2,6 +2,13 @@
 
 ## 18 October 2026
 
+### Background browser pause
+
+- Pause live viewing and input when the app receives hidden/page-leaving signals; discard unsent text and its reveal setting.
+- Require an explicit Resume browser action, a fresh image and renewed field confirmation. Keep the request's original expiry and explicit handback.
+- Retire old control connections and ignore their late frames/focus replies. Reconnect for queue updates without silently reclaiming paused browser control.
+- Discard queued commands from closed sockets so a delayed watch cannot block the next owner. Preserve accepted browser work through password clearing and handback.
+
 ### Direct touch scrolling
 
 - Scroll the live website with one finger inside its image, with scaled, bounded and coalesced movement. Keep taps distinct from swipes, cancelled gestures and multi-finger input.

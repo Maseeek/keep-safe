@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   MousePointer2,
+  Pause,
   ShieldCheck,
   TriangleAlert,
   X,
@@ -103,6 +104,8 @@ export function BrowserPanel({
   const [showOrigin, setShowOrigin] = useState(false);
   const denyTrigger = useRef<HTMLButtonElement>(null);
   const denyDialog = useRef<HTMLDialogElement>(null);
+  const resumeTrigger = useRef<HTMLButtonElement>(null);
+  const draftInput = useRef<HTMLInputElement>(null);
   const isDemo = !workspace.connection;
   const finished = ["completed", "denied", "expired"].includes(request.status);
   const expired = !finished && new Date(request.expiresAt).getTime() <= now;
@@ -111,7 +114,8 @@ export function BrowserPanel({
   const liveFrame =
     workspace.frame?.requestId === request.id ? workspace.frame : null;
   const canInput =
-    active && workspace.status === "connected" && !!liveFrame && !expired && !workspace.focusBusy;
+    active && workspace.status === "connected" && !!liveFrame && !expired && !workspace.focusBusy &&
+    !workspace.browserPaused && workspace.browserVisible;
   const keyInputBlocked = !canInput || workspace.focusBusy || workspace.focusBlocked;
   const moreKeysId = `remote-more-keys-${request.id}`;
   const address = browserAddress(liveFrame?.url ?? request.url);
@@ -129,7 +133,38 @@ export function BrowserPanel({
     setShowMoreKeys(false);
     setDenyOpen(false);
     setShowOrigin(false);
+    setShowText(false);
   }, [request.id]);
+  const clearLocalInput = useCallback(() => {
+    if (draftInput.current) {
+      draftInput.current.value = "";
+      draftInput.current.type = "password";
+    }
+    setText("");
+    setShowText(false);
+  }, []);
+  useLayoutEffect(clearLocalInput, [clearLocalInput, request.id, workspace.connection, liveFrame?.url]);
+  useEffect(() => {
+    const clearDraft = () => {
+      clearLocalInput();
+      setShowKeyboard(false);
+      setShowMoreKeys(false);
+    };
+    const visibility = () => { if (document.visibilityState === "hidden") clearDraft(); };
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pagehide", clearDraft);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pagehide", clearDraft);
+    };
+  }, [clearLocalInput]);
+  useEffect(() => {
+    if (!active || isDemo || !workspace.browserPaused || !workspace.browserVisible) return;
+    const timer = requestAnimationFrame(() => {
+      if (document.activeElement === document.body) resumeTrigger.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(timer);
+  }, [active, isDemo, workspace.browserPaused, workspace.browserVisible]);
   useEffect(() => {
     if (!active || expired || workspace.status !== "connected") setText("");
     if (!active || expired) setShowMoreKeys(false);
@@ -168,9 +203,11 @@ export function BrowserPanel({
           <ArrowLeft size={20} />
         </button>
         <span>REQUEST DETAILS</span>
-        <span className={`micro-status ${active ? "green" : ""}`}>
+        <span className={`micro-status ${active && !workspace.browserPaused ? "green" : ""}`}>
           <span />
-          {active
+          {active && !isDemo && workspace.browserPaused
+            ? "View paused"
+            : active
             ? "You\u2019re in control"
             : finished || expired
               ? "Session closed"
@@ -230,7 +267,7 @@ export function BrowserPanel({
             <span>{address.label}</span>
           </button>
           <span className="frame-mode">
-            {isDemo ? "DEMO" : active ? "LIVE" : "PRIVATE"}
+            {isDemo ? "DEMO" : active && workspace.browserPaused ? "PAUSED" : active ? "LIVE" : "PRIVATE"}
           </span>
         </div>
         {showOrigin ? (
@@ -326,6 +363,17 @@ export function BrowserPanel({
             )}
             <small>Never enter real credentials in the demo.</small>
           </div>
+        ) : workspace.browserPaused ? (
+          <div className="browser-state browser-paused">
+            <div className="state-emblem"><Pause size={27} aria-hidden="true" /></div>
+            <h3>Browser paused</h3>
+            <p>Viewing and input are paused. The website may keep running on your computer.</p>
+            <p>Your request stays open, and your agent waits for handback. Resume, then choose a field again before typing.</p>
+            <button ref={resumeTrigger} className="button button-dark" disabled={!workspace.browserVisible || busy}
+              onClick={() => workspace.resumeBrowser(request.id)}>
+              <Eye size={16} aria-hidden="true" /> Resume browser
+            </button>
+          </div>
         ) : liveFrame ? (
           <div className="remote-screen">
             <RemoteSurface frame={liveFrame} enabled={canInput} controlIdentity={workspace.connection}
@@ -354,7 +402,7 @@ export function BrowserPanel({
           </div>
         )}
       </div>
-      {active && !isDemo && !expired ? (
+      {active && !isDemo && !expired && !workspace.browserPaused ? (
         <div className="remote-controls">
           {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} /> : null}
           <div className="remote-toolbar">
@@ -446,6 +494,7 @@ export function BrowserPanel({
               </label>
               <div className="input-with-button">
                 <input
+                  ref={draftInput}
                   id="remote-input"
                   type={showText ? "text" : "password"}
                   value={text}
@@ -503,7 +552,7 @@ export function BrowserPanel({
             disabled={
               busy ||
               (!isDemo && workspace.status !== "connected") ||
-              (active && !isDemo && !liveFrame)
+              (active && !isDemo && !liveFrame && !workspace.browserPaused)
             }
           >
             {busy ? (

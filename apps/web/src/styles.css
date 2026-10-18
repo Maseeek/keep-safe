@@ -1993,6 +1993,14 @@ svg {
   color: #99b47b;
   background: #edf5e2;
 }
+.browser-paused {
+  height: auto;
+  min-height: 320px;
+  padding: 28px 24px;
+}
+.browser-paused .state-emblem { flex-shrink: 0; }
+.browser-paused p + p { margin-top: 9px; }
+.browser-paused .button { margin-top: 20px; max-width: 100%; }
 .browser-state.finished h3 {
   font-size: 15px;
 }

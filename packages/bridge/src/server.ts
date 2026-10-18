@@ -246,6 +246,9 @@ export async function createBridge(options: BridgeOptions) {
     } catch { unwatch(client); entry.opening = undefined; throw new Error('Unable to open this browser. Install Chromium with npx playwright install chromium, or check the agent CDP connection.'); }
   }
   async function handleMessage(client: Client, raw: Buffer) {
+    // Receipt can precede a close while an earlier browser operation holds the
+    // queue. A retired socket must never reacquire controller ownership later.
+    if (client.ws.readyState !== WebSocket.OPEN) return;
     let message: Record<string, unknown>;
     try { message = JSON.parse(raw.toString()) as Record<string, unknown>; if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error(); }
     catch { throw new Error('Invalid message.'); }
