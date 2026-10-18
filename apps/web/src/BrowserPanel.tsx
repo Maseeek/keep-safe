@@ -23,6 +23,7 @@ import type { LoginRequest } from "../../../packages/shared/src/protocol";
 import type { Workspace } from "./workspace";
 import { browserAddress } from "./browser-address";
 import { ControlNavigator } from "./ControlNavigator";
+import { RemoteSurface } from "./RemoteSurface";
 
 export function AgentMark({
   name,
@@ -100,10 +101,8 @@ export function BrowserPanel({
   const [denyOpen, setDenyOpen] = useState(false);
   const [showText, setShowText] = useState(false);
   const [showOrigin, setShowOrigin] = useState(false);
-  const imageRef = useRef<HTMLImageElement>(null);
   const denyTrigger = useRef<HTMLButtonElement>(null);
   const denyDialog = useRef<HTMLDialogElement>(null);
-  const wheelBuffer = useRef({ deltaX: 0, deltaY: 0, timer: undefined as ReturnType<typeof setTimeout> | undefined });
   const isDemo = !workspace.connection;
   const finished = ["completed", "denied", "expired"].includes(request.status);
   const expired = !finished && new Date(request.expiresAt).getTime() <= now;
@@ -136,17 +135,6 @@ export function BrowserPanel({
     if (!active || expired) setShowMoreKeys(false);
   }, [active, expired, workspace.status]);
   useEffect(() => { if (workspace.focusBlocked) setText(""); }, [workspace.focusBlocked]);
-  useEffect(() => {
-    // A pending wheel event belongs to this request and this control interval.
-    // Never replay it after a disconnect, handback, or request switch.
-    return () => {
-      const buffer = wheelBuffer.current;
-      if (buffer.timer) clearTimeout(buffer.timer);
-      buffer.timer = undefined;
-      buffer.deltaX = 0;
-      buffer.deltaY = 0;
-    };
-  }, [request.id, canInput]);
   useEffect(() => {
     if (!denyOpen) return;
     const dialog = denyDialog.current;
@@ -340,55 +328,9 @@ export function BrowserPanel({
           </div>
         ) : liveFrame ? (
           <div className="remote-screen">
-            <img
-              ref={imageRef}
-              src={`data:image/jpeg;base64,${liveFrame.data}`}
-              width={liveFrame.width}
-              height={liveFrame.height}
-              alt={`Live browser on ${domain(liveFrame.url)}. Tap the page to interact.`}
-              draggable={false}
-              onClick={(event) => {
-                if (!canInput || !imageRef.current) return;
-                const bounds = imageRef.current.getBoundingClientRect();
-                if (!bounds.width || !bounds.height) return;
-                const clamp = (value: number, max: number) =>
-                  Math.max(0, Math.min(max, Math.round(value)));
-                workspace.send({
-                  type: "click",
-                  x: clamp(
-                    ((event.clientX - bounds.left) / bounds.width) *
-                      liveFrame.width,
-                    liveFrame.width,
-                  ),
-                  y: clamp(
-                    ((event.clientY - bounds.top) / bounds.height) *
-                      liveFrame.height,
-                    liveFrame.height,
-                  ),
-                });
-              }}
-              onWheel={(event) => {
-                if (!canInput) return;
-                const clampScroll = (value: number) =>
-                  Math.max(-3000, Math.min(3000, Math.round(value)));
-                wheelBuffer.current.deltaX = clampScroll(
-                  wheelBuffer.current.deltaX + event.deltaX,
-                );
-                wheelBuffer.current.deltaY = clampScroll(
-                  wheelBuffer.current.deltaY + event.deltaY,
-                );
-                if (!wheelBuffer.current.timer) {
-                  wheelBuffer.current.timer = setTimeout(() => {
-                    const { deltaX, deltaY } = wheelBuffer.current;
-                    wheelBuffer.current.deltaX = 0;
-                    wheelBuffer.current.deltaY = 0;
-                    wheelBuffer.current.timer = undefined;
-                    if (deltaX || deltaY)
-                      workspace.send({ type: "scroll", deltaX, deltaY });
-                  }, 50);
-                }
-              }}
-            />
+            <RemoteSurface frame={liveFrame} enabled={canInput} controlIdentity={workspace.connection}
+              alt={`Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
+              send={workspace.send} />
             {workspace.status !== "connected" ? (
               <div className="reconnect-cover">
                 <LoaderCircle className="spin" size={24} />
@@ -538,8 +480,8 @@ export function BrowserPanel({
           ) : null}
           <p className="input-hint">
             <MousePointer2 size={12} />
-            Tap to click. Scroll buttons move the page. Use More keys for
-            keyboard controls.
+            Tap to click. Swipe inside the image to scroll the website, or outside
+            it to move this app. Scroll buttons and More keys are also available.
           </p>
         </div>
       ) : null}

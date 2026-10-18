@@ -13,7 +13,7 @@ Early access. Private source. Free initial release. The hosted app opens in a la
 ## What works
 
 - Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
-- Live browser streaming with taps, scrolling, text entry, and keyboard controls.
+- Live browser streaming with taps, direct touch swipes, scrolling, text entry, and keyboard controls.
 - Optional page-controls list with names, roles, password-field markers and confirmed remote focus.
 - Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
 - Separate owner and agent credentials, expiring control, and a bounded queue.
@@ -148,6 +148,8 @@ Tests cover request authorization, state transitions, expiry, private-network re
 Leaving a request on mobile stops its live stream and discards pending scroll input. Reopening resumes the same unexpired browser. Temporary connection and input-rate failures reconnect without deleting a valid pairing.
 
 Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Open **More keys** for Space, Escape, Shift+Tab, arrow keys, Home/End, Page Up/Down, Delete and Select all. These send keyboard commands to the selected remote control; the separate scroll buttons move the page. Session status messages appear inside the mobile request so they do not cover the controls.
+
+Swipe inside the live browser image to scroll the website; swipe outside it to move Keep Safe. Short taps click the website. Cancelled gestures and multi-finger input do not become remote taps. Browser pinch zoom remains separate from remote scrolling. Update the computer bridge for scrolling at the touched position inside nested panels or embedded pages; older bridges retain their previous wheel position. Automated touch checks use Chromium emulation; physical phones and screen readers still need testing.
 
 During a live session, open **Page controls** to list supported labeled fields and buttons, choose one to focus, then use **Type text** or the remote keys. The list includes native controls inside nested open web components and supported HTTP(S) embedded pages. Embedded controls show their own origin, including when it matches the top page. Labels resolve within their own root, so a matching ID elsewhere does not rename a field. The list does not read field values or link addresses. It shows up to 50 controls across a bounded scan and refreshes only when requested; a limited scan reports its actual count. Password fields are marked, while entered text remains outside the list. Focus confirms the target and its frame chain. After an unconfirmed focus attempt, text and ordinary keys stay blocked until a fresh confirmed focus or an explicit browser tap, Tab or Shift+Tab. Refreshing the list or reconnecting the same request does not confirm focus.
 

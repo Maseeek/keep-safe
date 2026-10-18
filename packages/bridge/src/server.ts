@@ -280,6 +280,8 @@ export async function createBridge(options: BridgeOptions) {
         if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid tap coordinates.');
       } else if (message.type === 'scroll') {
         if (![message.deltaX, message.deltaY].every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 3000)) throw new Error('Invalid scroll distance.');
+        if ((Object.hasOwn(message, 'x') || Object.hasOwn(message, 'y')) &&
+            (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height)) throw new Error('Invalid scroll coordinates.');
       } else if (message.type === 'text') {
         if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');
       } else if (message.type === 'key') {

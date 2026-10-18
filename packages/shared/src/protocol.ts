@@ -81,7 +81,7 @@ export type ClientMessage =
   | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
   | { type: 'focus'; snapshotId: string; controlId: string }
   | { type: 'click'; x: number; y: number }
-  | { type: 'scroll'; deltaX: number; deltaY: number }
+  | { type: 'scroll'; deltaX: number; deltaY: number; x?: number; y?: number }
   | { type: 'text'; text: string }
   | { type: 'key'; key: string };
 

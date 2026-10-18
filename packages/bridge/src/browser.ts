@@ -304,7 +304,19 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       await ensureActivePageMonitor();
       if (input.type === 'click') await page.mouse.click(input.x as number, input.y as number);
-      else if (input.type === 'scroll') await page.mouse.wheel(input.deltaX as number, input.deltaY as number);
+      else if (input.type === 'scroll') {
+        // Position wheel input without activating the target. Both operations
+        // remain inside the owner's input/handback barrier. Older clients omit it.
+        const target = page;
+        if (typeof input.x === 'number' && typeof input.y === 'number') {
+          const source = target.url();
+          await target.mouse.move(input.x, input.y);
+          selectActivePage();
+          if (target !== page || target.isClosed() || target.url() !== source) throw new Error('The browser changed before scrolling. Try again.');
+        }
+        // Never re-read the mutable active page after an awaited mouse move.
+        await target.mouse.wheel(input.deltaX as number, input.deltaY as number);
+      }
       else if (input.type === 'text') await page.keyboard.insertText(input.text as string);
       else if (input.type === 'key') await page.keyboard.press(input.key as string);
       else if (input.type === 'focus') {

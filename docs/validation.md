@@ -70,7 +70,7 @@ Ask permission before taking notes. Delete raw notes within 14 days of a session
 
 | Evidence | Observed result |
 | --- | --- |
-| Current local automated suite | 291 tests pass, including synthetic real-browser login, authenticated resume, custom-port MCP configuration, isolated rehearsal, native keyboard controls and focus recovery, open-component and embedded-frame controls, origin/opaque-frame checks, password clearing and popup handback protection, and per-pairing notification lifecycle. Push-provider delivery is mocked; release/CI evidence is recorded in progress. |
+| Current local automated suite | 303 tests pass, including synthetic real-browser login, authenticated resume, custom-port MCP configuration, isolated rehearsal, trusted touch gestures and positioned nested scrolling, native keyboard controls and focus recovery, open-component and embedded-frame controls, origin/opaque-frame checks, password clearing and popup handback protection, and per-pairing notification lifecycle. Push-provider delivery is mocked; release/CI evidence is recorded in progress. |
 | Physical phone, push and assistive technology | Not verified. |
 | Independent sessions and later-day returns | Not run. |
 | Paid demand, relay cost and contribution | Not measured. |

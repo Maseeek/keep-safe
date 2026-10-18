@@ -3,7 +3,7 @@ import { createServer as httpServer } from 'node:http';
 import { connect as connectSocket, createServer as netServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
-import { chromium } from 'playwright';
+import { chromium, type Browser } from 'playwright';
 import { browserAvailable, openBrowser } from '../src/browser';
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -44,6 +44,54 @@ async function managedFixture() {
   const page = agent.contexts().flatMap(context => context.pages()).find(page => page.url() === url)!;
   return { session, page, url };
 }
+
+it.skipIf(!installed).each(['panel', 'frame'])('scrolls the targeted %s without clicking and preserves unanchored wheel input', async target => {
+  const { session, page } = await managedFixture();
+  await page.setContent('<style>html,body{margin:0;height:2400px}#target{position:absolute;left:80px;top:90px;width:220px;height:250px;border:0;overflow:auto}button{width:180px;height:200px}</style><div id="target"></div>');
+  await page.evaluate(target => {
+    document.body.dataset.clicks = '0'; document.addEventListener('click', () => { document.body.dataset.clicks = String(Number(document.body.dataset.clicks) + 1); });
+    const content = '<style>html,body{margin:0}button{width:180px;height:200px}</style><button>Synthetic scroll target</button><div style="height:1800px">Scroll fixture</div>';
+    if (target === 'frame') {
+      const frame = document.createElement('iframe'); frame.id = 'target'; frame.srcdoc = content; document.querySelector('#target')!.replaceWith(frame);
+    } else document.querySelector('#target')!.innerHTML = content;
+  }, target);
+  if (target === 'frame') await page.frameLocator('iframe').getByRole('button', { name: 'Synthetic scroll target' }).waitFor();
+  await session.input({ type: 'scroll', deltaX: 0, deltaY: 180, x: 150, y: 150 });
+  const scrolled = () => target === 'frame'
+    ? page.frameLocator('iframe').locator('body').evaluate(() => window.scrollY)
+    : page.locator('#target').evaluate(element => element.scrollTop);
+  await expect.poll(scrolled).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  expect(await page.evaluate(() => Number(document.body.dataset.clicks))).toBe(0);
+  // A legacy message keeps this controller's previous mouse location. The
+  // observing CDP connection has a separate Playwright mouse state.
+  const previous = await scrolled(); await session.input({ type: 'scroll', deltaX: 0, deltaY: 120 });
+  await expect.poll(scrolled).toBeGreaterThan(previous);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  expect(await page.evaluate(() => Number(document.body.dataset.clicks))).toBe(0);
+});
+
+it.skipIf(!installed)('does not redirect an anchored wheel into a popup opened by mouse movement', async () => {
+  const url = await fixture(); const actualLaunch = chromium.launch.bind(chromium); let controlled!: Browser;
+  const launch = vi.spyOn(chromium, 'launch').mockImplementation(async options => { controlled = await actualLaunch(options); return controlled; });
+  let session: Awaited<ReturnType<typeof openBrowser>>;
+  try { session = await openBrowser({ url, allowLocalUrls: true }); cleanup.push(() => session.close()); }
+  finally { launch.mockRestore(); }
+  const opener = controlled.contexts().flatMap(context => context.pages()).find(page => page.url() === url)!;
+  await opener.evaluate(() => { document.body.style.height = '2400px'; document.addEventListener('mousemove', () => { window.open('/popup1'); }, { once: true }); });
+  const actualMove = opener.mouse.move.bind(opener.mouse); let popup: import('playwright').Page | undefined;
+  // Make the existing asynchronous boundary deterministic: a genuine hover
+  // opens a real popup and is fully published before mouse.move resolves.
+  const move = vi.spyOn(opener.mouse, 'move').mockImplementationOnce(async (x, y) => {
+    const opened = opener.waitForEvent('popup'); await actualMove(x, y); popup = await opened; await popup.waitForLoadState();
+    await popup.evaluate(() => { document.body.style.height = '2400px'; document.body.dataset.wheels = '0'; window.addEventListener('wheel', () => { document.body.dataset.wheels = String(Number(document.body.dataset.wheels) + 1); }); });
+  });
+  try {
+    await expect(session.input({ type: 'scroll', deltaX: 0, deltaY: 180, x: 150, y: 150 })).rejects.toThrow('The browser changed before scrolling.');
+    expect(popup).toBeDefined(); expect(await popup!.evaluate(() => Number(document.body.dataset.wheels))).toBe(0);
+    expect(await opener.evaluate(() => window.scrollY)).toBe(0); expect(await popup!.evaluate(() => window.scrollY)).toBe(0);
+  } finally { move.mockRestore(); }
+});
 
 it.skipIf(!installed)('clears passwords in nested open shadow roots before handback', async () => {
   const { session, page } = await managedFixture();

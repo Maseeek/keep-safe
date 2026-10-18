@@ -2,6 +2,13 @@
 
 ## 18 October 2026
 
+### Direct touch scrolling
+
+- Scroll the live website with one finger inside its image, with scaled, bounded and coalesced movement. Keep taps distinct from swipes, cancelled gestures and multi-finger input.
+- Discard queued input on request, connection, source, geometry and control changes; keep normal screenshot refreshes within the same gesture.
+- Add validated optional scroll positions so nested panels and embedded pages receive wheel input without a click. Bind positioning and scrolling to the same browser page and abort if it changes.
+- Preserve mouse/pen taps, wheel controls, browser zoom and the keyboard/scroll-button alternatives. Add synthetic Chromium touch login, cancellation and authenticated-resume coverage; physical-device verification remains open.
+
 ### Remote keyboard controls
 
 - Add a compact More keys panel for Space, Escape, Shift+Tab, arrows, navigation, Delete and Select all, using existing bridge commands.

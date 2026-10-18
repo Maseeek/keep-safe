@@ -266,6 +266,24 @@ describe('live browser lifecycle', () => {
     expect(bridge.inputs).toEqual([{ type: 'key', key: 'Enter' }]);
   });
 
+  it('validates optional paired scroll coordinates before passing any input to the browser', async () => {
+    const bridge = await start(); const item = await bridge.create();
+    await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+    const phone = await socket(bridge.url); await phone.auth();
+    phone.send({ type: 'watch', requestId: item.id }); await phone.next('frame');
+    for (const anchor of [{ x: 20 }, { y: 20 }, { x: null, y: 20 }, { x: 20, y: null }, { x: '20', y: 20 }, { x: -1, y: 0 }, { x: 391, y: 0 }, { x: 0, y: 721 }]) {
+      phone.send({ type: 'scroll', deltaX: 0, deltaY: 150, ...anchor }); await phone.next('error');
+    }
+    // JSON can express an overflowing numeric literal even though stringify
+    // turns a JavaScript Infinity into null. Reject it as non-finite too.
+    phone.ws.send('{"type":"scroll","deltaX":0,"deltaY":150,"x":1e309,"y":20}'); await phone.next('error');
+    expect(bridge.inputs).toEqual([]);
+    phone.send({ type: 'scroll', deltaX: 0, deltaY: 150, x: 80, y: 160 });
+    phone.send({ type: 'scroll', deltaX: 0, deltaY: -50 });
+    await expect.poll(() => bridge.inputs.length).toBe(2);
+    expect(bridge.inputs).toEqual([{ type: 'scroll', deltaX: 0, deltaY: 150, x: 80, y: 160 }, { type: 'scroll', deltaX: 0, deltaY: -50 }]);
+  });
+
   it('expires requests, releases browsers and refuses further control', async () => {
     let clock = Date.now();
     const bridge = await start({ now: () => clock });

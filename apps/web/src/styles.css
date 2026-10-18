@@ -2015,7 +2015,9 @@ svg {
   height: auto;
   cursor: crosshair;
   user-select: none;
-  touch-action: manipulation;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pinch-zoom;
 }
 .remote-toolbar {
   display: flex;
