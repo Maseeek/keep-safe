@@ -49,6 +49,17 @@ async function start(options: Partial<BridgeOptions> = {}) {
 }
 
 describe('per-bridge notification management', () => {
+  it('sends only a nested public source-bound intent so old workers cannot extract a targeted request ID', async () => {
+    const keys = webpush.generateVAPIDKeys(); const bridge = await start({ vapid: keys, appUrl: 'https://synthetic-app.example', publicUrl: 'https://synthetic-private-tunnel.example' });
+    await bridge.push('subscribe'); const request = await bridge.create();
+    await expect.poll(() => vi.mocked(webpush.sendNotification).mock.calls.length).toBe(1);
+    const payload = JSON.parse(String(vi.mocked(webpush.sendNotification).mock.calls[0][1]));
+    expect(payload).toEqual({ body: 'Synthetic agent: Synthetic notification test', notificationIntent: { version: 1, requestId: request.id, sourceKey: keys.publicKey } });
+    expect(payload.requestId).toBeUndefined(); expect(payload.url).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain(keys.privateKey); expect(JSON.stringify(payload)).not.toContain(ownerToken); expect(JSON.stringify(payload)).not.toContain(agentToken);
+    expect(JSON.stringify(payload)).not.toContain('synthetic-private-tunnel'); expect(JSON.stringify(payload)).not.toContain('synthetic-app.example');
+  });
+
   it('advertises management, keeps responses minimal and requires valid owner authority and origin', async () => {
     const bridge = await start(); const paired = await bridge.pair();
     expect(await (await bridge.request('/api/info')).json()).toMatchObject({ pushManagementAvailable: true, pushEnabled: true });

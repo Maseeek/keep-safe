@@ -354,12 +354,11 @@ export async function createBridge(options: BridgeOptions) {
   function json(response: ServerResponse, status: number, data: unknown) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(data)); }
   async function notify(request: LoginRequest) {
     if (!options.vapid) return;
-    const target = `${options.appUrl ?? options.publicUrl ?? 'http://localhost:4318'}/?request=${encodeURIComponent(request.id)}`;
     let pruned = false;
     await Promise.all([...subscriptions.values()].map(async subscription => {
       if (subscription.deviceId && !devices.active(subscription.deviceId)) return;
       try {
-        await webpush.sendNotification(subscription, JSON.stringify({ title: 'An agent needs your help', body: `${request.agent}: ${request.title}`, requestId: request.id, url: target }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000, agent: pushTransport.agent });
+        await webpush.sendNotification(subscription, JSON.stringify({ body: `${request.agent}: ${request.title}`, notificationIntent: { version: 1, requestId: request.id, sourceKey: options.vapid!.publicKey } }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000, agent: pushTransport.agent });
       } catch (error) {
         // A delayed response must not remove a newer enrollment or a migration
         // to another owner principal using the same browser subscription.

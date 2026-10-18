@@ -36,5 +36,6 @@
 - [x] Direct mobile swipe scrolling with positioned nested-area input, tap/gesture separation and lifecycle cancellation. Chromium touch-emulated login/resume is verified; physical-device gesture and pinch behavior remain open.
 - [x] Background browser pause with draft clearing, explicit resume, renewed focus and safe controller release. Controlled lifecycle signals with real sockets/Chromium pass; physical-phone suspension and app-switcher behavior remain unverified.
 - [x] Managed-browser Back, Forward and Reload, with document form-resubmission blocking, draft clearing, fresh-image/focus requirements and explicit recovery after interrupted navigation. Attached browsers retain website controls; broader widgets and physical accessibility remain open.
+- [x] Notification routing bound to current pairing metadata and the exact request, with neutral legacy/wrong-source startup and explicit protection for an active browser view. Physical notification display/delivery remains unverified.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

@@ -36,6 +36,16 @@ Owner pairing links are sensitive credentials. Share them only with yourself. Th
 
 An agent must cooperate by pausing while the human has control. Keep Safe cannot stop a separate process from issuing its own CDP commands. An agent holding the debugging endpoint has privileged access to that browser; do not use a general personal browser profile for untrusted agents.
 
+## Notification routing
+
+Notifications identify an exact request and the bridge's existing public VAPID key. This is a routing hint checked against authenticated metadata, not authentication or proof of a unique physical computer. Copied configurations can share a public key. No pairing token, private notification key, browser input or private bridge URL is included in an intent.
+
+The new payload nests the versioned intent so an older worker cannot turn its top-level request ID into an unscoped target. The updated worker uses a new message type and fragment names, scopes notification tags by source, ignores supplied destination URLs and picks at most one eligible top-level app window. If that window is paired to another computer, the app gives guidance instead of navigating another tab or changing pairing. Legacy and malformed fresh entries have an explicit neutral marker, preventing desktop startup from opening the first approved browser by default. No fetch handler caches credentials or frames.
+
+The app verifies fresh source-scoped metadata and the exact unexpired request, with connection, interaction, rendered-view and pending-intent identity checks around asynchronous work. A source switch or newer intent invalidates old results. Unknown IDs never fall back to another queued request. A notification during another live browser offers an explicit Open request action that revalidates before leaving and discarding its local draft. Fresh remembered-phone entry stays neutral until checks succeed. Legacy, missing and wrong-source alerts preserve the current warm view and show guidance; they never approve or pair automatically.
+
+New worker messages/fragments are ignored by cached older apps, and the new app treats legacy worker messages as guidance. An untouched older app plus older worker cannot be repaired by a new push payload alone. Finish any active handoff, update the bridge, close all Keep Safe tabs/app windows and reopen. A worker update can wait while old pages remain open; refreshing a single page is not sufficient, as described in the [service worker lifecycle](https://web.dev/articles/service-worker-lifecycle#waiting). Automated worker and app routing checks do not establish OS notification display or physical-phone delivery.
+
 ## Authentication method limits
 
 The phone interacts with the remote Chromium page. This does not move a phone's passkeys, native password manager, biometrics, or hardware security key into that remote browser. Some sites also block automated browsers. These methods need explicit testing and may require a supported cross-device authentication flow.

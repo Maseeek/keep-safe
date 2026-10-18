@@ -2,6 +2,13 @@
 
 ## 18 October 2026
 
+### Notification request routing
+
+- Open only the exact request verified against the current pairing's public notification-source key. Remove the fallback from an unknown request ID to the first queued request.
+- Keep wrong-source, missing, expired and legacy alerts neutral. Preserve active browser drafts and require an explicit Open request action before leaving another live view.
+- Keep fresh notification windows neutral until source and request checks finish, including remembered-phone startup and delayed connection changes.
+- Use a nested notification payload, new worker message names and fixed same-origin fragments. Carry no pairing token, private key or private bridge address in the intent. Older app/worker pairs require reload; physical delivery remains a separate check.
+
 ### Website navigation
 
 - Add website Back, Forward and Reload to managed browser sessions, with named mobile buttons and capability checks for older bridges and attached browsers.

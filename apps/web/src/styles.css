@@ -4022,6 +4022,17 @@ svg {
 .pairing-expired-notice .icon-button {
   color: #b9a784;
 }
+.notification-notice,
+.notification-notice > svg,
+.notification-notice .icon-button {
+  color: #526348;
+}
+.notification-notice p {
+  color: #526348;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .detail-section[role="dialog"]:focus {
   outline: none;
 }

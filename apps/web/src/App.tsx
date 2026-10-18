@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -31,7 +31,8 @@ import {
 } from "lucide-react";
 import type { LoginRequest } from "../../../packages/shared/src/protocol";
 import { AgentMark, BrowserPanel, domain, timeLeft } from "./BrowserPanel";
-import { useWorkspace, validateConnection, type Workspace } from "./workspace";
+import { useWorkspace, validateConnection, type Connection, type Workspace } from "./workspace";
+import { notificationMessage, readNotificationEntry, verifyNotificationIntent, withoutNotificationEntry, type NotificationIntent } from "./notification-intent";
 import { DeviceManager } from "./DeviceManager";
 import { HistoryControls } from "./HistoryControls";
 import { useNotifications } from "./useNotifications";
@@ -39,6 +40,25 @@ import { useNotifications } from "./useNotifications";
 type Section = "inbox" | "activity" | "devices" | "settings";
 type Filter = "all" | "pending" | "active";
 const repository = "https://github.com/Maseeek/keep-safe";
+const notificationGuidance = "This notification cannot identify a request on this computer. Connect to the computer that sent it, then choose a request from its queue.";
+interface PendingNotification {
+  intent: NotificationIntent;
+  source: Connection | null;
+  interaction: number;
+  section: Section;
+  selectedId: string | null;
+  renderedId: string | null;
+  explicit: boolean;
+  verified: boolean;
+}
+interface NotificationNotice { message: string; action?: PendingNotification }
+function NotificationNoticeView({ notice, open, dismiss }: { notice: NotificationNotice; open: () => void; dismiss: () => void }) {
+  return <div className="pairing-expired-notice notification-notice" role="status" aria-label="Notification notice">
+    <Bell size={18} aria-hidden="true" /><p>{notice.message}</p>
+    {notice.action ? <button className="button button-light button-small" onClick={open}>Open request <ArrowRight size={13} aria-hidden="true" /></button> : null}
+    <button className="icon-button" aria-label="Dismiss notification notice" onClick={dismiss}><X size={15} /></button>
+  </div>;
+}
 
 function Logo({ compact = false }: { compact?: boolean }) {
   return (
@@ -360,12 +380,9 @@ function OnboardingArt() {
 }
 
 export function App() {
+  const [notificationEntry] = useState(() => readNotificationEntry(window.location.href));
   const [section, setSection] = useState<Section>("inbox");
-  const [selectedId, setSelectedId] = useState<string | null>(
-    () =>
-      new URLSearchParams(window.location.hash.slice(1)).get("request") ||
-      new URLSearchParams(window.location.search).get("request"),
-  );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
@@ -378,6 +395,15 @@ export function App() {
   const detailSection = useRef<HTMLDivElement>(null);
   const notify = useCallback((message: string) => setToast(message), []);
   const workspace = useWorkspace(notify);
+  const interaction = useRef(0);
+  const [pendingNotification, setPendingNotificationState] = useState<PendingNotification | null>(() => notificationEntry.present && notificationEntry.intent
+    ? { intent: notificationEntry.intent, source: workspace.connection, interaction: 0, section: "inbox", selectedId: null, renderedId: null, explicit: false, verified: false } : null);
+  const pendingNotificationRef = useRef(pendingNotification);
+  const setPendingNotification = useCallback((next: PendingNotification | null) => {
+    pendingNotificationRef.current = next;
+    setPendingNotificationState(next);
+  }, []);
+  const [notificationNotice, setNotificationNotice] = useState<NotificationNotice | null>(() => notificationEntry.present && !notificationEntry.intent ? { message: notificationGuidance } : null);
   const notifications = useNotifications(workspace, notify);
   const notificationEnableButton = useRef<HTMLButtonElement>(null);
   const notificationContext = useRef({ section, connection: workspace.connection, key: workspace.info?.vapidPublicKey });
@@ -416,8 +442,87 @@ export function App() {
         .includes(query.toLowerCase()),
   );
   const selected =
-    workspace.requests.find((request) => request.id === selectedId) ||
-    filtered[0];
+    selectedId !== null ? workspace.requests.find((request) => request.id === selectedId)
+      : notificationEntry.present ? undefined : filtered[0];
+  const notificationRoute = useRef({ connection: workspace.connection, info: workspace.info, requests: workspace.requests, section, selectedId, selected, connectOpen });
+  notificationRoute.current = { connection: workspace.connection, info: workspace.info, requests: workspace.requests, section, selectedId, selected, connectOpen };
+  useLayoutEffect(() => {
+    if (notificationEntry.present) window.history.replaceState(null, "", withoutNotificationEntry(window.location.href));
+  }, [notificationEntry]);
+  useEffect(() => {
+    const changed = () => { interaction.current++; };
+    document.addEventListener("pointerdown", changed, true);
+    document.addEventListener("keydown", changed, true);
+    return () => { document.removeEventListener("pointerdown", changed, true); document.removeEventListener("keydown", changed, true); };
+  }, []);
+  const receiveNotification = useCallback((entry: ReturnType<typeof notificationMessage>, explicit = false) => {
+    if (!entry?.present) return;
+    if (!entry.intent) { setPendingNotification(null); setNotificationNotice({ message: notificationGuidance }); return; }
+    const current = notificationRoute.current;
+    setNotificationNotice(null);
+    setPendingNotification({ intent: entry.intent, source: current.connection, interaction: interaction.current, section: current.section,
+      selectedId: current.selectedId, renderedId: current.selected?.id || null, explicit, verified: false });
+  }, [setPendingNotification]);
+  useEffect(() => {
+    const pending = pendingNotification;
+    if (!pending || pending.verified || pendingNotificationRef.current !== pending) return;
+    if (!pending.source || pending.source !== workspace.connection) {
+      setPendingNotification(null); setNotificationNotice({ message: notificationGuidance }); return;
+    }
+    let cancelled = false;
+    void verifyNotificationIntent(pending.intent, pending.source, async () => {
+      const [info, result] = await Promise.all([
+        workspace.api<NonNullable<Workspace["info"]>>("/api/info"),
+        workspace.api<LoginRequest[] | { requests: LoginRequest[] }>("/api/requests"),
+      ]);
+      return { info, requests: Array.isArray(result) ? result : result.requests };
+    }, source => !cancelled && notificationRoute.current.connection === source && pendingNotificationRef.current === pending)
+      .then(result => {
+        if (cancelled || pendingNotificationRef.current !== pending) return;
+        if (result.kind === "ready") setPendingNotification({ ...pending, verified: true });
+        else {
+          setPendingNotification(null);
+          setNotificationNotice({ message: result.kind === "unavailable" ? "This notification’s request is no longer available. Choose a current request from the queue."
+            : result.kind === "failed" ? "This notification could not be checked. Check your connection, then choose a request from the queue." : notificationGuidance });
+        }
+      });
+    return () => { cancelled = true; };
+  }, [pendingNotification, workspace.connection, workspace.api, setPendingNotification]);
+  useEffect(() => {
+    const pending = pendingNotification;
+    if (!pending?.verified || pendingNotificationRef.current !== pending) return;
+    const current = notificationRoute.current;
+    if (current.connection !== pending.source || interaction.current !== pending.interaction || current.section !== pending.section || current.selectedId !== pending.selectedId || (current.selected?.id || null) !== pending.renderedId) {
+      setPendingNotification(null); setNotificationNotice({ message: "Your view or connection changed. Choose the notification’s request from the correct computer’s queue." }); return;
+    }
+    if (workspace.status !== "connected" || !workspace.info) return;
+    if (workspace.info.vapidPublicKey !== pending.intent.sourceKey) {
+      setPendingNotification(null); setNotificationNotice({ message: notificationGuidance }); return;
+    }
+    const target = workspace.requests.find(request => request.id === pending.intent.requestId);
+    setPendingNotification(null);
+    if (!target || !["pending", "approved", "active"].includes(target.status) || !Number.isFinite(Date.parse(target.expiresAt)) || Date.parse(target.expiresAt) <= Date.now()) {
+      setNotificationNotice({ message: "This notification’s request is no longer available. Choose a current request from the queue." }); return;
+    }
+    const activeView = current.section === "inbox" && current.selected && ["approved", "active"].includes(current.selected.status) && Date.parse(current.selected.expiresAt) > Date.now();
+    if (!pending.explicit && (current.connectOpen || (activeView && current.selected?.id !== target.id))) {
+      setNotificationNotice({ message: "Another request is waiting on this computer. Opening it leaves your current browser view and clears unsent text.", action: pending }); return;
+    }
+    if (current.section === "inbox" && current.selected?.id === target.id) return;
+    setNotificationNotice(null); setSelectedId(target.id); setSection("inbox");
+  }, [pendingNotification, workspace.connection, workspace.status, workspace.info, workspace.requests, now, setPendingNotification]);
+  useEffect(() => {
+    if (notificationNotice?.action && notificationNotice.action.source !== workspace.connection)
+      setNotificationNotice({ message: notificationGuidance });
+  }, [workspace.connection, notificationNotice]);
+  const openNotificationRequest = () => {
+    const action = notificationNotice?.action;
+    if (!action) return;
+    if (action.source !== notificationRoute.current.connection || notificationRoute.current.info?.vapidPublicKey !== action.intent.sourceKey) {
+      setNotificationNotice({ message: notificationGuidance }); return;
+    }
+    receiveNotification({ present: true, intent: action.intent }, true);
+  };
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -501,19 +606,11 @@ export function App() {
         /* The dashboard works without push. */
       });
     if (!("serviceWorker" in navigator)) return;
-    const openRequest = (event: MessageEvent) => {
-      if (
-        event.data?.type === "open-request" &&
-        typeof event.data.requestId === "string"
-      ) {
-        setSelectedId(event.data.requestId);
-        setSection("inbox");
-      }
-    };
+    const openRequest = (event: MessageEvent) => receiveNotification(notificationMessage(event.data));
     navigator.serviceWorker.addEventListener("message", openRequest);
     return () =>
       navigator.serviceWorker.removeEventListener("message", openRequest);
-  }, []);
+  }, [receiveNotification]);
 
   const takeAction = async (
     id: string,
@@ -706,6 +803,9 @@ export function App() {
           </div>
         </header>
         <div className="page-content">
+          {notificationNotice && !(mobileLayout && selectedId && section === "inbox") ? (
+            <NotificationNoticeView notice={notificationNotice} open={openNotificationRequest} dismiss={() => setNotificationNotice(null)} />
+          ) : null}
           {workspace.pairingNotice ? (
             <div className="pairing-expired-notice" role="status">
               <ShieldCheck size={18} />
@@ -942,6 +1042,9 @@ export function App() {
                   {mobileLayout && selectedId && toast ? (
                     <Toast message={toast} onDismiss={() => setToast("")} inline />
                   ) : null}
+                  {mobileLayout && selectedId && notificationNotice ? (
+                    <NotificationNoticeView notice={notificationNotice} open={openNotificationRequest} dismiss={() => setNotificationNotice(null)} />
+                  ) : null}
                   {selected && (!mobileLayout || selectedId) ? (
                     <BrowserPanel
                       request={selected}
@@ -954,7 +1057,11 @@ export function App() {
                   ) : (
                     <div className="no-selection">
                       <OnboardingArt />
-                      <h2>
+                      {selectedId !== null ? <>
+                        <h2>Request unavailable</h2>
+                        <p>Choose a current request from this computer’s queue.</p>
+                        <button className="button button-light" onClick={() => setSelectedId(null)}>Back to inbox <ArrowRight size={15} /></button>
+                      </> : <><h2>
                         They build.
                         <br />
                         You do your thing.
@@ -970,6 +1077,7 @@ export function App() {
                         <Bell size={15} />
                         Notify me
                       </button>
+                      </>}
                     </div>
                   )}
                 </div>

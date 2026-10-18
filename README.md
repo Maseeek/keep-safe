@@ -91,6 +91,8 @@ If notifications are already enrolled with a tab-only owner connection, **Rememb
 
 If this app's browser subscription uses another computer's notification key, enabling asks before replacing it. Accepting stops that old subscription's alerts in this browser. An older bridge can still register notifications, but cannot confirm enrollment or turn it off through these controls until updated. See the [notification check](docs/connection.md#check-phone-notifications).
 
+Opening a notification checks its public notification-source key and exact request against the currently paired computer. Alerts from another source, old alerts without that information, expired requests and missing requests show guidance. They never substitute the first request in the queue. If you are already using another live browser, **Open request** is an explicit choice that leaves that view and clears unsent text. A fresh app window needs a remembered phone key or a fresh pairing link; alerts never pair or approve a request automatically. For source-aware routing, finish any active handoff, update the bridge, close all Keep Safe tabs/app windows, then reopen the app so its worker update can activate. Untouched older app/worker pairs retain their old behavior; physical-phone delivery remains unverified.
+
 Enrollment is separate from delivery. Lock-screen delivery on a physical iPhone or Android device has not yet been verified.
 
 ### Practice before using a real account
