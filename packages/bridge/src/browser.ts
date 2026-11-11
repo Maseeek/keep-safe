@@ -3,7 +3,7 @@ import { createServer } from 'node:net';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page, type Route } from 'playwright';
 import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
 import { createPageControls } from './page-controls';
-import type { NavigationDirection, PageControlsSnapshot } from '../../shared/src/protocol';
+import type { EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
 
 export interface BrowserFrame { data: string; width: number; height: number; url: string; navigationAvailable?: boolean }
@@ -11,13 +11,58 @@ export interface BrowserSession {
   readonly cdpUrl?: string;
   readonly pageUrl?: string;
   frame(): Promise<BrowserFrame>;
-  input(input: { type: string; [key: string]: unknown }): Promise<void>;
+  /** May report what the action left focused, so the phone can raise its keyboard. */
+  input(input: { type: string; [key: string]: unknown }): Promise<FocusState | void>;
+  /** Managed browsers only: match the controlling phone's screen. */
+  resize?(viewport: ViewportRequest): Promise<void>;
   inspectControls?(options?: { includeFrames?: boolean }): Promise<PageControlsSnapshot>;
   navigate?(direction: NavigationDirection): Promise<void>;
   prepareHandoff?(): Promise<void>;
   close(): Promise<void>;
 }
-export type BrowserFactory = (input: { url: string; cdpUrl?: string; allowLocalUrls: boolean }) => Promise<BrowserSession>;
+export interface FocusState { editable: boolean; kind?: EditableKind }
+export type BrowserFactory = (input: { url: string; cdpUrl?: string; allowLocalUrls: boolean; viewport?: ViewportRequest }) => Promise<BrowserSession>;
+
+/** Reads only the focused element's type. No value, label or address leaves the page. */
+const focusStateSource = String.raw`() => {
+  let element = document.activeElement;
+  for (let depth = 0; element && element.shadowRoot && element.shadowRoot.activeElement && depth < 24; depth++) element = element.shadowRoot.activeElement;
+  if (!element || element === document.body || element === document.documentElement) return { editable: false };
+  const tag = element.tagName;
+  if (tag === 'IFRAME' || tag === 'FRAME') return { frame: true };
+  if (element.isContentEditable) return { editable: true, kind: 'text' };
+  if (tag === 'TEXTAREA') return { editable: !element.readOnly && !element.disabled, kind: 'text' };
+  if (tag !== 'INPUT' || element.readOnly || element.disabled) return { editable: false };
+  const type = (element.getAttribute('type') || 'text').toLowerCase();
+  if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color', 'hidden'].includes(type)) return { editable: false };
+  const mode = (element.getAttribute('inputmode') || '').toLowerCase();
+  const hint = (element.getAttribute('autocomplete') || '').toLowerCase();
+  const kind = type === 'password' ? 'password' : type === 'email' || mode === 'email' ? 'email' : type === 'tel' || mode === 'tel' ? 'tel'
+    : type === 'number' || mode === 'numeric' || mode === 'decimal' || hint === 'one-time-code' ? 'numeric'
+    : type === 'url' || mode === 'url' ? 'url' : type === 'search' || mode === 'search' ? 'search' : 'text';
+  return { editable: true, kind };
+}`;
+const focusedFrameSource = String.raw`() => {
+  let element = document.activeElement;
+  for (let depth = 0; element && element.shadowRoot && element.shadowRoot.activeElement && depth < 24; depth++) element = element.shadowRoot.activeElement;
+  return element;
+}`;
+async function focusState(page: Page): Promise<FocusState | undefined> {
+  try {
+    let frame = page.mainFrame();
+    for (let depth = 0; depth < 5; depth++) {
+      const state = await frame.evaluate(`(${focusStateSource})()`) as { editable?: boolean; kind?: EditableKind; frame?: boolean };
+      if (!state.frame) return { editable: state.editable === true, ...(state.editable && state.kind ? { kind: state.kind } : {}) };
+      const handle = await frame.evaluateHandle(`(${focusedFrameSource})()`);
+      const element = handle.asElement() as import('playwright').ElementHandle<Element> | null;
+      const child = element ? await element.contentFrame() : null;
+      await handle.dispose().catch(() => {});
+      if (!child) return { editable: false };
+      frame = child;
+    }
+    return { editable: false };
+  } catch { return undefined; } // A navigating page simply reports nothing.
+}
 
 export class BrowserNavigationError extends Error {
   constructor(readonly reason: 'form' | 'timeout' | 'history' | 'changed' | 'failed') {
@@ -126,7 +171,7 @@ async function clearPagePasswords(current: Page, deadline: number, clear = true)
   }
 }
 
-export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls }) => {
+export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls, viewport }) => {
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
@@ -167,7 +212,14 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
     owned = true;
     cdpUrl = `http://127.0.0.1:${port}`;
     try {
-      context = await browser.newContext({ viewport: { width: 390, height: 720 }, deviceScaleFactor: 1, acceptDownloads: false, serviceWorkers: 'block' });
+      // Sized to the phone that will approve the request, so the website lays
+      // out for that screen. The browser keeps its desktop identity: websites
+      // still see ordinary Chromium, and the agent gets the same browser back.
+      context = await browser.newContext({
+        viewport: viewport ? { width: viewport.width, height: viewport.height } : { width: 390, height: 720 },
+        deviceScaleFactor: viewport?.scale ?? 1, hasTouch: viewport?.touch === true,
+        acceptDownloads: false, serviceWorkers: 'block',
+      });
       // Incognito contexts keep website cookies in memory. No tracing/video/storage-state files.
       await context.route('**/*', async route => {
         try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
@@ -405,7 +457,9 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       const target = page; const source = target.url(); const generation = documentGeneration; const popups = popupGeneration;
       await ensurePopupMonitor(target);
-      const image = await target.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, animations: 'disabled' });
+      // The text caret stays visible and page animations keep running: this is a
+      // live view, and freezing either makes typing feel unresponsive.
+      const image = await target.screenshot({ type: 'jpeg', quality: 62, timeout: 5000, caret: 'initial' });
       const size = target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
       selectActivePage();
       if (target !== page || target.isClosed() || target.url() !== source || generation !== documentGeneration || popups !== popupGeneration) throw new BrowserFrameChangedError();
@@ -415,7 +469,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
       selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       await ensureActivePageMonitor();
-      if (input.type === 'click') await page.mouse.click(input.x as number, input.y as number);
+      if (input.type === 'click') { await page.mouse.click(input.x as number, input.y as number); selectActivePage(); return focusState(page); }
       else if (input.type === 'scroll') {
         // Position wheel input without activating the target. Both operations
         // remain inside the owner's input/handback barrier. Older clients omit it.
@@ -429,13 +483,25 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls 
         // Never re-read the mutable active page after an awaited mouse move.
         await target.mouse.wheel(input.deltaX as number, input.deltaY as number);
       }
-      else if (input.type === 'text') await page.keyboard.insertText(input.text as string);
-      else if (input.type === 'key') await page.keyboard.press(input.key as string);
+      // One typed character goes through real key events, which single-digit
+      // code boxes and similar widgets listen for. Longer text is inserted whole.
+      else if (input.type === 'text') { if ([...(input.text as string)].length === 1 && input.text !== '\n' && input.text !== '\r') await page.keyboard.type(input.text as string); else await page.keyboard.insertText(input.text as string); }
+      else if (input.type === 'key') {
+        await page.keyboard.press(input.key as string);
+        if (['Tab', 'Shift+Tab', 'Enter'].includes(input.key as string)) { selectActivePage(); return focusState(page); }
+      }
       else if (input.type === 'focus') {
         if (typeof input.snapshotId !== 'string' || typeof input.controlId !== 'string') throw new Error('Choose a control from the current inspection.');
         await pageControls!.focus(input.snapshotId, input.controlId);
+        return focusState(page);
       }
     },
+    ...(owned ? {
+      async resize(next: ViewportRequest) {
+        if (closed) return;
+        for (const current of context.pages()) if (!current.isClosed()) await current.setViewportSize({ width: next.width, height: next.height });
+      },
+    } : {}),
     async inspectControls(options) {
       selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');

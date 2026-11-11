@@ -33,7 +33,33 @@ export interface BridgeInfo {
   historyRetentionHours?: number;
   pageControlsAvailable?: boolean;
   navigationAvailable?: boolean;
+  /** One-time pairing codes replace owner-token links for phone setup. */
+  pairingCodesAvailable?: boolean;
+  /** The browser view can match the phone and report typing targets. */
+  liveViewAvailable?: boolean;
+  /** Shown to the owner so several computers are easy to tell apart. */
+  computerName?: string;
+  deviceLifetimeDays?: number;
 }
+
+/** The phone's usable screen area in CSS pixels. The bridge clamps every value. */
+export interface ViewportRequest {
+  width: number;
+  height: number;
+  scale?: number;
+  touch?: boolean;
+}
+
+/** What the last tap or key left focused. Never includes a field value. */
+export type EditableKind = 'text' | 'password' | 'email' | 'numeric' | 'tel' | 'url' | 'search';
+
+export interface PairingCode {
+  /** Eight characters, shown grouped as XXXX-XXXX. Single use. */
+  code: string;
+  expiresAt: string;
+}
+
+export type PairingState = 'waiting' | 'claimed' | 'expired';
 
 export type NavigationDirection = 'back' | 'forward' | 'reload';
 
@@ -79,7 +105,8 @@ export interface DevicePairResult {
 
 export type ClientMessage =
   | { type: 'auth'; token: string }
-  | { type: 'watch'; requestId: string }
+  | { type: 'watch'; requestId: string; viewport?: ViewportRequest }
+  | { type: 'resize'; width: number; height: number }
   | { type: 'unwatch' }
   | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
   | { type: 'focus'; snapshotId: string; controlId: string }
@@ -96,6 +123,7 @@ export type ServerMessage =
   | { type: 'navigated'; requestId: string; navigationId: string; frameEpoch: string; ok: boolean; message?: string }
   | { type: 'controls'; requestId: string; inspectionId: string; snapshot: PageControlsSnapshot }
   | { type: 'focused'; requestId: string; snapshotId: string; controlId: string }
+  | { type: 'editable'; requestId: string; editable: boolean; kind?: EditableKind }
   | { type: 'error'; message: string };
 
 /** REST: Authorization: Bearer <ownerToken> or <agentToken>. Tokens are separate. */
@@ -107,4 +135,7 @@ export const API = {
   pushStatus: '/api/push/status',
   unsubscribe: '/api/push/unsubscribe',
   socket: '/ws',
+  pairing: '/api/pairing',
+  pair: '/api/pair',
+  pairStatus: '/api/pair/status',
 } as const;
