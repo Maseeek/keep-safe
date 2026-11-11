@@ -4,7 +4,10 @@ import { dirname } from 'node:path';
 import type { DevicePairResult, PairedDevice } from '../../shared/src/protocol';
 
 interface StoredDevice extends PairedDevice { digest: string }
-const DEVICE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+/** A paired phone stays paired while it is used. Thirty idle days end it. */
+export const DEVICE_LIFETIME_DAYS = 30;
+const DEVICE_LIFETIME_MS = DEVICE_LIFETIME_DAYS * 24 * 60 * 60 * 1000;
+const RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
 export function atomicJsonWriter(path?: string) {
   let pending = Promise.resolve();
   return {
@@ -46,6 +49,9 @@ export async function createDeviceStore(path: string | undefined, now: () => num
     if (!device || now() >= Date.parse(device.expiresAt)) return false;
     if (touch && now() - Date.parse(device.lastSeenAt) >= 60_000) {
       device.lastSeenAt = new Date(now()).toISOString();
+      // Sliding expiry: renew at most daily so an active phone never needs
+      // re-pairing, while an unused key still ends on its own.
+      if (Date.parse(device.expiresAt) - now() < DEVICE_LIFETIME_MS - RENEW_AFTER_MS) device.expiresAt = new Date(now() + DEVICE_LIFETIME_MS).toISOString();
       seenTimer ??= setTimeout(() => { seenTimer = undefined; void persist().catch(() => {}); }, 1000);
       seenTimer.unref();
     }
