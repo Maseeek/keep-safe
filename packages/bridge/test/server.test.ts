@@ -26,8 +26,8 @@ async function start(options: Partial<BridgeOptions> = {}) {
   };
   const bridge = await createBridge({ ownerToken, agentToken, port: 0, browserFactory: async () => { opened++; return browser; }, ...options });
   cleanup.push(() => bridge.close());
-  async function request(path: string, token: string | undefined = ownerToken, method = 'GET', body?: unknown, origin?: string) {
-    return fetch(`${bridge.url}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...(origin ? { Origin: origin } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  async function request(path: string, token: string | undefined = ownerToken, method = 'GET', body?: unknown, origin?: string, signal?: AbortSignal) {
+    return fetch(`${bridge.url}${path}`, { method, signal, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...(origin ? { Origin: origin } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
   }
   async function create(body: unknown = { agent: 'Codex', title: 'Sign into Example', url: 'https://example.com/login' }) {
     const response = await request('/api/requests', agentToken, 'POST', body);
@@ -381,4 +381,72 @@ it('persists separate random pairing keys in owner-only local files', async () =
   expect((await stat(join(directory, 'config.json'))).mode & 0o777).toBe(0o600);
   expect((await stat(directory)).mode & 0o777).toBe(0o700);
   expect(await readFile(join(directory, 'config.json'), 'utf8')).not.toContain('password');
+});
+
+describe('agent long polling', () => {
+  it('holds a status request until the owner changes it, then returns the browser after completion', async () => {
+    const bridge = await start();
+    const item = await bridge.create();
+    const started = Date.now();
+    const approval = bridge.request(`/api/requests/${item.id}?wait=10`, agentToken);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await bridge.request(`/api/requests/${item.id}/approve`, ownerToken, 'POST');
+    const approved = await (await approval).json();
+    expect(approved.status).toBe('approved');
+    expect(Date.now() - started).toBeLessThan(5000);
+
+    const completion = bridge.request(`/api/requests/${item.id}?wait=10&since=${encodeURIComponent(approved.updatedAt)}`, agentToken);
+    const ws = await socket(bridge.url); await ws.auth();
+    ws.send({ type: 'watch', requestId: item.id }); await ws.next('frame');
+    const active = await (await completion).json();
+    expect(active.status).toBe('active');
+    expect(active.browser).toBeUndefined();
+
+    const done = bridge.request(`/api/requests/${item.id}?wait=10&since=${encodeURIComponent(active.updatedAt)}`, agentToken);
+    expect((await bridge.request(`/api/requests/${item.id}/complete`, ownerToken, 'POST')).status).toBe(200);
+    const detail = await (await done).json();
+    expect(detail.status).toBe('completed');
+    expect(detail.browser).toEqual({ cdpUrl: 'http://127.0.0.1:9333', pageUrl: 'https://example.com/login' });
+    ws.ws.close();
+  });
+
+  it('answers unchanged requests when the wait ends and changed or ended requests at once', async () => {
+    const bridge = await start();
+    const item = await bridge.create();
+    let started = Date.now();
+    const unchanged = await (await bridge.request(`/api/requests/${item.id}?wait=1`, agentToken)).json();
+    expect(unchanged.status).toBe('pending');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+
+    started = Date.now();
+    expect((await (await bridge.request(`/api/requests/${item.id}?wait=10&since=stale`, agentToken)).json()).status).toBe('pending');
+    await bridge.request(`/api/requests/${item.id}/deny`, ownerToken, 'POST');
+    expect((await (await bridge.request(`/api/requests/${item.id}?wait=10`, agentToken)).json()).status).toBe('denied');
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('wakes waiters on expiry and validates the wait parameters', async () => {
+    const bridge = await start({ expiryIntervalMs: 50 });
+    const item = await bridge.create({ agent: 'Codex', title: 'Short', url: 'https://example.com/login', ttlSeconds: 1 });
+    expect((await (await bridge.request(`/api/requests/${item.id}?wait=10`, agentToken)).json()).status).toBe('expired');
+    for (const query of ['wait=0', 'wait=31', 'wait=1.5', 'wait=abc', 'since=x', `wait=5&since=${'x'.repeat(65)}`]) {
+      expect((await bridge.request(`/api/requests/${item.id}?${query}`, agentToken)).status).toBe(400);
+    }
+  });
+
+  it('releases held responses when the bridge stops and when the caller disconnects', async () => {
+    const bridge = await start();
+    const item = await bridge.create();
+    const abandoned = new AbortController();
+    const dropped = bridge.request(`/api/requests/${item.id}?wait=30`, agentToken, 'GET', undefined, undefined, abandoned.signal).catch(() => 'aborted');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    abandoned.abort();
+    expect(await dropped).toBe('aborted');
+    const held = bridge.request(`/api/requests/${item.id}?wait=30`, agentToken);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const started = Date.now();
+    await bridge.close();
+    expect((await (await held).json()).status).toBe('pending');
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
 });

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tools for agent credentials and remote sign-in</title>
+<style>
+body{margin:0;color:var(--foreground);font-family:var(--font-sans,system-ui,sans-serif)}
+#agent-access-comparison{width:100%}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+caption{text-align:left;padding:0 0 12px;color:var(--muted-foreground)}
+th,td{text-align:left;vertical-align:top;padding:14px 10px 14px 0;overflow-wrap:anywhere;border-bottom:1px solid var(--border)}
+th{font-weight:500}
+th:first-child{width:23%}
+th:nth-child(2){width:47%}
+th:last-child{width:30%}
+td:last-child,th:last-child{padding-right:0}
+a{color:inherit;text-decoration:underline;text-underline-offset:3px}
+p{margin:7px 0 0;color:var(--muted-foreground)}
+small{font:inherit;color:var(--muted-foreground)}
+@media(max-width:520px){thead{display:none}table,tbody,tr,td{display:block;width:auto}caption{display:block;width:100%;box-sizing:border-box}tr{padding:12px 0;border-bottom:1px solid var(--border)}td{padding:5px 0;border:0}td:first-child{font-weight:500}td:last-child::before{content:'My verdict: ';font-weight:500}}
+</style>
+</head>
+<body>
+<div id="agent-access-comparison">
+<table>
+<caption>Existing tools · documentation checked 15 October 2026</caption>
+<thead><tr><th scope="col">Tool</th><th scope="col">What it covers</th><th scope="col">My verdict</th></tr></thead>
+<tbody>
+<tr><td><a href="https://docs.doppler.com/docs/vercel" target="_blank" rel="noopener noreferrer">Doppler</a> / <a href="https://infisical.com/docs/integrations/secret-syncs/vercel" target="_blank" rel="noopener noreferrer">Infisical</a></td><td>Store keys centrally and sync ENV values into Vercel.<p>Doesn't complete arbitrary browser logins.</p></td><td>Try Doppler first for your ENV setup pain.</td></tr>
+<tr><td><a href="https://www.1password.dev/environments/mcp-server" target="_blank" rel="noopener noreferrer">1Password Environments MCP</a></td><td>Agents manage variable names and prepare local ENV mounts.<p>Desktop app and local MCP required; remote-only clients unsupported.</p></td><td>Useful if you already use 1Password locally.</td></tr>
+<tr><td><a href="https://github.com/johnuopini/secret-gate" target="_blank" rel="noopener noreferrer">Secret Gate</a></td><td>Remote agent requests a 1Password secret; you approve through Telegram.<p>Requires 1Password Connect and a Telegram bot.</p></td><td>Closest phone-approval match. Test with a development vault.</td></tr>
+<tr><td><a href="https://github.com/pdumicz/secret-shuttle" target="_blank" rel="noopener noreferrer">Secret Shuttle</a></td><td>Agent uses secret references to capture and deliver keys through browser and CLI workflows.<p>Local bridge; beta and not independently audited.</p></td><td>Study before building. Trial with test accounts.</td></tr>
+<tr><td><a href="https://docs.browserbase.com/platform/browser/observability/session-live-view" target="_blank" rel="noopener noreferrer">Browserbase Live View</a> + <a href="https://docs.browserbase.com/platform/browser/core-features/contexts" target="_blank" rel="noopener noreferrer">Contexts</a></td><td>Human takes over a remote browser; saved profiles retain logins.<p>Mobile keyboard input needs extra integration.</p></td><td>A building block for your phone sign-in flow.</td></tr>
+<tr><td><a href="https://docs.arcade.dev/en/build/create-tools/tool-basics/create-tool-auth" target="_blank" rel="noopener noreferrer">Arcade</a> / <a href="https://docs.composio.dev/docs/quickstart" target="_blank" rel="noopener noreferrer">Composio</a></td><td>Connect supported apps to agents using authorization links and managed credentials.</td><td>Use for API access. Doesn't solve the whole project setup flow.</td></tr>
+</tbody>
+</table>
+<p><small>Fit assessments are my judgment from current documentation, not hands-on testing. Product links are sources.</small></p>
+</div>
+</body>
+</html>

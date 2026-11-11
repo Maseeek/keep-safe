@@ -117,3 +117,41 @@ describe('agent bridge client', () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('agent long polling client', () => {
+  it('long polls with the last seen update and returns as soon as the request ends', async () => {
+    const urls: string[] = []; const timeouts: number[] = [];
+    const original = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(delay => { timeouts.push(delay); return original(delay); });
+    const replies = [
+      { id: 'test', status: 'approved', updatedAt: 'one' },
+      { id: 'test', status: 'active', updatedAt: 'two' },
+      { id: 'test', status: 'completed', updatedAt: 'three' },
+    ];
+    const client = new BridgeClient({ url: 'http://127.0.0.1:4318', token: 'secret', fetch: async url => { urls.push(String(url)); return Response.json(replies.shift()); } });
+    const started = Date.now();
+    expect((await client.wait('test', 120)).status).toBe('completed');
+    // Only the first quick answer pauses: without a baseline it may come from a bridge that ignores wait.
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(urls.map(url => new URL(url).search)).toEqual(['?wait=30', '?wait=30&since=one', '?wait=30&since=two']);
+    expect(timeouts).toEqual([45000, 45000, 45000]);
+  });
+
+  it('keeps the earlier cadence against a bridge that ignores the wait parameter', async () => {
+    let calls = 0;
+    const client = new BridgeClient({ url: 'http://127.0.0.1:4318', token: 'secret', fetch: async () => { calls++; return Response.json({ id: 'test', status: 'pending', updatedAt: 'same' }); } });
+    expect((await client.wait('test', 2)).status).toBe('pending');
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(calls).toBeLessThanOrEqual(3);
+  });
+
+  it('cancels a held long poll', async () => {
+    const controller = new AbortController();
+    const client = new BridgeClient({ url: 'http://127.0.0.1:4318', token: 'secret', fetch: (_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }) });
+    const waiting = client.wait('test', 60, controller.signal);
+    setTimeout(() => controller.abort(), 50);
+    await expect(waiting).rejects.toThrow('Wait cancelled.');
+  });
+});

@@ -1,5 +1,12 @@
 # Change history
 
+## 11 November 2026
+
+### Agent long polling
+
+- `GET /api/requests/:id` accepts `wait` (1–30 seconds) and optional `since` (an earlier `updatedAt`). The bridge holds the response until the request changes, ends, or the wait expires. Expiry, owner actions, history removal and bridge shutdown release held responses; at most 32 are held at once.
+- The MCP `wait_for_login` tool now long polls, so the agent learns of completion immediately instead of up to 1.5 seconds later and makes far fewer requests. It keeps the 1.5-second cadence against bridges that ignore `wait`, and cancellation aborts a held request.
+
 ## 18 October 2026
 
 ### Notification request routing

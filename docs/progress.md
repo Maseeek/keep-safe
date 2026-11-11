@@ -447,3 +447,9 @@
 - Started persistent user services for the Cloudflare HTTPS tunnel (`keep-safe-tunnel.service`), the local bridge configured for the tunnel and hosted app (`keep-safe-bridge.service`), and an automatic live-login queue keeper (`keep-safe-live-queue.service`) that keeps pre-warmed `GitHub sign-in handoff` (`https://github.com/login`) and `Practice browser handoff` (`https://practice.keep-safe.invalid/login`) sessions active and ready for immediate phone access.
 - Verified all 10 `bridge doctor` checks (`config`, `local-health`, `local-auth`, `chromium`, `local-cors`, `local-websocket`, `public-https`, `public-health`, `public-cors`, `public-websocket`) pass against the live HTTPS tunnel and production Vercel origin, and verified live `390x720` JPEG frame streaming over `wss://` in a mobile Chromium viewport (`390x844`) connected to `https://keep-safe-eight.vercel.app`.
 - Sent the requested completion and live-screen access summary to the connected owner Gmail account in the existing thread (confirmed with `SENT` label and recorded in ignored `.keep-safe/contact.json`).
+
+## Agent long polling on 11 November 2026
+
+- Added `wait`/`since` long polling to the agent request status route and switched the MCP `wait_for_login` client to it. The 30-second cap stays below common tunnel idle timeouts, including the Cloudflare tunnel used by the retained bridge.
+- The client falls back to the old 1.5-second checks against bridges without long polling. The owner phone already receives live updates over WebSocket and is unchanged.
+- Typecheck passes. The full suite passed **380 tests across 41 files**. Two of three full runs had one or two timing failures in Chromium frame-inspection and popup-navigation tests. Neither test uses the changed code, and both pass alone. An unmodified baseline run passed. Not deployed, and the retained bridge service has not been restarted.

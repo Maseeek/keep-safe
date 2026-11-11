@@ -77,7 +77,7 @@ T3's own environment MCP URL is a different service. Do not point Keep Safe at i
 
 - `request_login`: create a time-limited request with `agent`, `title`, `url`, optional `reason`, `cdp_url`, and `ttl_seconds`.
 - `get_login_request`: inspect status using `request_id`.
-- `wait_for_login`: wait up to 120 seconds for a terminal status; wait again if it is still pending or active.
+- `wait_for_login`: wait up to 120 seconds for a terminal status; wait again if it is still pending or active. It long polls the bridge, so a completed handoff is reported as soon as it happens. Against an older bridge it falls back to checking every 1.5 seconds.
 
 After a `completed` result, resume in the same browser context. A `denied` or `expired` result means stop. Keep Safe does not prove that a third-party login succeeded merely because the owner returned control; the agent must verify the destination site's authenticated state.
 
@@ -97,7 +97,8 @@ Cookies remain in memory on the developer's computer. The managed browser is clo
 
 All API requests except `/api/health` require `Authorization: Bearer <token>`. Tokens must not be put in URL queries. A remembered phone key can use owner routes, but cannot create agent requests or pair another phone.
 
-- Agent token: `POST /api/requests` with JSON matching `CreateRequestInput`; `GET /api/requests/:id` to poll the result.
+- Agent token: `POST /api/requests` with JSON matching `CreateRequestInput`; `GET /api/requests/:id` to check the result.
+- Long polling: `GET /api/requests/:id?wait=<1–30>` holds the response until the request's `updatedAt` changes, it reaches `completed`/`denied`/`expired`, or the wait ends, then returns the same body as a plain `GET`. Pass `&since=<updatedAt>` from your previous response so a change between calls returns at once. An unchanged request returns after the wait with no change in its fields. Terminal requests return immediately. Held responses are also released when the bridge stops; at most 32 are held at once and further calls answer immediately. Invalid `wait`, or `since` without `wait`, returns 400. Allow at least `wait` + 15 seconds in your HTTP client timeout. Owner tokens can use it too.
 - Owner token: `GET /api/info`, `GET /api/requests`, `POST /api/requests/:id/approve`, `/deny`, or `/complete`.
 - Owner history cleanup: `POST /api/history/clear` with JSON `{"confirm":true}`. Returns `{removed, protected, requests}` and broadcasts the latest list. A paired owner key can use this route; agent keys cannot. Only terminal records past their original expiry with no pending browser work can be removed. `BridgeInfo.historyRetentionHours` advertises support (currently 24).
 - Paired phone management: `GET /api/devices`, `POST /api/devices/:id/revoke`; bootstrap owner token only: `POST /api/devices` with a device name, which returns a new seven-day key once.

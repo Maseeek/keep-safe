@@ -46,6 +46,9 @@ interface StoredSubscription extends PushSubscription { deviceId?: string }
 const terminal = new Set(['completed', 'denied', 'expired']);
 const historyRetentionHours = 24;
 const historyRetentionMs = historyRetentionHours * 60 * 60 * 1000;
+/** Below common tunnel and proxy idle timeouts. */
+const longPollMaxSeconds = 30;
+const longPollMaxWaiters = 32;
 const allowedKeys = new Set(['Enter', 'Tab', 'Shift+Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space', 'ControlOrMeta+A']);
 
 function equalToken(actual: string | undefined, expected: string) {
@@ -155,7 +158,22 @@ export async function createBridge(options: BridgeOptions) {
     return false;
   }
   function send(client: Client, message: ServerMessage) { if ((!client.authenticated || validClient(client)) && client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 2_000_000) client.ws.send(JSON.stringify(message)); }
-  function broadcast() { const message: ServerMessage = { type: 'requests', requests: list() }; for (const client of clients) if (client.authenticated) send(client, message); }
+  /** Held long-poll responses. Each callback re-checks its own request and releases itself when it changed. */
+  const waiters = new Set<(stop?: boolean) => void>();
+  function broadcast() {
+    const message: ServerMessage = { type: 'requests', requests: list() };
+    for (const client of clients) if (client.authenticated) send(client, message);
+    for (const waiter of [...waiters]) waiter();
+  }
+  function waitForChange(id: string, entry: Entry, since: string, milliseconds: number, response: ServerResponse) {
+    return new Promise<void>(resolve => {
+      const release = () => { clearTimeout(timer); waiters.delete(check); response.off('close', release); resolve(); };
+      const check = (stop?: boolean) => { if (stop || entries.get(id) !== entry || terminal.has(entry.request.status) || entry.request.updatedAt !== since) release(); };
+      const timer = setTimeout(release, milliseconds);
+      waiters.add(check);
+      response.once('close', release);
+    });
+  }
   function unwatch(client: Client) {
     if (client.frames) clearInterval(client.frames);
     client.frames = undefined;
@@ -500,6 +518,19 @@ export async function createBridge(options: BridgeOptions) {
     if (match) {
       const entry = checkEntry(match[1]);
       if (request.method === 'GET' && !match[2]) {
+        const waitParam = url.searchParams.get('wait');
+        const sinceParam = url.searchParams.get('since');
+        if (waitParam !== null && (!/^[1-9]\d?$/.test(waitParam) || Number(waitParam) > longPollMaxSeconds)) throw new HttpError(400, `wait must be an integer between 1 and ${longPollMaxSeconds} seconds.`);
+        if (sinceParam !== null && (waitParam === null || !sinceParam || sinceParam.length > 64)) throw new HttpError(400, 'since requires wait and must be the updatedAt value from an earlier response.');
+        const since = sinceParam ?? entry.request.updatedAt;
+        // Hold the response until this request changes, reaches an outcome, or
+        // the wait ends. A full waiter set degrades to an immediate answer.
+        if (waitParam !== null && !stopping && waiters.size < longPollMaxWaiters && !terminal.has(entry.request.status) && entry.request.updatedAt === since) {
+          await waitForChange(match[1], entry, since, Number(waitParam) * 1000, response);
+          if (response.destroyed || request.socket.destroyed) return;
+          if (owner) requireOwner();
+          if (entries.get(match[1]) !== entry) throw new HttpError(404, 'Request not found.');
+        }
         const browser = agent && entry.request.status === 'completed' && entry.browser?.cdpUrl && now() < Date.parse(entry.request.expiresAt) ? { cdpUrl: entry.browser.cdpUrl, pageUrl: entry.browser.pageUrl ?? entry.request.url } : undefined;
         json(response, 200, { ...entry.request, ...(browser ? { browser } : {}) }); return;
       }
@@ -602,6 +633,7 @@ export async function createBridge(options: BridgeOptions) {
       // Browser cleanup can await a renderer. Reject reconnects before the first
       // await, so no new socket can outlive the set terminated below.
       stopping = true;
+      for (const waiter of [...waiters]) waiter(true);
       clearInterval(expiryTimer);
       clearInterval(heartbeat);
       for (const client of clients) { clearTimeout(client.timer); unwatch(client); client.ws.terminate(); }

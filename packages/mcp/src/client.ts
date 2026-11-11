@@ -50,17 +50,19 @@ export class BridgeClient {
     this.fetcher = options.fetch ?? (this.url.protocol === 'http:' ? directLoopbackRequest : fetch);
   }
 
-  private async request<T>(path: string, input?: unknown): Promise<T> {
+  private async request<T>(path: string, input?: unknown, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
     let response: Response;
+    const timeout = AbortSignal.timeout(options.timeoutMs ?? 15000);
     try {
       response = await this.fetcher(new URL(path, this.url), {
         method: input === undefined ? 'GET' : 'POST',
         headers: { Authorization: `Bearer ${this.options.token}`, ...(input === undefined ? {} : { 'Content-Type': 'application/json' }) },
         body: input === undefined ? undefined : JSON.stringify(input),
-        signal: AbortSignal.timeout(15000),
+        signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout,
         redirect: 'error',
       });
     } catch {
+      if (options.signal?.aborted) throw new Error('Wait cancelled.');
       throw new Error('Cannot reach the Keep Safe bridge. Check it is running and the configured URL is reachable.');
     }
     if (!response.ok) {
@@ -75,15 +77,31 @@ export class BridgeClient {
   create(input: CreateRequestInput): Promise<AgentRequest> { return this.request('/api/requests', input); }
   get(id: string): Promise<AgentRequest> { return this.request(`/api/requests/${encodeURIComponent(id)}`); }
 
+  /**
+   * Long poll: the bridge holds the response until the request's updatedAt differs from `since`
+   * (default: its value on arrival), it reaches an outcome, or `waitSeconds` (1–30) pass.
+   */
+  poll(id: string, waitSeconds: number, since?: string, signal?: AbortSignal): Promise<AgentRequest> {
+    const query = new URLSearchParams({ wait: String(waitSeconds), ...(since ? { since } : {}) });
+    return this.request(`/api/requests/${encodeURIComponent(id)}?${query}`, undefined, { timeoutMs: 15000 + waitSeconds * 1000, signal });
+  }
+
   async wait(id: string, timeoutSeconds = 60, signal?: AbortSignal): Promise<AgentRequest> {
     const deadline = Date.now() + Math.max(1, Math.min(timeoutSeconds, 120)) * 1000;
+    let since: string | undefined;
     while (true) {
       signal?.throwIfAborted();
-      const request = await this.get(id);
+      const started = Date.now();
+      const waitSeconds = Math.floor(Math.min(deadline - started, 30_000) / 1000);
+      const request = waitSeconds >= 1 ? await this.poll(id, waitSeconds, since, signal) : await this.get(id);
       if (['completed', 'denied', 'expired'].includes(request.status) || Date.now() >= deadline) return request;
-      await new Promise<void>((done, reject) => {
+      const changed = since !== undefined && request.updatedAt !== since;
+      since = request.updatedAt;
+      // A bridge without long polling answers at once; keep the earlier 1.5-second cadence for it.
+      const pause = changed ? 0 : Math.min(1500 - (Date.now() - started), deadline - Date.now());
+      if (pause > 0) await new Promise<void>((done, reject) => {
         const finish = () => { signal?.removeEventListener('abort', abort); done(); };
-        const timer = setTimeout(finish, Math.min(1500, deadline - Date.now()));
+        const timer = setTimeout(finish, pause);
         const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new Error('Wait cancelled.')); };
         signal?.addEventListener('abort', abort, { once: true });
       });
