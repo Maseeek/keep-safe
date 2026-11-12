@@ -1,12 +1,25 @@
 {
   "name": "keep-safe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Let a human complete an agent's browser login from their phone.",
+  "description": "Sign in to websites for your coding agents, from your phone.",
   "engines": {
     "node": ">=20.19.0"
   },
+  "bin": {
+    "keep-safe": "bin/keep-safe.mjs"
+  },
+  "license": "MIT",
+  "files": [
+    "bin",
+    "packages",
+    "apps/web/dist",
+    "docs",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "dev": "vite --config apps/web/vite.config.ts --host 0.0.0.0",
     "bridge": "tsx packages/bridge/src/cli.ts",
@@ -17,16 +30,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "pretest": "npm run build:web",
-    "agent:config": "tsx scripts/agent-config.ts"
+    "agent:config": "tsx scripts/agent-config.ts",
+    "keep-safe": "node bin/keep-safe.mjs",
+    "prepare": "npm run build:web"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
-    "jsqr": "1.4.0",
-    "lucide-react": "1.58.0",
     "playwright": "1.64.1",
     "qrcode-generator": "2.0.4",
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
+    "tsx": "4.23.15",
     "web-push": "3.6.7",
     "ws": "8.22.0",
     "zod": "^4.0.0"
@@ -38,7 +50,10 @@
     "@types/web-push": "^3.6.0",
     "@types/ws": "^8.0.0",
     "@vitejs/plugin-react": "6.1.2",
-    "tsx": "4.23.15",
+    "jsqr": "1.4.0",
+    "lucide-react": "1.58.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "vitest": "4.1.12"

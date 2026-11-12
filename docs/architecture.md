@@ -8,6 +8,30 @@ The bridge runs on the developer's computer, listens on loopback, manages login 
 
 MCP and HTTP clients use a different agent token. An agent can create a login request and poll its status, but cannot approve the request, control the owner's interface, or subscribe for owner notifications.
 
+## Pairing
+
+A phone pairs with a one-time code. Only the owner key can create one, through `POST /api/pairing`, and the `keep-safe` command sends that key to the bridge on loopback only. A code is eight characters from a 30-character alphabet, lives ten minutes in memory, and works once. `POST /api/pair` exchanges it for a device key and is the only unauthenticated route that changes state. It shares the unauthenticated rate limit, keeps the allowed-origin check, marks the code used before its first await, and counts wrong codes: ten misses cancel every unused code. A bridge restart cancels unclaimed codes.
+
+The pairing link carries the code and the bridge address in the URL fragment. The app removes the fragment before any network request. Neither the link, the QR code, nor the desktop pairing page contains a key. The desktop page learns only whether its own code is waiting, claimed or expired.
+
+Device keys are stored as digests. A key expires 30 days after its last use and is renewed at most once a day while in use. Revocation is immediate. A device key cannot create pairing codes, and the agent key cannot either, so neither can add a phone.
+
+The owner key remains bootstrap authority. The foreground bridge still prints an owner link for development. The background bridge started by `keep-safe up` prints none, so no key reaches its log.
+
+## Routes to the phone
+
+The bridge always listens on loopback. `--listen` adds named private addresses, which `keep-safe up` uses for the computer's Tailscale address. Every request there passes the same origin check and authentication as on loopback. Plain HTTP origins are accepted only for loopback, and for Tailscale addresses when `--tailnet-http` is given: the Tailscale range `100.64.0.0/10`, `*.ts.net` names and bare machine names. Tailscale encrypts that traffic between the owner's devices.
+
+With Tailscale Serve the bridge stays on loopback and Tailscale terminates HTTPS for tailnet members only. A Cloudflare quick tunnel publishes the bridge on a public address, where the keys and pairing codes are the only barrier. That route is for trying Keep Safe, and its address changes on restart.
+
+## Live view
+
+The phone reports its usable screen size when it starts watching. The bridge clamps it (320 to 1280 wide, 320 to 1400 tall, density 1 to 2) and opens the managed browser at that size, so websites lay out for the phone. The browser keeps its desktop identity. Clients that send no size get the earlier 390 by 720 view. Attached browsers are never resized.
+
+Frames are captured up to ten times a second. A frame identical to the last is sent at most once a second, a busy connection skips captures, and each input triggers an immediate capture. Still pages are sampled at a third of the rate.
+
+After a tap, Tab, Enter or a page-control focus, the bridge reads the type of the focused element and tells the phone whether it is editable and what kind of field it is. No value, label or address is read. The phone uses this to raise its keyboard. Typed characters go into a password-type field that holds one placeholder character, are forwarded at once, and are removed. Nothing typed is stored, logged or echoed on the phone. A single typed character is delivered with real key events. Longer text is inserted whole.
+
 ## Why the browser stays local
 
 The additional spending cap is £0. A local browser avoids paid always-on browser compute and keeps website sessions on the user's computer. Vercel serves the frontend while the bridge owns the persistent interactive connection. See [Vercel function limits](https://vercel.com/docs/functions/limitations).
@@ -20,8 +44,8 @@ Remote access requires the computer to remain awake and a secure route to the br
 - Offline key replacement requires an exclusive configuration-directory lock shared with the bridge CLI. It never prints new keys. Owner/all replacement durably revokes remembered phones and subscriptions before committing new bootstrap authority; agent-only replacement preserves them. VAPID keys remain unchanged. A crash lock is retained for explicit recovery rather than stolen automatically.
 - Connection diagnostics use a pure existing-config reader and do not acquire or alter locks. Only a fixed loopback `/api/info` check receives the owner key. Public HTTP/preflight/WebSocket probes are unauthenticated, reject redirects, bound responses, and report transport rather than ownership or physical-phone success. The setup helper prints commands without reading keys or starting a tunnel.
 - The default MCP client uses a private direct HTTP agent for loopback URLs, keeping the agent key off global proxy dispatchers. Explicit custom-fetch injection remains an integration responsibility; remote HTTPS uses the normal fetch transport. Redirects are refused.
-- Remembered phones receive separate seven-day device keys. The bridge stores SHA256 digests and device metadata in a local, atomically written file. It does not retain raw device keys.
-- A remembered key is saved in the phone's localStorage only after explicit opt-in. The master owner token remains tab-only. Authenticated APIs and every live-control message recheck expiry/revocation. The device key never confers agent rights or permission to pair another phone.
+- Paired phones receive separate device keys that expire 30 days after their last use. The bridge stores SHA256 digests and device metadata in a local, atomically written file. It does not retain raw device keys.
+- A device key is saved in the phone's localStorage when the phone pairs with a code, or after explicit opt-in when connecting with the owner token. The master owner token remains tab-only. Authenticated APIs and every live-control message recheck expiry/revocation. The device key never confers agent rights or permission to pair another phone.
 - Request metadata is in memory and resets on restart. Eligible finished records are removed automatically 24 hours after original expiry, or earlier by confirmed owner cleanup/capacity pressure. All unexpired outcomes and pending browser opening/finalization/input/closure remain protected. A tracked failed close retains its browser reference for retry. The 100-record cap refuses new requests when no safe record can be removed.
 - Web Push subscriptions may be stored locally. They are not uploaded to Vercel.
 - Browser input is relayed transiently. Passwords and input messages are not logged or written to disk. Screenshots are streamed without recordings or trace files.

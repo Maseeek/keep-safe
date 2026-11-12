@@ -7,25 +7,22 @@ import {
   BellRing,
   Check,
   CheckCheck,
-  ChevronDown,
   ChevronRight,
   Clock3,
   Code2,
-  Copy,
   ExternalLink,
   Inbox,
+  KeyRound,
   Laptop,
   Link2,
   LoaderCircle,
   LockKeyhole,
   MonitorSmartphone,
-  Radio,
   RotateCcw,
   Search,
   Settings2,
   ShieldCheck,
   Smartphone,
-  Terminal,
   Unplug,
   X,
 } from "lucide-react";
@@ -36,6 +33,9 @@ import { notificationMessage, readNotificationEntry, verifyNotificationIntent, w
 import { DeviceManager } from "./DeviceManager";
 import { HistoryControls } from "./HistoryControls";
 import { useNotifications } from "./useNotifications";
+import { PairForm, PromptCard } from "./pairing-ui";
+import { PairingDesk, readDeskLink } from "./PairingDesk";
+import { useInstall, Welcome } from "./Welcome";
 
 type Section = "inbox" | "activity" | "devices" | "settings";
 type Filter = "all" | "pending" | "active";
@@ -126,23 +126,22 @@ function RequestCard({
       className={`request-card ${selected ? "is-selected" : ""}`}
       onClick={onClick}
     >
-      <div className="request-card-top">
-        <AgentMark name={request.agent} />
-        <div className="request-agent">
+      <AgentMark name={request.agent} />
+      <span className="request-card-body">
+        <span className="request-card-top">
           <strong>{request.agent}</strong>
-          <span>{domain(request.origin)}</span>
-        </div>
-        <ChevronRight size={17} className="card-chevron" />
-      </div>
-      <h3>{request.title}</h3>
-      <p>{request.reason}</p>
-      <div className="request-card-bottom">
-        <StatusPill request={request} now={now} />
-        <span className="request-time">
-          <Clock3 size={12} />
-          {timeLeft(request.expiresAt, now)}
+          <span className="request-site">{domain(request.origin)}</span>
         </span>
-      </div>
+        <span className="request-card-title">{request.title}</span>
+        <span className="request-card-bottom">
+          <StatusPill request={request} now={now} />
+          <span className="request-time">
+            <Clock3 size={12} aria-hidden="true" />
+            {timeLeft(request.expiresAt, now)}
+          </span>
+        </span>
+      </span>
+      <ChevronRight size={18} className="card-chevron" aria-hidden="true" />
     </button>
   );
 }
@@ -258,18 +257,10 @@ function ConnectDialog({
       >
         <X size={20} />
       </button>
-      <div className="dialog-icon">
-        <MonitorSmartphone size={29} strokeWidth={1.5} />
-      </div>
-      <span className="eyebrow">ONE SECURE CONNECTION</span>
-      <h2 id="connect-title">
-        Bring your computer
-        <br />
-        along for the ride.
-      </h2>
+      <h2 id="connect-title">Connect with an owner token</h2>
       <p>
-        Start the Keep Safe bridge on your computer, then use its pairing link
-        or enter the details below.
+        For advanced setups. Most phones pair faster with the QR code from
+        <code> keep-safe pair</code>.
       </p>
       <form onSubmit={submit} className="connect-form">
         <label htmlFor="bridge-url">Bridge address</label>
@@ -304,10 +295,11 @@ function ConnectDialog({
             disabled={submitting}
           />
           <span>
-            <strong>Remember this phone for 7 days</strong>
+            <strong>Keep this phone paired</strong>
             <small>
               A separate, revocable device key is saved on this phone. Your
-              owner token is never saved across sessions.
+              owner token is never saved across sessions. Pairing ends after
+              30 days without use.
             </small>
           </span>
         </label>
@@ -358,24 +350,6 @@ function ConnectDialog({
         Need a hand? Read the setup guide <ExternalLink size={13} />
       </a>
     </dialog>
-  );
-}
-
-function OnboardingArt() {
-  return (
-    <div className="onboarding-art" aria-hidden="true">
-      <div className="orbit orbit-1" />
-      <div className="orbit orbit-2" />
-      <div className="art-central">
-        <ShieldCheck size={34} strokeWidth={1.4} />
-      </div>
-      <div className="art-agent art-claude">✳</div>
-      <div className="art-agent art-codex">⌘</div>
-      <div className="art-agent art-gravity">A</div>
-      <span className="art-star star-1">✧</span>
-      <span className="art-star star-2">✧</span>
-      <span className="art-dot" />
-    </div>
   );
 }
 
@@ -667,824 +641,296 @@ export function App() {
     );
   };
 
+  const [deskLink] = useState(readDeskLink);
+  const [demo, setDemo] = useState(() => {
+    try { return new URLSearchParams(window.location.search).has("demo") || sessionStorage.getItem("keep-safe.demo") === "1"; } catch { return false; }
+  });
+  const [pairOpen, setPairOpen] = useState(false);
+  const [welcomeBack, setWelcomeBack] = useState(false);
+  const install = useInstall();
+  const enterDemo = () => { try { sessionStorage.setItem("keep-safe.demo", "1"); } catch { /* This tab only. */ } setDemo(true); };
+  const leaveDemo = () => { try { sessionStorage.removeItem("keep-safe.demo"); } catch { /* Already gone. */ } setDemo(false); setSelectedId(null); setSection("inbox"); };
+  const paired = () => { setPairOpen(false); setWelcomeBack(true); };
+  const computerName = workspace.info?.computerName || "Your computer";
+  const sectionTitle = section === "inbox" ? "Inbox" : section === "activity" ? "Activity" : section === "devices" ? "Connect" : "Settings";
+  const statusLabel = isDemo ? "Demo mode" : workspace.status === "connected" ? "Bridge connected" : workspace.status === "connecting" ? "Connecting…" : "Bridge offline";
+
+  if (deskLink) return <PairingDesk link={deskLink} />;
+
+  if (!workspace.connection && !demo) return (
+    <div className="welcome-shell">
+      {workspace.pairingNotice ? (
+        <div className="pairing-expired-notice" role="status">
+          <ShieldCheck size={18} aria-hidden="true" />
+          <p>{workspace.pairingNotice}</p>
+          <button className="icon-button" aria-label="Dismiss pairing notice" onClick={workspace.dismissPairingNotice}><X size={15} /></button>
+        </div>
+      ) : null}
+      <Welcome workspace={workspace} onDemo={enterDemo} onOwnerToken={() => setConnectOpen(true)} onPaired={paired} />
+      {connectOpen ? <ConnectDialog workspace={workspace} notificationForRemember={notifications.forRemember} onClose={() => setConnectOpen(false)} /> : null}
+      {toast ? <Toast message={toast} onDismiss={() => setToast("")} /> : null}
+    </div>
+  );
+
+  const liveSelected = mobileLayout && !!selectedId && section === "inbox";
   return (
-    <div className="app-shell">
+    <div className={`app-shell${liveSelected ? " has-detail" : ""}`}>
       <aside className="sidebar">
         <Logo />
-        <div className="workspace-switch">
-          <span className="workspace-avatar">
-            M<span />
-          </span>
-          <div>
-            <strong>{isDemo ? "Demo workspace" : "My workspace"}</strong>
-            <small>
-              {isDemo ? "Take a look around" : "Your personal bridge"}
-            </small>
-          </div>
-          <ChevronDown size={14} />
-        </div>
-        <div className="nav-label">WORKSPACE</div>
         <nav className="main-nav" aria-label="Main navigation">
-          <button
-            className={section === "inbox" ? "active" : ""}
-            aria-current={section === "inbox" ? "page" : undefined}
-            onClick={() => navigate("inbox")}
-          >
-            <Inbox size={18} />
+          <button className={section === "inbox" ? "active" : ""} aria-current={section === "inbox" ? "page" : undefined} onClick={() => navigate("inbox")}>
+            <Inbox size={18} aria-hidden="true" />
             Inbox
-            {current.length ? (
-              <span className="nav-count">{current.length}</span>
-            ) : null}
+            {current.length ? <span className="nav-count">{current.length}</span> : null}
           </button>
-          <button
-            className={section === "activity" ? "active" : ""}
-            aria-current={section === "activity" ? "page" : undefined}
-            onClick={() => navigate("activity")}
-          >
-            <Activity size={18} />
+          <button className={section === "activity" ? "active" : ""} aria-current={section === "activity" ? "page" : undefined} onClick={() => navigate("activity")}>
+            <Activity size={18} aria-hidden="true" />
             Activity
           </button>
-          <button
-            className={section === "devices" ? "active" : ""}
-            aria-current={section === "devices" ? "page" : undefined}
-            onClick={() => navigate("devices")}
-          >
-            <MonitorSmartphone size={18} />
+          <button className={section === "devices" ? "active" : ""} aria-current={section === "devices" ? "page" : undefined} onClick={() => navigate("devices")}>
+            <MonitorSmartphone size={18} aria-hidden="true" />
             Connections{!isDemo ? <span className="nav-connected" /> : null}
           </button>
-          <button
-            className={section === "settings" ? "active" : ""}
-            aria-current={section === "settings" ? "page" : undefined}
-            onClick={() => navigate("settings")}
-          >
-            <Settings2 size={18} />
+          <button className={section === "settings" ? "active" : ""} aria-current={section === "settings" ? "page" : undefined} onClick={() => navigate("settings")}>
+            <Settings2 size={18} aria-hidden="true" />
             Settings
           </button>
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-note">
-            <div>
-              <span className="little-spark">✧</span>
-              <span>
-                Made for your
-                <br />
-                <strong>away-from-desk era.</strong>
-              </span>
-            </div>
-            <p>
-              Your agents keep working.
-              <br />
-              You keep living.
-            </p>
-          </div>
-          <a
-            className="sidebar-link"
-            href={repository}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Code2 size={16} />
-            View on GitHub
-            <ExternalLink size={12} />
-          </a>
-          <span className="version">
-            KEEP SAFE <span>EARLY ACCESS · v0.1</span>
-          </span>
+          <span className={`bridge-status ${workspace.status === "connected" ? "online" : ""}`}><span />{isDemo ? "Demo workspace" : computerName}</span>
+          <a className="sidebar-link" href={repository} target="_blank" rel="noreferrer"><Code2 size={15} aria-hidden="true" /> Docs <ExternalLink size={12} aria-hidden="true" /></a>
         </div>
       </aside>
       <main className="main-content">
         <header className="topbar">
-          <div className="mobile-brand">
-            <Logo />
-          </div>
-          <div className="breadcrumb">
-            Workspace <ChevronRight size={13} />
-            <strong>
-              {section === "inbox"
-                ? "Inbox"
-                : section === "activity"
-                  ? "Activity"
-                  : section === "devices"
-                    ? "Connections"
-                    : "Settings"}
-            </strong>
-          </div>
+          <div className="mobile-brand"><Logo compact /></div>
+          <strong className="topbar-title">{sectionTitle}</strong>
           <div className="topbar-actions">
-            <span
-              className={`bridge-status ${workspace.status === "connected" ? "online" : ""}`}
-            >
-              <span />
-              {isDemo
-                ? "Demo mode"
-                : workspace.status === "connected"
-                  ? "Bridge connected"
-                  : workspace.status === "connecting"
-                    ? "Connecting…"
-                    : "Bridge offline"}
-            </span>
-            <button
-              className="icon-button notification-button"
-              aria-label="Set up phone notifications"
-              onClick={() => navigate("settings")}
-            >
-              {notifications.enabled ? (
-                <BellRing size={19} />
-              ) : (
-                <Bell size={19} />
-              )}
-              <i />
+            <span className={`bridge-status ${workspace.status === "connected" ? "online" : ""}`}><span />{statusLabel}</span>
+            <button className="icon-button notification-button" aria-label="Set up phone notifications" onClick={() => navigate("settings")}>
+              {notifications.enabled ? <BellRing size={19} /> : <Bell size={19} />}
             </button>
-            <div
-              className="user-avatar"
-              aria-label={isDemo ? "Demo workspace" : "My workspace"}
-            >
-              M
-            </div>
           </div>
         </header>
         <div className="page-content">
-          {notificationNotice && !(mobileLayout && selectedId && section === "inbox") ? (
+          {notificationNotice && !liveSelected ? (
             <NotificationNoticeView notice={notificationNotice} open={openNotificationRequest} dismiss={() => setNotificationNotice(null)} />
           ) : null}
           {workspace.pairingNotice ? (
             <div className="pairing-expired-notice" role="status">
-              <ShieldCheck size={18} />
+              <ShieldCheck size={18} aria-hidden="true" />
               <p>{workspace.pairingNotice}</p>
-              <button
-                className="text-link"
-                onClick={() => setConnectOpen(true)}
-              >
-                Pair again <ArrowRight size={13} />
-              </button>
-              <button
-                className="icon-button"
-                aria-label="Dismiss pairing notice"
-                onClick={workspace.dismissPairingNotice}
-              >
-                <X size={15} />
-              </button>
+              <button className="text-link" onClick={() => setPairOpen(true)}>Pair again <ArrowRight size={13} aria-hidden="true" /></button>
+              <button className="icon-button" aria-label="Dismiss pairing notice" onClick={workspace.dismissPairingNotice}><X size={15} /></button>
             </div>
           ) : null}
           {isDemo ? (
             <div className="demo-banner">
               <span className="demo-badge">DEMO</span>
-              <p>
-                You’re exploring a demo workspace.{" "}
-                <span>No real browser is connected.</span>
-              </p>
-              <button onClick={() => setConnectOpen(true)}>
-                Connect your computer <ArrowUpRightIcon />
-              </button>
+              <p>Sample requests. <span>Nothing is real.</span></p>
+              <button onClick={leaveDemo}>Set up <ArrowRight size={13} aria-hidden="true" /></button>
             </div>
           ) : workspace.status !== "connected" ? (
             <div className="connection-banner" role="status">
-              <LoaderCircle size={16} className="spin" />
+              <LoaderCircle size={16} className="spin" aria-hidden="true" />
               <div>
-                <strong>
-                  {workspace.status === "error"
-                    ? "Connection needs attention"
-                    : "Looking for your computer…"}
-                </strong>
-                <p>
-                  {workspace.error ||
-                    "Keep your computer, bridge, and tunnel running. We’ll reconnect automatically."}
-                </p>
+                <strong>{workspace.status === "error" ? "Connection needs attention" : "Looking for your computer…"}</strong>
+                <p>{workspace.error || "Keep your computer awake and Keep Safe running there. This reconnects on its own."}</p>
               </div>
-              <button
-                className="text-link"
-                onClick={() => setConnectOpen(true)}
-              >
-                Check pairing <ArrowRight size={14} />
-              </button>
+              <button className="text-link" onClick={() => navigate("devices")}>Check pairing <ArrowRight size={14} aria-hidden="true" /></button>
             </div>
           ) : null}
           {section === "inbox" ? (
-            <>
-              <div className="page-heading">
-                <div>
-                  <span className="eyebrow">A HUMAN TOUCH GOES A LONG WAY</span>
-                  <h1>
-                    Your agents. <span>Still moving.</span>
-                  </h1>
-                  <p>
-                    A quick sign-in from you. A whole lot of progress from them.
-                  </p>
-                </div>
-                <span className="heading-flower" aria-hidden="true">
-                  ✳
-                </span>
-              </div>
-              <div className="overview-strip">
-                <div className="overview-item">
-                  <span className="overview-icon waiting">
-                    <Inbox size={18} />
-                  </span>
-                  <div>
-                    <span>Waiting for you</span>
-                    <strong>{String(pending.length).padStart(2, "0")}</strong>
-                  </div>
-                  <span className="overview-caption">A little help needed</span>
-                </div>
-                <div className="overview-item">
-                  <span className="overview-icon running">
-                    <Radio size={18} />
-                  </span>
-                  <div>
-                    <span>In your hands</span>
-                    <strong>
-                      {String(inProgress.length).padStart(2, "0")}
-                    </strong>
-                  </div>
-                  <span className="overview-caption">You’re in control</span>
-                </div>
-                <div className="overview-item">
-                  <span className="overview-icon done">
-                    <CheckCheck size={18} />
-                  </span>
-                  <div>
-                    <span>Handed back</span>
-                    <strong>
-                      {String(
-                        history.filter(
-                          (request) => request.status === "completed",
-                        ).length,
-                      ).padStart(2, "0")}
-                    </strong>
-                  </div>
-                  <span className="overview-caption">Back to building</span>
-                </div>
-              </div>
-              <div
-                className={`inbox-layout ${selectedId ? "has-selection" : ""}`}
-              >
-                <section className="queue-section" aria-label="Request inbox">
-                  <div className="section-title">
-                    <h2>
-                      Your inbox <span>{current.length}</span>
-                    </h2>
-                    <button
-                      className="icon-button"
-                      onClick={() => {
-                        if (isDemo) {
-                          workspace.resetDemo();
-                          setSelectedId(null);
-                          notify(
-                            "Demo workspace reset. Three agents are ready for your help.",
-                          );
-                        } else navigate("devices");
-                      }}
-                      aria-label={
-                        isDemo
-                          ? "Reset demo requests"
-                          : "View bridge connection"
-                      }
-                    >
-                      {isDemo ? <RotateCcw size={16} /> : <Link2 size={16} />}
-                    </button>
-                  </div>
-                  <div
-                    className="queue-filters"
-                    role="group"
-                    aria-label="Filter requests"
+            <div className={`inbox-layout ${selectedId ? "has-selection" : ""}`}>
+              <section className="queue-section" aria-label="Request inbox">
+                <div className="section-title">
+                  <h1>Inbox {current.length ? <span>{current.length}</span> : null}</h1>
+                  <button
+                    className="icon-button"
+                    onClick={() => {
+                      if (isDemo) {
+                        workspace.resetDemo();
+                        setSelectedId(null);
+                        notify("Demo workspace reset. Three agents are ready for your help.");
+                      } else navigate("devices");
+                    }}
+                    aria-label={isDemo ? "Reset demo requests" : "View bridge connection"}
                   >
-                    <button
-                      className={filter === "all" ? "selected" : ""}
-                      aria-pressed={filter === "all"}
-                      onClick={() => setFilter("all")}
-                    >
-                      All requests
-                    </button>
-                    <button
-                      className={filter === "pending" ? "selected" : ""}
-                      aria-pressed={filter === "pending"}
-                      onClick={() => setFilter("pending")}
-                    >
-                      Needs you <span>{pending.length}</span>
-                    </button>
-                    <button
-                      className={filter === "active" ? "selected" : ""}
-                      aria-pressed={filter === "active"}
-                      onClick={() => setFilter("active")}
-                    >
-                      Active
-                    </button>
-                  </div>
-                  <label className="search-field">
-                    <Search size={15} />
-                    <input
-                      type="search"
-                      placeholder="Find an agent or website…"
-                      aria-label="Search requests"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                    />
-                    <span>⌕</span>
-                  </label>
-                  <div className="request-list">
-                    {filtered.length ? (
-                      filtered.map((request) => (
-                        <RequestCard
-                          key={request.id}
-                          request={request}
-                          selected={selected?.id === request.id}
-                          now={now}
-                          onClick={() => setSelectedId(request.id)}
-                        />
-                      ))
-                    ) : (
-                      <EmptyState
-                        title={
-                          query
-                            ? "No matching requests."
-                            : filter === "active"
-                              ? "No sessions open."
-                              : "You’re all caught up."
-                        }
-                        text={
-                          query
-                            ? "Try another agent name or website."
-                            : filter === "active"
-                              ? "Approve a request to take the browser into your hands."
-                              : "Your agents will send a request when they need you. Get back to your day."
-                        }
-                        action={
-                          isDemo ? (
-                            <button
-                              className="button button-light button-small"
-                              onClick={() => {
-                                workspace.resetDemo();
-                                setFilter("all");
-                                setQuery("");
-                              }}
-                            >
-                              Reset demo <RotateCcw size={13} />
-                            </button>
-                          ) : undefined
-                        }
-                      />
-                    )}
-                  </div>
-                  <p className="queue-footnote">
-                    <ShieldCheck size={13} />
-                    Only you can approve these requests.
-                  </p>
-                </section>
-                <div
-                  className="detail-section"
-                  ref={detailSection}
-                  tabIndex={-1}
-                  role={mobileLayout && selectedId ? "dialog" : undefined}
-                  aria-modal={mobileLayout && selectedId ? true : undefined}
-                  aria-label={
-                    mobileLayout && selectedId ? "Browser request" : undefined
-                  }
-                >
-                  {mobileLayout && selectedId && toast ? (
-                    <Toast message={toast} onDismiss={() => setToast("")} inline />
-                  ) : null}
-                  {mobileLayout && selectedId && notificationNotice ? (
-                    <NotificationNoticeView notice={notificationNotice} open={openNotificationRequest} dismiss={() => setNotificationNotice(null)} />
-                  ) : null}
-                  {selected && (!mobileLayout || selectedId) ? (
-                    <BrowserPanel
-                      request={selected}
-                      workspace={workspace}
-                      now={now}
-                      busy={busy}
-                      onAction={takeAction}
-                      onBack={() => setSelectedId(null)}
-                    />
-                  ) : (
-                    <div className="no-selection">
-                      <OnboardingArt />
-                      {selectedId !== null ? <>
-                        <h2>Request unavailable</h2>
-                        <p>Choose a current request from this computer’s queue.</p>
-                        <button className="button button-light" onClick={() => setSelectedId(null)}>Back to inbox <ArrowRight size={15} /></button>
-                      </> : <><h2>
-                        They build.
-                        <br />
-                        You do your thing.
-                      </h2>
-                      <p>
-                        When an agent needs a sign-in, you’ll see its request
-                        here.
-                      </p>
-                      <button
-                        className="button button-light"
-                        onClick={() => navigate("settings")}
-                      >
-                        <Bell size={15} />
-                        Notify me
-                      </button>
-                      </>}
+                    {isDemo ? <RotateCcw size={17} /> : <Link2 size={17} />}
+                  </button>
+                </div>
+                {current.length > 1 || filter !== "all" || query ? (
+                  <div className="queue-tools">
+                    <div className="queue-filters" role="group" aria-label="Filter requests">
+                      <button className={filter === "all" ? "selected" : ""} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All requests</button>
+                      <button className={filter === "pending" ? "selected" : ""} aria-pressed={filter === "pending"} onClick={() => setFilter("pending")}>Needs you <span>{pending.length}</span></button>
+                      <button className={filter === "active" ? "selected" : ""} aria-pressed={filter === "active"} onClick={() => setFilter("active")}>Active</button>
                     </div>
+                    {current.length > 2 || query ? (
+                      <label className="search-field">
+                        <Search size={16} aria-hidden="true" />
+                        <input type="search" placeholder="Find an agent or website" aria-label="Search requests" value={query} onChange={(event) => setQuery(event.target.value)} />
+                      </label>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="request-list">
+                  {filtered.length ? (
+                    filtered.map((request) => (
+                      <RequestCard key={request.id} request={request} selected={(!mobileLayout || !!selectedId) && selected?.id === request.id} now={now} onClick={() => setSelectedId(request.id)} />
+                    ))
+                  ) : (
+                    <EmptyState
+                      title={query ? "No matching requests." : filter === "active" ? "No sessions open." : "You’re all caught up."}
+                      text={query ? "Try another agent name or website." : filter === "active" ? "Approve a request to take the browser into your hands." : "When an agent needs a sign-in, its request appears here."}
+                      action={isDemo ? (
+                        <button className="button button-light button-small" onClick={() => { workspace.resetDemo(); setFilter("all"); setQuery(""); }}>Reset demo <RotateCcw size={13} aria-hidden="true" /></button>
+                      ) : !notifications.enabled ? (
+                        <button className="button button-light button-small" onClick={() => navigate("settings")}><Bell size={14} aria-hidden="true" /> Notify me</button>
+                      ) : undefined}
+                    />
                   )}
                 </div>
+              </section>
+              <div
+                className="detail-section"
+                ref={detailSection}
+                tabIndex={-1}
+                role={mobileLayout && selectedId ? "dialog" : undefined}
+                aria-modal={mobileLayout && selectedId ? true : undefined}
+                aria-label={mobileLayout && selectedId ? "Browser request" : undefined}
+              >
+                {mobileLayout && selectedId && toast ? <Toast message={toast} onDismiss={() => setToast("")} inline /> : null}
+                {mobileLayout && selectedId && notificationNotice ? (
+                  <NotificationNoticeView notice={notificationNotice} open={openNotificationRequest} dismiss={() => setNotificationNotice(null)} />
+                ) : null}
+                {selected && (!mobileLayout || selectedId) ? (
+                  <BrowserPanel request={selected} workspace={workspace} now={now} busy={busy} onAction={takeAction} onBack={() => setSelectedId(null)} />
+                ) : (
+                  <div className="no-selection">
+                    <span className="empty-icon"><ShieldCheck size={28} strokeWidth={1.5} aria-hidden="true" /></span>
+                    {selectedId !== null ? <>
+                      <h2>Request unavailable</h2>
+                      <p>Choose a current request from this computer’s queue.</p>
+                      <button className="button button-light" onClick={() => setSelectedId(null)}>Back to inbox <ArrowRight size={15} aria-hidden="true" /></button>
+                    </> : <>
+                      <h2>Nothing needs you right now</h2>
+                      <p>When an agent needs a sign-in, you’ll see its request here.</p>
+                    </>}
+                  </div>
+                )}
               </div>
-              <div className="bottom-tip">
-                <span className="tip-icon">
-                  <Smartphone size={18} />
-                </span>
-                <p>
-                  <strong>Go ahead, step away.</strong> Add Keep Safe to your
-                  Home Screen for a faster handoff.
-                </p>
-                <button
-                  className="text-link"
-                  onClick={() => navigate("settings")}
-                >
-                  Get set up <ArrowRight size={14} />
-                </button>
-              </div>
-            </>
+            </div>
           ) : section === "activity" ? (
-            <>
-              <div className="page-heading simple-heading">
-                <div>
-                  <span className="eyebrow">
-                    THE LITTLE THINGS THAT KEEP WORK MOVING
-                  </span>
-                  <h1>
-                    A trail of <span>helping hands.</span>
-                  </h1>
-                  <p>Closed requests, without the private browser content.</p>
-                </div>
-                <button
-                  className="button button-light button-small"
-                  onClick={exportHistory}
-                  disabled={!history.length}
-                >
-                  <ArrowDownToLine size={15} />
-                  Export
-                </button>
+            <div className="page-column">
+              <div className="section-title">
+                <h1>Activity {history.length ? <span>{history.length}</span> : null}</h1>
+                <button className="button button-light button-small" onClick={exportHistory} disabled={!history.length}><ArrowDownToLine size={15} aria-hidden="true" /> Export</button>
               </div>
               <div className="content-card activity-card">
-                <div className="section-title">
-                  <h2>
-                    Recent activity <span>{history.length}</span>
-                  </h2>
-                  <span className="subtle-label">
-                    {isDemo ? "DEMO HISTORY" : "THIS BRIDGE"}
-                  </span>
-                </div>
                 {history.length ? (
                   <div className="activity-list">
-                    {[...history]
-                      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                      .map((request) => (
-                        <button
-                          className="activity-row"
-                          key={request.id}
-                          onClick={() => {
-                            setSelectedId(request.id);
-                            setSection("inbox");
-                          }}
-                        >
-                          <AgentMark name={request.agent} small />
-                          <div>
-                            <strong>{request.title}</strong>
-                            <span>
-                              {request.agent} · {domain(request.origin)}
-                            </span>
-                          </div>
-                          <StatusPill request={request} now={now} />
-                          <time>
-                            {new Date(request.updatedAt).toLocaleTimeString(
-                              [],
-                              { hour: "2-digit", minute: "2-digit" },
-                            )}
-                          </time>
-                          <ChevronRight size={15} />
-                        </button>
-                      ))}
+                    {[...history].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((request) => (
+                      <button className="activity-row" key={request.id} onClick={() => { setSelectedId(request.id); setSection("inbox"); }}>
+                        <AgentMark name={request.agent} small />
+                        <div>
+                          <strong>{request.title}</strong>
+                          <span>{request.agent} · {domain(request.origin)}</span>
+                        </div>
+                        <StatusPill request={request} now={now} />
+                        <time>{new Date(request.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                        <ChevronRight size={15} aria-hidden="true" />
+                      </button>
+                    ))}
                   </div>
                 ) : (
-                  <EmptyState
-                    title="A fresh start."
-                    text="Requests appear here after you hand back, decline, or let them expire."
-                  />
+                  <EmptyState title="Nothing here yet." text="Requests appear here after you hand back, decline, or let them expire." />
                 )}
               </div>
               <HistoryControls workspace={workspace} now={now} notify={notify} />
-              <div className="privacy-strip">
-                <ShieldCheck size={19} />
-                <p>
-                  History records what happened to the request. Passwords,
-                  cookies, and browser frames aren’t part of it.
-                </p>
-              </div>
-            </>
+              <p className="privacy-strip"><ShieldCheck size={16} aria-hidden="true" /> History records what happened to a request. Passwords, cookies and browser images are never part of it.</p>
+            </div>
           ) : section === "devices" ? (
-            <>
-              <div className="page-heading">
-                <div>
-                  <span className="eyebrow">
-                    YOUR COMPUTER, WHEREVER YOU ARE
-                  </span>
-                  <h1>
-                    A small bridge.
-                    <br />
-                    <span>A little more freedom.</span>
-                  </h1>
-                  <p>Connect once. Help any of your agents from your phone.</p>
+            <div className="page-column">
+              <div className="section-title"><h1>Connect</h1></div>
+              <section className="content-card device-card">
+                <div className="device-card-head">
+                  <span className="device-card-icon"><Laptop size={24} strokeWidth={1.5} aria-hidden="true" /></span>
+                  <div>
+                    <h2>{isDemo ? "No computer connected" : computerName}</h2>
+                    <p>{isDemo ? "The demo runs entirely on this device." : workspace.connection?.url.replace(/^https?:\/\//, "")}</p>
+                    <span className={`status-pill ${isDemo ? "expired" : workspace.status === "connected" ? "active" : "pending"}`}>
+                      {isDemo ? "Not connected" : workspace.status === "connected" ? "Connected" : "Reconnecting"}
+                    </span>
+                  </div>
                 </div>
-                <OnboardingArt />
-              </div>
-              <DeviceManager workspace={workspace} notify={notify} notificationForRemember={notifications.forRemember} />
-              <div className="setup-grid">
-                <section className="content-card device-card">
-                  <div className="section-title">
-                    <h2>Your connection</h2>
-                    <span
-                      className={`status-pill ${isDemo ? "expired" : workspace.status === "connected" ? "active" : "pending"}`}
-                    >
-                      {isDemo
-                        ? "Not connected"
-                        : workspace.status === "connected"
-                          ? "Connected"
-                          : "Reconnecting"}
-                    </span>
-                  </div>
-                  <div className="computer-illustration">
-                    <Laptop size={68} strokeWidth={1} />
-                    <span>
-                      <ShieldCheck size={20} />
-                    </span>
-                  </div>
-                  <h3>
-                    {isDemo
-                      ? "Bring your own browser."
-                      : workspace.info?.name || "Your computer"}
-                  </h3>
-                  <p>
-                    {isDemo
-                      ? "A free, local bridge keeps the browser and its cookies on your computer. Your phone gets a secure, temporary window into it."
-                      : workspace.connection?.url}
-                  </p>
-                  <button
-                    className="button button-dark"
-                    onClick={() => setConnectOpen(true)}
-                  >
-                    <Link2 size={16} />
-                    {isDemo ? "Connect your computer" : "Update pairing"}
-                    <ArrowRight size={16} />
-                  </button>
+                <div className="device-card-actions">
+                  <button className="button button-dark" onClick={() => setPairOpen(true)}><KeyRound size={16} aria-hidden="true" /> {isDemo ? "Pair with a code" : "Pair again"}</button>
+                  <button className="button button-light" onClick={() => setConnectOpen(true)}><Link2 size={16} aria-hidden="true" /> {isDemo ? "Connect your computer" : "Update pairing"}</button>
                   {!isDemo && !workspace.connection?.device ? (
                     <button
                       className="text-link disconnect-link"
                       onClick={() => {
                         workspace.disconnect();
                         setSelectedId(null);
-                        notify(
-                          "Disconnected. Pairing details were removed from this tab.",
-                        );
+                        notify("Disconnected. Pairing details were removed from this tab.");
                       }}
                     >
-                      <Unplug size={14} />
-                      Disconnect this tab
+                      <Unplug size={14} aria-hidden="true" /> Disconnect this tab
                     </button>
                   ) : null}
-                </section>
-                <section className="content-card setup-card">
-                  <div className="section-title">
-                    <h2>Three steps. Then go.</h2>
-                    <span className="subtle-label">SELF-HOSTED · £0</span>
-                  </div>
-                  <ol className="setup-steps">
-                    <li>
-                      <span>01</span>
-                      <div>
-                        <h3>Start the bridge</h3>
-                        <p>
-                          Clone the private repository on the computer your
-                          agents use, install dependencies, then start Keep
-                          Safe.
-                        </p>
-                        <div className="code-snippet">
-                          <Terminal size={14} />
-                          <code>npm run bridge</code>
-                          <button
-                            className="icon-button"
-                            aria-label="Copy bridge command"
-                            onClick={() => {
-                              navigator.clipboard
-                                .writeText("npm run bridge")
-                                .then(() => notify("Bridge command copied."))
-                                .catch(() =>
-                                  notify(
-                                    "Run npm run bridge in the repository folder.",
-                                  ),
-                                );
-                            }}
-                          >
-                            <Copy size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                    <li>
-                      <span>02</span>
-                      <div>
-                        <h3>Pair your phone</h3>
-                        <p>
-                          Use a secure HTTPS tunnel or private network. Open the
-                          pairing link printed by the bridge on your phone.
-                        </p>
-                        <p>
-                          Run <code>npm run bridge -- setup</code> on your
-                          computer for connection commands. If pairing fails,
-                          the connection guide explains the diagnostic checks.
-                        </p>
-                        <a
-                          className="text-link"
-                          href={`${repository}/blob/main/docs/connection.md`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Connection guide <ExternalLink size={13} />
-                        </a>
-                      </div>
-                    </li>
-                    <li>
-                      <span>03</span>
-                      <div>
-                        <h3>Give your agents the tool</h3>
-                        <p>
-                          Add the Keep Safe MCP server to T3 Code, Claude,
-                          Codex, or any MCP-compatible agent.
-                        </p>
-                        <a
-                          className="text-link"
-                          href={`${repository}/blob/main/README.md`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Full setup & agent configuration{" "}
-                          <ExternalLink size={13} />
-                        </a>
-                      </div>
-                    </li>
-                  </ol>
-                </section>
-              </div>
-              <div className="supported-agents">
-                <span>ONE BRIDGE. YOUR WHOLE CREW.</span>
-                <div>
-                  <span>
-                    <AgentMark name="Claude Code" small />
-                    Claude Code
-                  </span>
-                  <span>
-                    <AgentMark name="Codex" small />
-                    Codex
-                  </span>
-                  <span>
-                    <AgentMark name="Antigravity" small />
-                    Antigravity
-                  </span>
-                  <span>
-                    <Code2 size={20} />
-                    T3 Code + any MCP agent
-                  </span>
                 </div>
-              </div>
-            </>
+              </section>
+              <DeviceManager workspace={workspace} notify={notify} notificationForRemember={notifications.forRemember} />
+              <section className="content-card setup-card">
+                <h2>Set up a computer</h2>
+                <p>Paste this into a coding agent on the computer your agents use. It installs Keep Safe, starts it and shows a QR code to scan here.</p>
+                <PromptCard compact />
+                <a className="text-link" href={`${repository}/blob/main/docs/connection.md`} target="_blank" rel="noreferrer">Connection guide <ExternalLink size={13} aria-hidden="true" /></a>
+              </section>
+            </div>
           ) : (
-            <>
-              <div className="page-heading simple-heading">
-                <div>
-                  <span className="eyebrow">MAKE YOURSELF AT HOME</span>
-                  <h1>
-                    A few <span>good defaults.</span>
-                  </h1>
-                  <p>Less to manage. More peace of mind.</p>
-                </div>
-                <Settings2
-                  size={38}
-                  strokeWidth={1.1}
-                  className="settings-heading-icon"
-                />
-              </div>
-              <div className="settings-grid">
-                <section className="content-card settings-card">
-                  <div className="settings-section-icon">
-                    <Bell size={22} />
-                  </div>
+            <div className="page-column">
+              <div className="section-title"><h1>Settings</h1></div>
+              <section className="content-card settings-card">
+                <div className="settings-card-head">
+                  <span className="settings-section-icon"><Bell size={20} aria-hidden="true" /></span>
                   <h2>A nudge when you’re needed.</h2>
-                  <p>
-                    Get a phone notification when an agent sends a request. You
-                    stay in charge of when to open it.
-                  </p>
-                  <p className={notifications.error ? "notification-status error" : "notification-status"} role={notifications.error ? "alert" : "status"}>{notifications.message}</p>
-                  <div className="notification-actions" aria-busy={notifications.busy || notifications.checking}>
-                    <button
-                      className="button button-dark"
-                      ref={notificationEnableButton}
-                      disabled={notifications.busy || notifications.checking || notifications.enabled}
-                      onClick={notifications.enable}
-                    >
-                      {notifications.busy || notifications.checking ? <LoaderCircle size={16} className="spin" /> : notifications.enabled ? <Check size={16} /> : <Bell size={16} />}
-                      {notifications.enabled ? "Notifications enabled" : "Enable notifications"}
-                    </button>
-                    {notifications.enabled && notifications.canDisable ? <button className="button button-light" disabled={notifications.busy} onClick={turnOffNotifications}>Turn off notifications</button> : null}
-                    {notifications.canCheck ? <button className="button button-light" disabled={notifications.busy || notifications.checking} onClick={notifications.refresh}>Check notification status</button> : null}
-                  </div>
-                  <p className="settings-note">Enrollment confirms this computer is registered to send alerts. It does not confirm delivery. Turning alerts off keeps this phone paired and leaves browser permission unchanged.</p>
-                  <div className="ios-note">
-                    <Smartphone size={17} />
-                    <p>
-                      <strong>On an iPhone?</strong> Open this app in Safari,
-                      tap Share → Add to Home Screen, then launch it from there
-                      to enable notifications.
-                    </p>
-                  </div>
+                </div>
+                <p>Get a phone notification when an agent sends a request. You decide when to open it.</p>
+                <p className={notifications.error ? "notification-status error" : "notification-status"} role={notifications.error ? "alert" : "status"}>{notifications.message}</p>
+                <div className="notification-actions" aria-busy={notifications.busy || notifications.checking}>
+                  <button className="button button-dark" ref={notificationEnableButton} disabled={notifications.busy || notifications.checking || notifications.enabled} onClick={notifications.enable}>
+                    {notifications.busy || notifications.checking ? <LoaderCircle size={16} className="spin" /> : notifications.enabled ? <Check size={16} /> : <Bell size={16} />}
+                    {notifications.enabled ? "Notifications enabled" : "Enable notifications"}
+                  </button>
+                  {notifications.enabled && notifications.canDisable ? <button className="button button-light" disabled={notifications.busy} onClick={turnOffNotifications}>Turn off notifications</button> : null}
+                  {notifications.canCheck ? <button className="button button-light" disabled={notifications.busy || notifications.checking} onClick={notifications.refresh}>Check notification status</button> : null}
+                </div>
+                <p className="settings-note">Enrollment confirms this computer is registered to send alerts. It does not confirm delivery. Turning alerts off keeps this phone paired and leaves browser permission unchanged.</p>
+                {install.ios && !install.installed ? (
+                  <p className="ios-note"><Smartphone size={16} aria-hidden="true" /><span><strong>On an iPhone?</strong> Open this app in Safari, tap Share → Add to Home Screen, then launch it from there to enable notifications.</span></p>
+                ) : null}
+              </section>
+              {!install.installed && install.canPrompt ? (
+                <section className="content-card settings-card">
+                  <div className="settings-card-head"><span className="settings-section-icon"><Smartphone size={20} aria-hidden="true" /></span><h2>Install the app</h2></div>
+                  <p>Opens full screen from your Home Screen, without browser bars.</p>
+                  <div className="notification-actions"><button className="button button-light" onClick={() => { void install.install(); }}>Install Keep Safe</button></div>
                 </section>
-                <section className="content-card settings-card privacy-card">
-                  <div className="settings-section-icon">
-                    <ShieldCheck size={22} />
-                  </div>
-                  <h2>Private, by design.</h2>
-                  <p>
-                    Your browser runs on your computer. You decide which
-                    requests to open.
-                  </p>
-                  <ul className="privacy-list">
-                    <li>
-                      <Check size={15} />
-                      <div>
-                        <strong>No saved passwords</strong>
-                        <span>
-                          Text goes to the live website. Keep Safe never saves
-                          it.
-                        </span>
-                      </div>
-                    </li>
-                    <li>
-                      <Check size={15} />
-                      <div>
-                        <strong>Cookies stay local</strong>
-                        <span>
-                          The browser profile stays on your computer, never in
-                          this hosted dashboard.
-                        </span>
-                      </div>
-                    </li>
-                    <li>
-                      <Check size={15} />
-                      <div>
-                        <strong>Temporary control</strong>
-                        <span>
-                          Requests expire. Handing back closes your control of
-                          the browser.
-                        </span>
-                      </div>
-                    </li>
-                    <li>
-                      <Check size={15} />
-                      <div>
-                        <strong>You have the final say</strong>
-                        <span>
-                          Agents can request access. Only your owner token can
-                          approve it.
-                        </span>
-                      </div>
-                    </li>
-                  </ul>
-                </section>
-                <section className="content-card about-card">
-                  <Logo />
-                  <p>
-                    Built for the moments your agents need a human.
-                    <br />
-                    Early access. The repository is private while we develop the
-                    app.
-                  </p>
-                  <a
-                    className="button button-light button-small"
-                    href={repository}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Code2 size={15} />
-                    Project & documentation <ExternalLink size={12} />
-                  </a>
-                </section>
-              </div>
-            </>
+              ) : null}
+              <section className="content-card settings-card privacy-card">
+                <div className="settings-card-head"><span className="settings-section-icon"><ShieldCheck size={20} aria-hidden="true" /></span><h2>Private by design</h2></div>
+                <ul className="privacy-list">
+                  <li><Check size={15} aria-hidden="true" /><div><strong>No saved passwords</strong><span>Text goes to the live website. Keep Safe never saves it.</span></div></li>
+                  <li><Check size={15} aria-hidden="true" /><div><strong>Cookies stay on your computer</strong><span>The browser runs there, never in this app.</span></div></li>
+                  <li><Check size={15} aria-hidden="true" /><div><strong>Temporary control</strong><span>Requests expire. Handing back ends your control of the browser.</span></div></li>
+                  <li><Check size={15} aria-hidden="true" /><div><strong>You have the final say</strong><span>Agents can ask. Only a paired phone can approve.</span></div></li>
+                </ul>
+              </section>
+              <p className="about-line">Keep Safe {workspace.info?.version ? `bridge ${workspace.info.version}` : "early access"} · <a href={repository} target="_blank" rel="noreferrer">Project and documentation</a></p>
+            </div>
           )}
-          <footer className="page-footer">
-            <span>
-              <ShieldCheck size={13} />A human touch for your agents.
-            </span>
-            <a
-              href={`${repository}/blob/main/README.md`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Documentation <ExternalLink size={11} />
-            </a>
-          </footer>
         </div>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">
@@ -1496,52 +942,61 @@ export function App() {
             { key: "settings", label: "Settings", Icon: Settings2 },
           ] as const
         ).map(({ key, label, Icon }) => (
-          <button
-            key={key}
-            className={section === key ? "active" : ""}
-            aria-current={section === key ? "page" : undefined}
-            onClick={() => navigate(key)}
-          >
+          <button key={key} className={section === key ? "active" : ""} aria-current={section === key ? "page" : undefined} onClick={() => navigate(key)}>
             <span>
-              <Icon size={20} />
-              {key === "inbox" && current.length ? (
-                <i>{current.length}</i>
-              ) : null}
+              <Icon size={22} aria-hidden="true" />
+              {key === "inbox" && current.length ? <i>{current.length}</i> : null}
             </span>
             {label}
           </button>
         ))}
       </nav>
-      {connectOpen ? (
-        <ConnectDialog
-          workspace={workspace}
-          notificationForRemember={notifications.forRemember}
-          onClose={() => setConnectOpen(false)}
-        />
+      {connectOpen ? <ConnectDialog workspace={workspace} notificationForRemember={notifications.forRemember} onClose={() => setConnectOpen(false)} /> : null}
+      {pairOpen ? (
+        <Sheet title="Pair with your computer" onClose={() => setPairOpen(false)}>
+          <p>On your computer, run <code>keep-safe pair</code>, then scan the QR code it shows.</p>
+          <PairForm workspace={workspace} onPaired={paired} />
+        </Sheet>
       ) : null}
-      {toast && !(mobileLayout && selectedId && section === "inbox") ? (
-        <Toast message={toast} onDismiss={() => setToast("")} />
+      {welcomeBack && workspace.connection ? (
+        <Sheet title={`Paired with ${computerName}`} onClose={() => setWelcomeBack(false)}>
+          <p>Requests from your agents will appear in your inbox. This phone stays paired while you keep using it.</p>
+          <ul className="paired-next">
+            <li className={notifications.enabled ? "done" : ""}>
+              <span><Bell size={18} aria-hidden="true" /></span>
+              <div><strong>Notifications</strong><small>{notifications.enabled ? "On for this computer." : "Get a ping when an agent needs you."}</small></div>
+              {notifications.enabled ? <Check size={18} aria-hidden="true" /> : <button className="button button-dark button-small" disabled={notifications.busy || notifications.checking} onClick={notifications.enable}>Turn on</button>}
+            </li>
+            {!install.installed && (install.canPrompt || install.ios) ? (
+              <li>
+                <span><Smartphone size={18} aria-hidden="true" /></span>
+                <div><strong>Home Screen</strong><small>{install.ios ? "In Safari: Share, then Add to Home Screen. Pair again inside the app." : "Open Keep Safe like an app."}</small></div>
+                {install.canPrompt ? <button className="button button-light button-small" onClick={() => { void install.install(); }}>Install</button> : null}
+              </li>
+            ) : null}
+          </ul>
+          <button className="button button-dark button-large" onClick={() => setWelcomeBack(false)}>Done</button>
+        </Sheet>
       ) : null}
+      {toast && !liveSelected ? <Toast message={toast} onDismiss={() => setToast("")} /> : null}
     </div>
   );
 }
 
-function ArrowUpRightIcon() {
+/** A modal that rises from the bottom on phones and centers on larger screens. */
+function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
   return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 16 16"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M4 12 12 4M4 4h8v8"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <dialog ref={dialog} className="sheet" aria-labelledby="sheet-title" onCancel={event => { event.preventDefault(); onClose(); }}
+      onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="sheet-body">
+        <div className="sheet-head">
+          <h2 id="sheet-title">{title}</h2>
+          <button className="icon-button" aria-label="Close" onClick={onClose}><X size={20} /></button>
+        </div>
+        {children}
+      </div>
+    </dialog>
   );
 }

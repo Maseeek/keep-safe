@@ -46,7 +46,7 @@ These small-cohort thresholds are decision rules, not statistical proof or launc
 
 Stop a pilot for unintended authority, input disclosure or another credential-handling defect. Fix and repeat the affected safety flow before further trials. If the need is rare or existing tools solve it, narrow the audience before building a relay. If setup dominates failures, improve setup before adding accounts or billing.
 
-Seven-day observation may extend beyond autonomous development's stop on 24 October at 09:00 London. This plan does not extend that authorization or schedule interviews/follow-ups. The owner must arrange later work.
+Seven-day observation may extend beyond initial development milestones. The maintainers will arrange later follow-ups.
 
 ## Minimal evidence record
 

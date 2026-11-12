@@ -2,9 +2,34 @@
 
 Keep Safe supplies a common MCP server and an HTTP API. It does not intercept an IDE's private browser or automatically gain access to every agent's existing session. The agent must call the integration and pause its browser input during the handoff.
 
-## Local MCP server
+## MCP server
 
-Start the bridge first. Configure an MCP-capable client to launch the server with its absolute checkout path:
+The quickest way is `keep-safe setup`, which registers the server with the Claude Code and Codex CLIs when they are installed. To add it by hand:
+
+```bash
+claude mcp add --scope user keep-safe -- npx -y github:Maseeek/keep-safe mcp
+codex mcp add keep-safe -- npx -y github:Maseeek/keep-safe mcp
+```
+
+Other MCP clients use the same command in their own configuration format:
+
+```json
+{
+  "mcpServers": {
+    "keep-safe": { "command": "npx", "args": ["-y", "github:Maseeek/keep-safe", "mcp"] }
+  }
+}
+```
+
+With a global install (`npm install -g github:Maseeek/keep-safe`) the command is `keep-safe mcp`, which starts faster because nothing is fetched. `keep-safe setup` prints the right command for how it was run.
+
+The server reads the agent key from `~/.keep-safe` and never receives the owner key. It finds the background bridge through `daemon.json`, and starts the bridge when a tool call finds none. Set `KEEP_SAFE_CONFIG_DIR` when keys live elsewhere. Set `KEEP_SAFE_BRIDGE_URL` and `KEEP_SAFE_AGENT_TOKEN` to use a specific bridge instead.
+
+`request_login` adds a `setup` note to its result when no phone is paired, or when a phone is paired without notifications. Agents should pass that note on to the user.
+
+### From a checkout
+
+A checkout can launch the server straight from source:
 
 ```json
 {
@@ -25,9 +50,7 @@ Start the bridge first. Configure an MCP-capable client to launch the server wit
 }
 ```
 
-This is the common JSON configuration shape, not a promise that every client uses that exact configuration file. Codex may use TOML; T3 Code and other clients may provide a settings interface. Use the client's current MCP configuration mechanism with the same command, arguments, and environment.
-
-The server loads the separate agent token from the private local configuration. It never receives the owner pairing token. The generated examples connect to a local bridge. For a remote bridge, replace the generated `KEEP_SAFE_BRIDGE_URL` with its HTTPS origin and provide `KEEP_SAFE_AGENT_TOKEN` through the client's private environment configuration. Do not paste a real token into tracked examples or a prompt.
+This form does not start the bridge. Run `npm run bridge` first.
 
 ## Generate the configuration for your checkout
 
@@ -95,15 +118,19 @@ Cookies remain in memory on the developer's computer. The managed browser is clo
 
 ## HTTP API
 
-All API requests except `/api/health` require `Authorization: Bearer <token>`. Tokens must not be put in URL queries. A remembered phone key can use owner routes, but cannot create agent requests or pair another phone.
+All API requests except `/api/health`, `/api/pair` and `/api/pair/status` require `Authorization: Bearer <token>`. Tokens must not be put in URL queries. A paired phone key can use owner routes, but cannot create agent requests or pair another phone.
+
+- Pairing: the owner token calls `POST /api/pairing` for `{code, expiresAt}`. A phone calls `POST /api/pair` with `{code, name}` and receives `{device, token, info}` once. `POST /api/pair/status` with `{code}` returns `{state}` as `waiting`, `claimed` or `expired`. See [architecture](architecture.md#pairing).
+- Agent or owner token: `GET /api/status` returns `{phones, notifications, browserAvailable}` counts.
 
 - Agent token: `POST /api/requests` with JSON matching `CreateRequestInput`; `GET /api/requests/:id` to check the result.
 - Long polling: `GET /api/requests/:id?wait=<1–30>` holds the response until the request's `updatedAt` changes, it reaches `completed`/`denied`/`expired`, or the wait ends, then returns the same body as a plain `GET`. Pass `&since=<updatedAt>` from your previous response so a change between calls returns at once. An unchanged request returns after the wait with no change in its fields. Terminal requests return immediately. Held responses are also released when the bridge stops; at most 32 are held at once and further calls answer immediately. Invalid `wait`, or `since` without `wait`, returns 400. Allow at least `wait` + 15 seconds in your HTTP client timeout. Owner tokens can use it too.
 - Owner token: `GET /api/info`, `GET /api/requests`, `POST /api/requests/:id/approve`, `/deny`, or `/complete`.
 - Owner history cleanup: `POST /api/history/clear` with JSON `{"confirm":true}`. Returns `{removed, protected, requests}` and broadcasts the latest list. A paired owner key can use this route; agent keys cannot. Only terminal records past their original expiry with no pending browser work can be removed. `BridgeInfo.historyRetentionHours` advertises support (currently 24).
-- Paired phone management: `GET /api/devices`, `POST /api/devices/:id/revoke`; bootstrap owner token only: `POST /api/devices` with a device name, which returns a new seven-day key once.
+- Paired phone management: `GET /api/devices`, `POST /api/devices/:id/revoke`; bootstrap owner token only: `POST /api/devices` with a device name, which returns a new device key once. Keys expire 30 days after their last use.
 - Owner push subscription: `POST /api/push/subscribe`.
 - Owner live control: WebSocket `/ws`, first message `{"type":"auth","token":"<owner token>"}`, followed by `watch` and bounded input messages.
+- Live view size: `watch` accepts an optional `viewport` of `{width, height, scale, touch}` in CSS pixels, clamped by the bridge, and `{"type":"resize","width":412,"height":700}` resizes a managed browser. After a click, Tab, Enter or focus the bridge may send `{"type":"editable","requestId","editable","kind"}`, which describes the focused field's type and never its value. `BridgeInfo.liveViewAvailable` advertises both.
 - Scroll input: `{"type":"scroll","deltaX":0,"deltaY":160}` keeps the controller's last mouse position. Updated bridges also accept paired optional `x`/`y` coordinates in the last streamed frame's bounds. Both must be finite numbers; partial or invalid positions are rejected before browser input. The browser moves there without clicking, then scrolls within the same input/handback barrier. Distances remain limited to ±3000. Older bridges ignore the positions, so update the bridge before relying on nested-area targeting.
 - Optional owner page controls: while watching an active request, send `{"type":"inspect-controls","inspectionId":"<UUID>"}`. A supported bridge replies with `controls`, the request/inspection IDs and a bounded `snapshot`. Send `{"type":"focus","snapshotId":"<UUID>","controlId":"<UUID>"}` to focus one current target, then wait for the matching `focused` acknowledgement. `BridgeInfo.pageControlsAvailable` advertises the protocol. Agents cannot inspect or focus through this owner socket.
 - Optional owner website navigation: require both `BridgeInfo.navigationAvailable` and the current frame's `navigationAvailable` to be true. Send `{"type":"navigate","direction":"back","navigationId":"<UUID>"}`; directions are `back`, `forward` and `reload`. Stop input, control inspection, focus and completion locally. Wait for a matching `navigated` result with the request/navigation IDs, `ok`, optional safe `message` and a new `frameEpoch`, followed by a frame with that exact epoch. Ignore earlier images and results. A failure result still requires its fresh frame before input, and renewed field confirmation remains necessary. On an unconfirmed result, pause and require explicit resume without repeating the action. The server retains in-flight work through disconnect and handback. This capability is available only for managed browser sessions; no history entries or form bodies are returned.

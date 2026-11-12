@@ -8,6 +8,10 @@ interface Props {
   controlIdentity: unknown;
   alt: string;
   send: Workspace["send"];
+  /** Displayed size in CSS pixels, chosen by the stage so the image fills it. */
+  display?: { width: number; height: number };
+  /** Called for every accepted tap, with viewport coordinates for local feedback. */
+  onTap?: (point: { clientX: number; clientY: number }) => void;
 }
 interface Scope {
   requestId: string;
@@ -43,7 +47,9 @@ const clampDelta = (value: number) => Math.max(-3000, Math.min(3000, value));
 /** Only coordinates and gesture state are retained here. Screenshot refreshes
  * are not new control intervals; navigation, geometry and pairing changes are.
  */
-export function RemoteSurface({ frame, enabled, controlIdentity, alt, send }: Props) {
+export function RemoteSurface({ frame, enabled, controlIdentity, alt, send, display, onTap }: Props) {
+  const tapped = useRef(onTap);
+  tapped.current = onTap;
   const image = useRef<HTMLImageElement>(null);
   const scope = useMemo<Scope>(() => ({
     requestId: frame.requestId, source: frame.url, width: frame.width,
@@ -193,7 +199,10 @@ export function RemoteSurface({ frame, enabled, controlIdentity, alt, send }: Pr
   };
 
   return <img ref={image} src={`data:image/jpeg;base64,${frame.data}`} width={frame.width} height={frame.height}
-    alt={alt} draggable={false}
+    alt={alt} draggable={false} style={display ? { width: display.width, height: display.height } : undefined}
+    // Keeps the phone keyboard open while tapping around the page: without
+    // this the tap would move focus off the typing field and close it.
+    onMouseDown={event => event.preventDefault()}
     onPointerDown={event => {
       if (event.pointerType === "mouse" || event.pointerType === "pen") {
         if (event.button === 0 && valid(scope)) press.current = { scope, pointerId: event.pointerId, pointerType: event.pointerType };
@@ -222,7 +231,7 @@ export function RemoteSurface({ frame, enabled, controlIdentity, alt, send }: Pr
       // Clear before normal capture release: lostpointercapture must not drop
       // this swipe's final coalesced delta, or turn it into a compatibility tap.
       gesture.current = null;
-      if (tap && location) sender.current({ type: "click", x: location.x, y: location.y });
+      if (tap && location && sender.current({ type: "click", x: location.x, y: location.y })) tapped.current?.({ clientX: event.clientX, clientY: event.clientY });
       try { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Capture already ended. */ }
     }}
     onPointerCancel={cancel}
@@ -242,6 +251,6 @@ export function RemoteSurface({ frame, enabled, controlIdentity, alt, send }: Pr
         event.preventDefault(); return;
       }
       const location = point(scope, event.clientX, event.clientY);
-      if (location) sender.current({ type: "click", x: location.x, y: location.y });
+      if (location && sender.current({ type: "click", x: location.x, y: location.y })) tapped.current?.({ clientX: event.clientX, clientY: event.clientY });
     }} />;
 }

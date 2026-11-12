@@ -11,8 +11,11 @@ import {
   Clock3,
   ExternalLink,
   Eye,
+  Info,
   Keyboard,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   LockKeyhole,
   MousePointer2,
   Pause,
@@ -26,6 +29,7 @@ import type { Workspace } from "./workspace";
 import { browserAddress } from "./browser-address";
 import { ControlNavigator } from "./ControlNavigator";
 import { RemoteSurface } from "./RemoteSurface";
+import { LiveKeyboard, type LiveKeyboardHandle } from "./LiveKeyboard";
 
 export function AgentMark({
   name,
@@ -103,6 +107,20 @@ export function BrowserPanel({
   const [denyOpen, setDenyOpen] = useState(false);
   const [showText, setShowText] = useState(false);
   const [showOrigin, setShowOrigin] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
+  const [typing, setTyping] = useState(false);
+  const [taps, setTaps] = useState<{ id: number; x: number; y: number }[]>([]);
+  const [lift, setLift] = useState(0);
+  const [keyboardArea, setKeyboardArea] = useState<{ top: number; height: number } | null>(null);
+  const [tray, setTray] = useState<HTMLDivElement | null>(null);
+  /** The stage as it is right now. Open tools borrow from it, and the page scales to what is left. */
+  const [stageBox, setStageBox] = useState<{ width: number; height: number } | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const keyboard = useRef<LiveKeyboardHandle>(null);
+  const lastTapY = useRef<number | null>(null);
   const denyTrigger = useRef<HTMLButtonElement>(null);
   const denyDialog = useRef<HTMLDialogElement>(null);
   const resumeTrigger = useRef<HTMLButtonElement>(null);
@@ -124,11 +142,74 @@ export function BrowserPanel({
   const address = browserAddress(liveFrame?.url ?? request.url);
   const requestedAddress = browserAddress(request.url);
 
+  const live = active && !isDemo;
+  // Measure the space the website gets, before the browser is opened, so it
+  // is laid out for this screen rather than letterboxed into it.
+  useLayoutEffect(() => {
+    const element = stage.current;
+    if (!live || !element) { setStageSize(null); setStageBox(null); return; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const measure = (immediate: boolean) => {
+      const width = Math.floor(element.clientWidth); const height = Math.floor(element.clientHeight);
+      if (width > 0 && height > 0) setStageBox(previous => previous && previous.width === width && previous.height === height ? previous : { width, height });
+      if (width < 200 || height < 200) return;
+      const apply = () => {
+        setStageSize(previous => previous && previous.width === width && previous.height === height ? previous : { width, height });
+        workspace.setViewport({ width, height, scale: Math.min(2, Math.max(1, window.devicePixelRatio || 1)), touch: window.matchMedia("(pointer: coarse)").matches });
+      };
+      clearTimeout(timer);
+      if (immediate) apply();
+      // The on-screen keyboard and rotation animate through many sizes.
+      // Open tool panels borrow space from the page; that is not a new screen size.
+      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form")) apply(); }, 250);
+    };
+    measure(true);
+    const observer = new ResizeObserver(() => measure(false));
+    observer.observe(element);
+    return () => { clearTimeout(timer); observer.disconnect(); };
+  }, [live, workspace.setViewport, workspace.browserPaused, workspace.navigationBusy, fullScreen]);
   useEffect(() => {
     workspace.watch(active && !isDemo && !expired ? request.id : null);
     return () => workspace.watch(null);
   }, [active, isDemo, request.id, workspace.watch, expired]);
-
+  // Follow the browser's own full-screen state (Escape, system back).
+  useEffect(() => {
+    const changed = () => { if (!document.fullscreenElement) setFullScreen(false); };
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+  useEffect(() => {
+    if (live && !finished && !expired) return;
+    setFullScreen(false);
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+  }, [live, finished, expired]);
+  const toggleFullScreen = () => {
+    const next = !fullScreen;
+    setFullScreen(next);
+    // Hides browser bars where the platform allows it. The layout fills the
+    // screen either way, which is all an installed app needs.
+    if (next) void document.documentElement.requestFullscreen?.({ navigationUI: "hide" }).catch(() => {});
+    else if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+  };
+  // While the phone keyboard is open, fit the whole live view into the space
+  // above it and slide the page so the tapped field stays in view.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport || !typing) { setKeyboardArea(null); setLift(0); return; }
+    const update = () => {
+      const open = viewport.height < window.innerHeight - 120;
+      setKeyboardArea(open ? { top: Math.round(viewport.offsetTop), height: Math.round(viewport.height) } : null);
+      const image = stage.current?.querySelector("img");
+      const room = stage.current?.clientHeight ?? 0;
+      if (!open || !image || lastTapY.current === null || !room) { setLift(0); return; }
+      setLift(Math.round(Math.max(0, Math.min(image.clientHeight - room, lastTapY.current - room * 0.4))));
+    };
+    update();
+    const settle = setTimeout(update, 350);
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => { clearTimeout(settle); viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); };
+  }, [typing, taps.length]);
   useEffect(() => {
     setText("");
     setDemoStep(0);
@@ -137,6 +218,9 @@ export function BrowserPanel({
     setDenyOpen(false);
     setShowOrigin(false);
     setShowText(false);
+    setShowDetails(false);
+    setTaps([]);
+    lastTapY.current = null;
   }, [request.id]);
   const clearLocalInput = useCallback(() => {
     if (draftInput.current) {
@@ -184,6 +268,27 @@ export function BrowserPanel({
     };
   }, [denyOpen]);
 
+  const tapped = useCallback((point: { clientX: number; clientY: number }) => {
+    const bounds = stage.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const image = stage.current?.querySelector("img")?.getBoundingClientRect();
+    if (image) lastTapY.current = point.clientY - image.top;
+    const id = performance.now();
+    setTaps(previous => [...previous.slice(-3), { id, x: point.clientX - bounds.left, y: point.clientY - bounds.top }]);
+    setTimeout(() => setTaps(previous => previous.filter(tap => tap.id !== id)), 450);
+  }, [typing]);
+  const target = workspace.typingTarget?.requestId === request.id ? workspace.typingTarget : null;
+  // A tap landed in a text field: bring up the keyboard. Phones that insist on
+  // a direct touch show the highlighted Keyboard button instead.
+  useEffect(() => {
+    if (target?.editable && canInput && !showKeyboard) keyboard.current?.focus();
+  }, [target?.at]); // eslint-disable-line react-hooks/exhaustive-deps
+  // With the phone keyboard open the page keeps its size and slides instead.
+  const fitTo = keyboardArea ? stageSize : stageBox ?? stageSize;
+  const displaySize = liveFrame && fitTo ? (() => {
+    const scale = Math.min(fitTo.width / liveFrame.width, fitTo.height / liveFrame.height);
+    return { width: Math.round(liveFrame.width * scale), height: Math.round(liveFrame.height * scale) };
+  })() : undefined;
   const sendText = (event: React.FormEvent) => {
     event.preventDefault();
     if (!text || !canInput || workspace.focusBlocked || workspace.focusBusy) return;
@@ -196,9 +301,30 @@ export function BrowserPanel({
     workspace.navigateBrowser(direction);
   };
 
+  const liveNow = live && !finished && !expired;
+  const toolsOpen = showKeyboard || showMoreKeys;
+  const addressButton = (
+          <button
+      className={`address${active && liveFrame && !isDemo && address.label !== requestedAddress.label ? " is-moved" : ""}`}
+      title={address.label}
+      aria-label={`Website origin: ${address.label}`}
+      aria-expanded={showOrigin}
+      aria-controls={showOrigin ? "full-browser-origin" : undefined}
+      onClick={() => setShowOrigin(!showOrigin)}
+    >
+      {address.secure ? (
+        <LockKeyhole size={11} aria-label="HTTPS connection" />
+      ) : (
+        <TriangleAlert size={11} aria-label="Page is not using HTTPS" />
+      )}
+      <span>{address.label}</span>
+    </button>
+  );
   return (
     <section
-      className="browser-panel"
+      ref={panel}
+      style={keyboardArea ? { position: "fixed", left: 0, right: 0, top: keyboardArea.top, height: keyboardArea.height } : undefined}
+      className={`browser-panel${keyboardArea ? " is-typing" : ""}${toolsOpen ? " has-tools" : ""}${live && !finished && !expired ? " is-live" : ""}${fullScreen ? " is-full-screen" : ""}${showDetails ? " shows-details" : ""}`}
       aria-label={`Request from ${request.agent}`}
     >
       <div className="panel-topline">
@@ -209,7 +335,7 @@ export function BrowserPanel({
         >
           <ArrowLeft size={20} />
         </button>
-        <span>REQUEST DETAILS</span>
+        {liveNow ? addressButton : <span className="panel-label">Request</span>}
         <span className={`micro-status ${active && !workspace.browserPaused ? "green" : ""}`}>
           <span />
           {active && !isDemo && workspace.browserPaused
@@ -222,28 +348,28 @@ export function BrowserPanel({
               ? "Session closed"
               : "Awaiting you"}
         </span>
+        {live && !finished && !expired ? <>
+          <span className="panel-timer"><Clock3 size={13} aria-hidden="true" />{timeLeft(request.expiresAt, now)}</span>
+          <button className="icon-button" aria-label={showDetails ? "Hide request details" : "Show request details"} aria-pressed={showDetails} onClick={() => setShowDetails(!showDetails)}><Info size={18} /></button>
+          <button className="icon-button" aria-label={fullScreen ? "Exit full screen" : "Full screen"} aria-pressed={fullScreen} onClick={toggleFullScreen}>{fullScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>
+        </> : null}
       </div>
       <div className="detail-heading">
         <AgentMark name={request.agent} />
         <div>
           <h2>{request.title}</h2>
           <p>
-            {request.agent} <span>needs a human touch</span>
+            {request.agent} <span>is asking you to sign in</span>
           </p>
         </div>
       </div>
       <div className="reason-box">
-        <span className="quote-mark" aria-hidden="true">&ldquo;</span>
         <p>
           {request.reason ||
             "Please sign in to this website so I can continue my task."}
         </p>
       </div>
       <div className="session-meta">
-        <span>
-          <LockKeyhole size={13} />
-          {domain(request.origin)}
-        </span>
         <span>
           <Clock3 size={13} />
           {finished
@@ -255,26 +381,7 @@ export function BrowserPanel({
       </div>
       <div className={`browser-window ${active ? "is-active" : ""}`}>
         <div className="browser-chrome">
-          <span className="window-dots">
-            <i />
-            <i />
-            <i />
-          </span>
-          <button
-            className="address"
-            title={address.label}
-            aria-label={`Website origin: ${address.label}`}
-            aria-expanded={showOrigin}
-            aria-controls={showOrigin ? "full-browser-origin" : undefined}
-            onClick={() => setShowOrigin(!showOrigin)}
-          >
-            {address.secure ? (
-              <LockKeyhole size={11} aria-label="HTTPS connection" />
-            ) : (
-              <TriangleAlert size={11} aria-label="Page is not using HTTPS" />
-            )}
-            <span>{address.label}</span>
-          </button>
+          {liveNow ? null : addressButton}
           <span className="frame-mode">
             {isDemo ? "DEMO" : active && workspace.browserPaused ? "PAUSED" : active && workspace.navigationBusy ? "LOADING" : active ? "LIVE" : "PRIVATE"}
           </span>
@@ -285,7 +392,7 @@ export function BrowserPanel({
             <span>{address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
           </div>
         ) : null}
-        {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && workspace.navigationAvailable ? (
+        {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
           <div className="website-navigation" role="group" aria-label="Website navigation">
             <span>Website navigation</span>
             <div>
@@ -325,31 +432,11 @@ export function BrowserPanel({
           </div>
         ) : !active ? (
           <div className="browser-state">
-            <div className="permission-illustration">
-              <div className="illustration-cursor">
-                <MousePointer2 size={17} />
-              </div>
-              <div className="illustration-site">
-                <span />
-                <span />
-                <div>
-                  <LockKeyhole size={22} />
-                </div>
-                <span />
-                <span />
-              </div>
-              <div className="illustration-shield">
-                <ShieldCheck size={22} />
-              </div>
-            </div>
-            <h3>A little help. Then off they go.</h3>
+            <div className="state-emblem"><LockKeyhole size={26} aria-hidden="true" /></div>
+            <h3>Approve to open the browser</h3>
             <p>
-              Approve this request to open the browser and sign in yourself.
+              You’ll see the real website and sign in yourself. The agent waits until you hand it back.
             </p>
-            <span className="privacy-caption">
-              <Eye size={13} />
-              You'll see the actual website
-            </span>
           </div>
         ) : isDemo ? (
           <div className="browser-state demo-browser">
@@ -399,33 +486,48 @@ export function BrowserPanel({
             <h3>Loading website…</h3>
             <p>Waiting for the browser to confirm navigation and show a fresh image. Then choose a field again before typing.</p>
           </div>
-        ) : liveFrame ? (
-          <div className="remote-screen">
-            <RemoteSurface frame={liveFrame} enabled={canInput} controlIdentity={workspace.connection}
-              alt={`Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
-              send={workspace.send} />
-            {workspace.status !== "connected" ? (
+        ) : (
+          <div className="remote-screen" ref={stage}>
+            {liveFrame ? <div className="remote-page" style={lift ? { transform: `translateY(${-lift}px)` } : undefined}>
+              <RemoteSurface frame={liveFrame} enabled={canInput} controlIdentity={workspace.connection} display={displaySize} onTap={tapped}
+                alt={`Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
+                send={workspace.send} />
+            </div> : (
+              <div className="browser-state">
+                <LoaderCircle className="spin" size={30} />
+                <h3>
+                  {workspace.info?.browserAvailable === false
+                    ? "Browser needs a moment."
+                    : "Opening your browser\u2026"}
+                </h3>
+                <p>
+                  {workspace.info?.browserAvailable === false
+                    ? "Check that Chromium is installed and the bridge can reach your agent\u2019s browser."
+                    : "Connecting securely to your computer. Your live session will appear here."}
+                </p>
+              </div>
+            )}
+            {taps.map(tap => <span key={tap.id} className="tap-ripple" style={{ left: tap.x, top: tap.y }} aria-hidden="true" />)}
+            {liveFrame && workspace.status !== "connected" ? (
               <div className="reconnect-cover">
                 <LoaderCircle className="spin" size={24} />
                 <span>Reconnecting to your browser…</span>
               </div>
             ) : null}
           </div>
-        ) : (
-          <div className="browser-state">
-            <LoaderCircle className="spin" size={30} />
-            <h3>
-              {workspace.info?.browserAvailable === false
-                ? "Browser needs a moment."
-                : "Opening your browser\u2026"}
-            </h3>
-            <p>
-              {workspace.info?.browserAvailable === false
-                ? "Check that Chromium is installed and the bridge can reach your agent\u2019s browser."
-                : "Connecting securely to your computer. Your live session will appear here."}
-            </p>
-          </div>
         )}
+        {active &&
+        liveFrame &&
+        !isDemo &&
+        address.label !== requestedAddress.label ? (
+          <div className="redirect-note">
+            <ExternalLink size={14} />
+            <span>
+              This page moved to <strong>{address.label}</strong>. Check
+              the address before entering credentials.
+            </span>
+          </div>
+        ) : null}
       </div>
       {active && !isDemo && workspace.navigationError ? <p className="website-navigation-error" role="alert">{workspace.navigationError}</p> : null}
       {active && !isDemo && workspace.navigationUncertain ? <p className="website-navigation-hint" role="status">Resume and check the website before handing back.</p> : null}
@@ -436,9 +538,66 @@ export function BrowserPanel({
               ? "Use the website’s own links and buttons in this browser."
               : "Update the bridge on your computer for website Back, Forward and Reload."}</p>
           ) : null}
-          {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} /> : null}
+          <div className="tool-tray">
+            <div className="tool-slot" ref={setTray} />
+          {showMoreKeys ? (
+              <div className="more-browser-keys" id={moreKeysId} role="group" aria-label="More browser keys">
+                <p>Send a key to the browser’s selected control. The scroll buttons above move the page.</p>
+                <div className="more-key-grid">
+                  {additionalKeys.map(({ key, label }) => {
+                    const name = key === "ControlOrMeta+A" ? "Select all in browser" : `Press ${key} in browser`;
+                    return <button key={key} title={name} aria-label={name}
+                      disabled={!canInput || (key !== "Shift+Tab" && keyInputBlocked)}
+                      onClick={() => workspace.send({ type: "key", key })}>{label}</button>;
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {showKeyboard ? (
+              <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
+                <label htmlFor="remote-input">
+                  Tap a field in the browser, then send text
+                </label>
+                <div className="input-with-button">
+                  <input
+                    ref={draftInput}
+                    id="remote-input"
+                    type={showText ? "text" : "password"}
+                    value={text}
+                    onChange={(event) => setText(event.target.value)}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder="Text to send to the selected field"
+                    disabled={!canInput || workspace.focusBlocked}
+                  />
+                  <button
+                    className="button button-dark button-small"
+                    type="submit"
+                    disabled={!canInput || !text || workspace.focusBlocked}
+                  >
+                    Send <ArrowUp size={14} />
+                  </button>
+                </div>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={showText}
+                    onChange={(event) => setShowText(event.target.checked)}
+                  />
+                  Show text
+                </label>
+                <small>
+                  Sent directly to the browser and cleared here. Never saved by
+                  Keep Safe.
+                </small>
+              </form>
+            ) : null}
+          </div>
           <div className="remote-toolbar">
             <div className="remote-toolbar-actions">
+              <LiveKeyboard ref={keyboard} enabled={canInput && !workspace.focusBlocked} wanted={!!target?.editable} kind={target?.kind}
+                send={workspace.send} onActive={setTyping} />
               <button
                 className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
                 onClick={() => setShowKeyboard(!showKeyboard)}
@@ -456,6 +615,7 @@ export function BrowserPanel({
               >
                 More keys <ChevronDown size={15} aria-hidden="true" className={showMoreKeys ? "more-keys-chevron expanded" : "more-keys-chevron"} />
               </button>
+              {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} tray={tray} /> : null}
             </div>
             <div className="keyboard-keys" role="group" aria-label="Common browser controls">
               <button
@@ -506,64 +666,7 @@ export function BrowserPanel({
               </button>
             </div>
           </div>
-          {showMoreKeys ? (
-            <div className="more-browser-keys" id={moreKeysId} role="group" aria-label="More browser keys">
-              <p>Send a key to the browser’s selected control. The scroll buttons above move the page.</p>
-              <div className="more-key-grid">
-                {additionalKeys.map(({ key, label }) => {
-                  const name = key === "ControlOrMeta+A" ? "Select all in browser" : `Press ${key} in browser`;
-                  return <button key={key} title={name} aria-label={name}
-                    disabled={!canInput || (key !== "Shift+Tab" && keyInputBlocked)}
-                    onClick={() => workspace.send({ type: "key", key })}>{label}</button>;
-                })}
-              </div>
-            </div>
-          ) : null}
-          {showKeyboard ? (
-            <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
-              <label htmlFor="remote-input">
-                Tap a field in the browser, then send text
-              </label>
-              <div className="input-with-button">
-                <input
-                  ref={draftInput}
-                  id="remote-input"
-                  type={showText ? "text" : "password"}
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  placeholder="Text to send to the selected field"
-                  disabled={!canInput || workspace.focusBlocked}
-                />
-                <button
-                  className="button button-dark button-small"
-                  type="submit"
-                  disabled={!canInput || !text || workspace.focusBlocked}
-                >
-                  Send <ArrowUp size={14} />
-                </button>
-              </div>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={showText}
-                  onChange={(event) => setShowText(event.target.checked)}
-                />
-                Show text
-              </label>
-              <small>
-                Sent directly to the browser and cleared here. Never saved by
-                Keep Safe.
-              </small>
-            </form>
-          ) : null}
-          <p className="input-hint">
-            <MousePointer2 size={12} />
-            Tap to click. Swipe inside the image to scroll the website, or outside
-            it to move this app. Scroll buttons and More keys are also available.
-          </p>
+          <p className="input-hint">Tap the page to click, swipe to scroll. Tap a text field, then type.</p>
         </div>
       ) : null}
       {!finished && !expired ? (
@@ -605,22 +708,10 @@ export function BrowserPanel({
           Back to inbox <ArrowRight size={15} />
         </button>
       )}
-      <p className="session-safety">
-        <ShieldCheck size={13} />
+      {!live ? <p className="session-safety">
+        <ShieldCheck size={13} aria-hidden="true" />
         Passwords stay with the website. Cookies stay on your computer.
-      </p>
-      {active &&
-      liveFrame &&
-      !isDemo &&
-      address.label !== requestedAddress.label ? (
-        <div className="redirect-note">
-          <ExternalLink size={14} />
-          <span>
-            This page moved to <strong>{address.label}</strong>. Check
-            the address before entering credentials.
-          </span>
-        </div>
-      ) : null}
+      </p> : null}
       {denyOpen ? (
         <dialog
           ref={denyDialog}
@@ -662,25 +753,6 @@ export function BrowserPanel({
           </div>
         </dialog>
       ) : null}
-      <div className="flow-steps">
-        <span className={active || finished ? "done" : "current"}>
-          <i>{active || finished ? <Check size={10} /> : "1"}</i>Approve
-        </span>
-        <ChevronRight size={12} />
-        <span
-          className={
-            active ? "current" : request.status === "completed" ? "done" : ""
-          }
-        >
-          <i>{request.status === "completed" ? <Check size={10} /> : "2"}</i>
-          Sign in
-        </span>
-        <ChevronRight size={12} />
-        <span className={request.status === "completed" ? "done" : ""}>
-          <i>{request.status === "completed" ? <Check size={10} /> : "3"}</i>
-          Hand back
-        </span>
-      </div>
     </section>
   );
 }

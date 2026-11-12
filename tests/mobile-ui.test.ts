@@ -20,7 +20,7 @@ describe('built mobile application', () => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (!request.url().startsWith(bridge.url)) external.push(request.url()); });
     try {
-      await page.goto(bridge.url);
+      await page.goto(`${bridge.url}/?demo`);
       await page.getByRole('button', { name: /Claude Code github.com/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
       await page.getByRole('button', { name: /Simulate signing in/ }).click();

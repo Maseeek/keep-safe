@@ -32,7 +32,7 @@ describe('history cleanup on a phone', () => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     try {
-      await page.goto(bridge.url);
+      await page.goto(`${bridge.url}/?demo`);
       await page.getByRole('button', { name: /Claude Code github.com/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
       await page.getByRole('button', { name: /Simulate signing in/ }).click();

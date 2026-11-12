@@ -30,7 +30,7 @@ describe("remembered phone interface", () => {
     });
     try {
       const page = await context.newPage();
-      await page.goto(bridge.url);
+      await page.goto(`${bridge.url}/?demo`);
       const opener = page.getByRole("button", {
         name: /Claude Code github.com/,
       });
@@ -104,7 +104,7 @@ describe("remembered phone interface", () => {
         .getByLabel("Name this phone", { exact: true })
         .fill("Test phone");
       await page
-        .getByRole("button", { name: "Remember for 7 days", exact: true })
+        .getByRole("button", { name: "Keep this phone paired", exact: true })
         .click();
       await expect
         .poll(() =>
@@ -237,9 +237,11 @@ describe("remembered phone interface", () => {
       });
       const freshPage = await fresh.newPage();
       await freshPage.goto(bridge.url);
+      // An unpaired window starts at the welcome screen, never a connected one.
+      await freshPage.getByRole("button", { name: /Get started/ }).waitFor();
       expect(
-        await freshPage.getByText("Demo mode", { exact: true }).count(),
-      ).toBe(1);
+        await freshPage.getByText("Bridge connected", { exact: true }).count(),
+      ).toBe(0);
       await freshPage.evaluate(
         ({ key, url }) =>
           localStorage.setItem(

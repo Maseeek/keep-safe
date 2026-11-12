@@ -14,14 +14,10 @@ A link alone is insufficient. The first version must include a request queue, ap
 - Choose sensible security and expiry defaults.
 - Never store passwords or log browser input. Cookies may remain in the agent's browser session.
 - Build a free initial product with a path to a profitable service.
-- Keep the GitHub repository PRIVATE. Open source is a possible future decision, not authorization to publish source now. Do not add a public licence yet.
 
-## Budget and autonomy
+## Budget and constraints
 
 - Additional spending cap: **£0**. No paid APIs, hosted browser infrastructure, databases, domains, or plan upgrades.
-- Use all available connected AI providers and their existing allowances. Parallel implementation and independent reviews are authorized. Continue with another available provider when an allowance is exhausted.
-- Stop autonomous work on **Saturday 24 October 2026 at 09:00 Europe/London**, which is **2026-10-24T08:00:00Z**. Check the clock before substantial work and deployment. Do not begin new work after this deadline.
-- T3 scheduled tasks require the environment to remain available; continuous host availability was not explicitly confirmed. Do not claim future runs are guaranteed.
 
 ## Communication
 
