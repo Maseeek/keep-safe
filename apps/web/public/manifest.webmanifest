@@ -2,12 +2,12 @@
   "id": "/",
   "name": "Keep Safe",
   "short_name": "Keep Safe",
-  "description": "A human touch for your agents. Sign in from your phone and let them get back to work.",
+  "description": "Sign in to websites for your coding agents, from your phone.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f6f7f2",
-  "theme_color": "#f6f7f2",
+  "background_color": "#f4f4f1",
+  "theme_color": "#f4f4f1",
   "icons": [
     {
       "src": "/icon-192.png",

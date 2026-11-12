@@ -279,7 +279,7 @@ export function DeviceManager({
               ) : (
                 <Check size={14} />
               )}
-              Remember for 7 days
+              Keep this phone paired
             </button>
           </div>
           <p>
@@ -295,7 +295,7 @@ export function DeviceManager({
         </p>
       ) : null}
       <div className="device-list-heading">
-        <span>REMEMBERED DEVICES</span>
+        <span>PAIRED PHONES</span>
         <span>{devices.length}</span>
       </div>
       {loading && !devices.length ? (
@@ -341,8 +341,8 @@ export function DeviceManager({
       ) : null}
       <p className="device-access-note">
         <ShieldCheck size={13} />
-        Device keys expire after 7 days. Revoking one also ends its live browser
-        control and phone notifications.
+        A phone stays paired while you use it and for 30 days after. Revoking
+        one also ends its live browser control and phone notifications.
       </p>
       {pending ? (
         <DeviceConfirm

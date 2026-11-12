@@ -115,7 +115,7 @@ async function initialRememberDialog(page: Page, bridge: Bridge, name: string) {
   await page.locator('.demo-banner').getByRole('button', { name: 'Connect your computer', exact: true }).click();
   await page.getByLabel('Bridge address', { exact: true }).fill(bridge.url);
   await page.getByLabel('Owner token from your bridge terminal', { exact: true }).fill(ownerToken);
-  await page.getByRole('checkbox', { name: /Remember this phone for 7 days/ }).check();
+  await page.getByRole('checkbox', { name: /Keep this phone paired/ }).check();
   await page.getByLabel('Device name', { exact: true }).fill(name);
 }
 async function devices(bridge: Bridge) {
@@ -173,7 +173,7 @@ describe('notification enrollment on a phone', () => {
       await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('button', { name: 'Connect', exact: true }).click();
       await page.getByRole('button', { name: 'Remember this phone', exact: true }).click();
       await page.getByLabel('Name this phone', { exact: true }).fill('Notification test phone');
-      await page.getByRole('button', { name: 'Remember for 7 days', exact: true }).click();
+      await page.getByRole('button', { name: 'Keep this phone paired', exact: true }).click();
       await page.getByText('Notification test phone is remembered', { exact: true }).waitFor();
       const originalPairing = await pairing(page);
       const device = JSON.parse(originalPairing.device!) as { token: string };
@@ -239,7 +239,7 @@ describe('notification enrollment on a phone', () => {
       const before = await mockState(page);
       if (entry === 'connected') {
         await rememberForm(page, name);
-        await page.getByRole('button', { name: 'Remember for 7 days', exact: true }).click();
+        await page.getByRole('button', { name: 'Keep this phone paired', exact: true }).click();
       } else {
         await initialRememberDialog(page, bridge, name);
         await page.getByRole('button', { name: 'Connect securely', exact: true }).click();
@@ -299,7 +299,7 @@ describe('notification enrollment on a phone', () => {
       await post(bridge, ownerToken, 'subscribe', subscription);
       const before = await pairing(page);
       await page.route(`${bridge.url}/api/push/status`, route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Synthetic enrollment check unavailable."}' }), { times: 1 });
-      await page.getByRole('button', { name: entry === 'connected' ? 'Remember for 7 days' : 'Connect securely', exact: true }).click();
+      await page.getByRole('button', { name: entry === 'connected' ? 'Keep this phone paired' : 'Connect securely', exact: true }).click();
       await page.getByRole('alert').filter({ hasText: 'Synthetic enrollment check unavailable.' }).waitFor();
       expect(await pairing(page)).toEqual(before);
       expect((await pairing(page)).device).toBeNull();
@@ -333,7 +333,7 @@ describe('notification enrollment on a phone', () => {
         await route.continue();
       });
       const rejected = page.waitForResponse(response => response.url() === `${bridge.url}/api/devices` && response.status() === 409);
-      await page.getByRole('button', { name: 'Remember for 7 days', exact: true }).click();
+      await page.getByRole('button', { name: 'Keep this phone paired', exact: true }).click();
       await (await rejected).finished();
       await page.getByRole('alert').filter({ hasText: 'Refresh notification settings or turn notifications off before remembering this phone.' }).waitFor();
       expect(await pairing(page)).toEqual(before);
@@ -375,7 +375,7 @@ describe('notification enrollment on a phone', () => {
         captured(); await held;
         await route.fulfill({ response });
       });
-      await page.getByRole('button', { name: 'Remember for 7 days', exact: true }).click();
+      await page.getByRole('button', { name: 'Keep this phone paired', exact: true }).click();
       await started;
       expect(await page.getByRole('button', { name: 'Remember this phone', exact: true }).isDisabled()).toBe(true);
       if (stage === 'created phone response') expect((await devices(first)).length).toBe(1);
@@ -428,7 +428,7 @@ describe('notification enrollment on a phone', () => {
         captured(); await held;
         await route.fulfill({ response });
       });
-      await page.getByRole('button', { name: 'Remember for 7 days', exact: true }).click();
+      await page.getByRole('button', { name: 'Keep this phone paired', exact: true }).click();
       await started;
       expect((await devices(bridge)).length).toBe(1);
       expect(await page.getByRole('button', { name: 'Remember this phone', exact: true }).isDisabled()).toBe(true);

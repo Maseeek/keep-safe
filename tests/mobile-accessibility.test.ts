@@ -134,7 +134,7 @@ describe('mobile readability and keyboard access', () => {
       await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('button', { name: 'Connect', exact: true }).click();
       await page.getByRole('button', { name: 'Remember this phone', exact: true }).click();
       await page.getByLabel('Name this phone', { exact: true }).fill('Narrow phone');
-      await page.getByRole('button', { name: 'Remember for 7 days', exact: true }).click();
+      await page.getByRole('button', { name: 'Keep this phone paired', exact: true }).click();
       await page.getByRole('button', { name: 'Forget this phone', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'Forget this phone?' });
       for (const button of await dialog.getByRole('button').all()) await touchTarget(button);

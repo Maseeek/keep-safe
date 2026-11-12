@@ -104,7 +104,7 @@ describe("remembered phone interface", () => {
         .getByLabel("Name this phone", { exact: true })
         .fill("Test phone");
       await page
-        .getByRole("button", { name: "Remember for 7 days", exact: true })
+        .getByRole("button", { name: "Keep this phone paired", exact: true })
         .click();
       await expect
         .poll(() =>

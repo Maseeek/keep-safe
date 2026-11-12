@@ -3,6 +3,8 @@ import type {
   BridgeInfo,
   ClientMessage,
   DevicePairResult,
+  EditableKind,
+  ViewportRequest,
   HistoryCleanupResult,
   LoginRequest,
   PairedDevice,
@@ -54,10 +56,45 @@ export class BridgeError extends Error {
   }
 }
 
+/** What a pairing link or scanned QR code carries. Never the owner token. */
+export interface PairingInvite { url: string; code: string }
+
+/** Accepts a pairing link, or a bare code when the page itself came from the bridge. */
+export function parseInvite(text: string, fallbackUrl?: string): PairingInvite | null {
+  const value = text.trim();
+  const clean = (code: string | null) => {
+    const normal = (code ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return /^[A-Z0-9]{8}$/.test(normal) ? normal : null;
+  };
+  try {
+    const link = new URL(value);
+    const params = new URLSearchParams(link.hash.slice(1));
+    const code = clean(params.get("pair"));
+    if (code) return { url: validateBridgeUrl(params.get("bridge") || link.origin), code };
+  } catch { /* Not a link: try it as a code. */ }
+  const code = clean(value);
+  if (!code || !fallbackUrl) return null;
+  try { return { url: validateBridgeUrl(fallbackUrl), code }; } catch { return null; }
+}
+
+export function defaultDeviceName(): string {
+  const agent = navigator.userAgent;
+  if (/iPhone/.test(agent)) return "iPhone";
+  if (/iPad/.test(agent)) return "iPad";
+  if (/Android/.test(agent)) return /Mobile/.test(agent) ? "Android phone" : "Android tablet";
+  if (/Mac/.test(agent)) return "Mac browser";
+  if (/Windows/.test(agent)) return "Windows browser";
+  return "Browser";
+}
+
+export function validateBridgeUrl(url: string): string {
+  return validateConnection(url, "placeholder").url;
+}
+
 export function validateConnection(url: string, token: string): Connection {
   let parsed: URL;
   try {
-    parsed = new URL(url.trim());
+    parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`);
   } catch {
     throw new Error(
       "Enter a complete bridge address, such as https://your-tunnel.example.",
@@ -71,7 +108,9 @@ export function validateConnection(url: string, token: string): Connection {
     throw new Error(
       "Use the bridge address without a path, such as https://your-tunnel.example.",
     );
-  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  // A page the bridge serves itself may talk to that bridge over the same
+  // connection it was loaded on, such as a Tailscale address.
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname) || parsed.origin === window.location.origin;
   if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && local))
     throw new Error(
       "Use an HTTPS bridge address. HTTP is only allowed on localhost.",
@@ -138,10 +177,17 @@ function parseDevice(value: unknown): PairedDevice | undefined {
   };
 }
 
-function initialState(): { connection: Connection | null; notice: string } {
+function initialState(): { connection: Connection | null; notice: string; invite?: PairingInvite | null } {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const url = params.get("bridge");
   const token = params.get("token");
+  if (params.get("pair") !== null) {
+    // A one-time code: take it out of the address bar, then let the app claim it.
+    const invite = parseInvite(window.location.href);
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    if (invite) return { connection: null, notice: "", invite };
+    return { connection: null, notice: "That pairing link is not valid. Create a fresh one on your computer.", invite: null };
+  }
   if (url !== null || token !== null) {
     // Remove the secret before any network request or browser history entry can retain it.
     window.history.replaceState(
@@ -197,7 +243,7 @@ function initialState(): { connection: Connection | null; notice: string } {
       if (Date.parse(device.expiresAt) <= Date.now()) {
         clearPairingStorage();
         const expiredNotice =
-          "This phone\u2019s pairing expired. Open a fresh pairing link from your computer.";
+          "This phone\u2019s pairing expired. Pair again from your computer.";
         storeNotice(expiredNotice);
         return { connection: null, notice: expiredNotice };
       }
@@ -326,6 +372,14 @@ export function useWorkspace(onError: (message: string) => void) {
     initial.connection ? "connecting" : "demo",
   );
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
+  const [pendingInvite, setPendingInvite] = useState<PairingInvite | null>(initial.invite ?? null);
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const inviteClaim = useRef<Promise<boolean> | null>(null);
+  const [pairingError, setPairingError] = useState("");
+  /** What the last tap left focused in the remote page, so the phone keyboard can follow. */
+  const [typingTarget, setTypingTarget] = useState<{ requestId: string; editable: boolean; kind?: EditableKind; at: number } | null>(null);
+  const viewport = useRef<ViewportRequest | null>(null);
+  const [deviceEpoch, setDeviceEpoch] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
   const [navigationError, setNavigationError] = useState("");
   const [navigationAvailable, setNavigationAvailable] = useState(false);
@@ -495,12 +549,35 @@ export function useWorkspace(onError: (message: string) => void) {
       () =>
         invalidatePairing(
           connection,
-          "This phone\u2019s seven-day pairing expired. Open a fresh pairing link from your computer.",
+          "This phone\u2019s pairing expired. Pair again from your computer.",
         ),
-      Math.max(0, remaining),
+      // Timers cap near 24.8 days; a longer wait is re-armed by the refresh below.
+      Math.min(Math.max(0, remaining), 2_000_000_000),
     );
     return () => clearTimeout(timer);
-  }, [connection, invalidatePairing]);
+  }, [connection, invalidatePairing, deviceEpoch]);
+  // The bridge extends an active phone's pairing. Mirror the new date locally so
+  // this phone does not forget itself early. The connection object keeps its
+  // identity: every in-flight guard compares against it.
+  useEffect(() => {
+    if (!connection?.device || status !== "connected") return;
+    let cancelled = false;
+    const refresh = () => {
+      void callBridge<{ devices: PairedDevice[] }>(connection, "/api/devices").then(result => {
+        const current = result.devices?.find(device => device.id === connection.device?.id);
+        if (cancelled || currentConnection.current !== connection || !connection.device || !current || !Number.isFinite(Date.parse(current.expiresAt)) || current.expiresAt === connection.device.expiresAt) return;
+        connection.device.expiresAt = current.expiresAt;
+        try {
+          if (localStorage.getItem(deviceStorageKey)) localStorage.setItem(deviceStorageKey, JSON.stringify({ version: 1, ...connection }));
+          sessionStorage.setItem(storageKey, JSON.stringify(connection));
+        } catch { /* The in-memory date still applies. */ }
+        setDeviceEpoch(epoch => epoch + 1);
+      }).catch(() => { /* The existing date stays in force. */ });
+    };
+    refresh();
+    const timer = setInterval(refresh, 6 * 60 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [connection, status]);
 
   useEffect(() => {
     if (!connection) { transportSource.current = null; return; }
@@ -544,7 +621,7 @@ export function useWorkspace(onError: (message: string) => void) {
           if (watchId.current && !paused.current && visible() && activeRequest(watchId.current, message.requests)) {
             transportWatchId.current = watchId.current;
             ws.send(
-              JSON.stringify({ type: "watch", requestId: watchId.current }),
+              JSON.stringify({ type: "watch", requestId: watchId.current, ...(viewport.current && message.info.liveViewAvailable ? { viewport: viewport.current } : {}) }),
             );
           }
         } else if (message.type === "requests") {
@@ -562,6 +639,9 @@ export function useWorkspace(onError: (message: string) => void) {
         } else if (message.type === "focused" && !navigationAttempt.current && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
           focusAttempt.current = null;
           setFocusedControl(message); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
+        }
+        else if (message.type === "editable" && receivingBrowser() && message.requestId === watchId.current) {
+          setTypingTarget({ requestId: message.requestId, editable: message.editable === true, kind: message.kind, at: Date.now() });
         }
         else if (message.type === "navigated" && receivingBrowser()) {
           const pending = navigationAttempt.current;
@@ -619,6 +699,7 @@ export function useWorkspace(onError: (message: string) => void) {
         if (!currentSocket()) return;
         transportWatchId.current = null;
         freshFrame.current = null;
+        setTypingTarget(null);
         if (navigationAttempt.current) {
           paused.current = true;
           setBrowserPaused(true);
@@ -745,6 +826,9 @@ export function useWorkspace(onError: (message: string) => void) {
         );
       }
     } else clearPairingStorage();
+    adopt(next);
+  };
+  const adopt = (next: Connection) => {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify(next));
     } catch {
@@ -752,10 +836,48 @@ export function useWorkspace(onError: (message: string) => void) {
     }
     storeNotice("");
     setPairingNotice("");
+    setPairingError("");
     watchId.current = null;
     abandonNavigation("", true);
     setNavigationAvailable(false);
     setConnection(next);
+  };
+  /** Trades a one-time code for this phone's own revocable key. */
+  const pairWithCode = async (invite: PairingInvite, name = defaultDeviceName()) => {
+    const attempt = ++connectionAttempt.current;
+    setPairingBusy(true);
+    setPairingError("");
+    try {
+      const url = validateBridgeUrl(invite.url);
+      let response: Response;
+      try {
+        response = await fetch(`${url}/api/pair`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: invite.code, name: name.trim().slice(0, 60) || defaultDeviceName() }),
+          credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(15000),
+        });
+      } catch {
+        throw new Error("Could not reach your computer. Check that Keep Safe is running there and that this phone can reach it (for Tailscale, connect the Tailscale app).");
+      }
+      const body = (await response.json().catch(() => ({}))) as Partial<DevicePairResult> & { error?: string };
+      if (response.status === 404) throw new Error("Keep Safe on your computer is out of date. Update it, then pair again.");
+      if (!response.ok) throw new Error(body.error || "That code did not work. Create a fresh one on your computer.");
+      if (!body.device || !body.token || !Number.isFinite(Date.parse(body.device.expiresAt)))
+        throw new Error("Your computer sent an unexpected answer. Update Keep Safe there and try again.");
+      if (attempt !== connectionAttempt.current) throw new Error("Pairing was replaced by a newer attempt.");
+      const next: Connection = { ...validateConnection(url, body.token), device: { ...body.device, current: true } };
+      clearPairingStorage();
+      try { localStorage.setItem(deviceStorageKey, JSON.stringify({ version: 1, ...next })); }
+      catch { /* Private browsing: paired until this tab closes. */ }
+      adopt(next);
+      setPendingInvite(null);
+      return true;
+    } catch (reason) {
+      if (attempt === connectionAttempt.current) setPairingError(reason instanceof Error ? reason.message : "Pairing failed. Try again.");
+      return false;
+    } finally {
+      if (attempt === connectionAttempt.current) setPairingBusy(false);
+    }
   };
   const disconnect = () => {
     connectionAttempt.current++;
@@ -792,7 +914,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const send = useCallback((message: ClientMessage) => {
     // Navigation must use its correlated intent/epoch lifecycle below.
     if (message.type === "navigate") return false;
-    const remoteAction = ["click", "scroll", "text", "key", "inspect-controls", "focus"].includes(message.type);
+    const remoteAction = ["click", "scroll", "text", "key", "inspect-controls", "focus", "resize"].includes(message.type);
     if (remoteAction && (navigationAttempt.current || paused.current || !visible() || !watchId.current ||
       transportWatchId.current !== watchId.current || !activeRequest(watchId.current) ||
       freshFrame.current?.socket !== socket.current || freshFrame.current?.requestId !== watchId.current ||
@@ -817,6 +939,7 @@ export function useWorkspace(onError: (message: string) => void) {
       errorCallback.current(notice);
       return false;
     }
+    if (message.type === "click") setTypingTarget(null);
     if (message.type === "click" || message.type === "key") {
       focusAttempt.current = null; setFocusedControl(null); setFocusBusy(false);
       if (recoversFocus) { setFocusBlocked(false); setControlsError(""); }
@@ -838,17 +961,27 @@ export function useWorkspace(onError: (message: string) => void) {
     transportWatchId.current = null;
     freshFrame.current = null;
     setFrame(null);
+    setTypingTarget(null);
     clearControls();
     if (socket.current?.readyState === WebSocket.OPEN && socketSource.current === currentConnection.current) {
       const canWatch = requestId && !paused.current && visible() && activeRequest(requestId);
       if (canWatch) transportWatchId.current = requestId;
       socket.current.send(
         JSON.stringify(
-          canWatch ? { type: "watch", requestId } : { type: "unwatch" },
+          canWatch ? { type: "watch", requestId, ...(viewport.current && currentInfo.current?.liveViewAvailable ? { viewport: viewport.current } : {}) } : { type: "unwatch" },
         ),
       );
     }
   }, [clearControls, visible, activeRequest, abandonNavigation, pauseBrowser]);
+  /** The live view reports the space it has. Used when the next browser opens,
+   * and to resize one that is already on screen. */
+  const setViewport = useCallback((next: ViewportRequest | null) => {
+    const previous = viewport.current;
+    viewport.current = next;
+    if (!next || !previous || (previous.width === next.width && previous.height === next.height)) return;
+    if (currentInfo.current?.liveViewAvailable && freshFrame.current && socket.current?.readyState === WebSocket.OPEN && freshFrame.current.socket === socket.current && !navigationAttempt.current && !paused.current)
+      socket.current.send(JSON.stringify({ type: "resize", width: next.width, height: next.height }));
+  }, []);
   const navigateBrowser = useCallback((direction: NavigationDirection) => {
     const ws = socket.current;
     const source = currentConnection.current;
@@ -998,6 +1131,16 @@ export function useWorkspace(onError: (message: string) => void) {
     pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,
     error,
     pairingNotice,
+    pendingInvite, pairingBusy, pairingError, pairWithCode,
+    /** Claims the code this page was opened with. Safe to call twice. */
+    claimPendingInvite: () => {
+      if (!pendingInvite) return Promise.resolve(false);
+      inviteClaim.current ??= pairWithCode(pendingInvite).finally(() => { inviteClaim.current = null; });
+      return inviteClaim.current;
+    },
+    dropPendingInvite: () => setPendingInvite(null),
+    clearPairingError: () => setPairingError(""),
+    typingTarget, setViewport,
     dismissPairingNotice: () => {
       storeNotice("");
       setPairingNotice("");
