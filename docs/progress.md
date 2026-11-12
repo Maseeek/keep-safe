@@ -471,3 +471,11 @@ Requested directly by the owner. The owner also made the repository public and a
 
 Not verified: any physical phone (camera scanner, keyboard raise and fit, Home Screen pairing on iOS, notification delivery), the Tailscale HTTPS route, and `npx` straight from GitHub before this branch reaches `main`.
 
+### Overhaul release verified at 20:20 UTC on 12 November
+
+- Merged pull request 2 into `main` as `d6457de`. Vercel's Git integration deployed it to [production](https://keep-safe-eight.vercel.app), which serves the same `index-DFHlrQbN.js` bundle as the locally tested build, with the camera policy now `camera=(self)`.
+- GitHub Actions did not run. GitHub reports the account is locked for a billing issue, and runs on `main` have failed to start since 11 November. Verification is the local run: typecheck plus 401 tests in 44 files. Test workers are capped at six, which made the full run reliable on a 16-core machine.
+- Production check in Chromium phone emulation, 15 of 15 passed: welcome screen, demo approve and handback, desktop landing with the setup prompt, pairing the hosted app to a local bridge by one-time code, the code removed from the address bar, no owner key on the phone, no browser address for the agent before handback, the page sized to the phone, a tap raising the keyboard target, a typed synthetic sign-in, handback, the agent resuming signed in, and nothing written to the hosted site.
+- `npx -y github:Maseeek/keep-safe` installed from GitHub in a clean directory and ran `status`, `up`, `pair` and `down`.
+- Vercel preview deployments sit behind Vercel sign-in, so the preview was not opened. Its build passed.
+
