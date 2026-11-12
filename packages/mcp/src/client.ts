@@ -75,6 +75,10 @@ export class BridgeClient {
   }
 
   create(input: CreateRequestInput): Promise<AgentRequest> { return this.request('/api/requests', input); }
+  /** Paired-phone counts. Older bridges have no such route, so failure means unknown. */
+  async status(): Promise<{ phones: number; notifications: number } | undefined> {
+    try { return await this.request('/api/status'); } catch { return undefined; }
+  }
   get(id: string): Promise<AgentRequest> { return this.request(`/api/requests/${encodeURIComponent(id)}`); }
 
   /**
@@ -112,8 +116,13 @@ export class BridgeClient {
 export async function configuredClient(): Promise<BridgeClient> {
   const configDir = process.env.KEEP_SAFE_CONFIG_DIR ?? resolve(process.cwd(), '.keep-safe');
   let file: { agentToken?: string; port?: number } = {};
+  // A background bridge records its port beside the keys.
+  if (!process.env.KEEP_SAFE_BRIDGE_URL) {
+    try { const daemon = JSON.parse(await readFile(resolve(configDir, 'daemon.json'), 'utf8')) as { port?: unknown }; if (Number.isInteger(daemon.port)) file.port = daemon.port as number; }
+    catch { /* The default port applies. */ }
+  }
   if (!process.env.KEEP_SAFE_AGENT_TOKEN) {
-    try { file = JSON.parse(await readFile(resolve(configDir, 'config.json'), 'utf8')); }
+    try { file = { port: file.port, ...JSON.parse(await readFile(resolve(configDir, 'config.json'), 'utf8')) }; }
     catch { /* Explicit error below avoids leaking a path or file contents. */ }
   }
   return new BridgeClient({

@@ -592,6 +592,8 @@ export async function createBridge(options: BridgeOptions) {
       await devices.persist(); await persistSubscriptions();
       json(response, 200, { ok: true }); return;
     }
+    // Counts only: lets an agent tell its user that no phone is paired yet.
+    if (url.pathname === '/api/status' && request.method === 'GET') { json(response, 200, { phones: devices.list().length, notifications: subscriptions.size, browserAvailable: info.browserAvailable }); return; }
     if (url.pathname === '/api/info' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, info); return; }
     if (url.pathname === '/api/history/clear' && request.method === 'POST') {
       requireOwner();

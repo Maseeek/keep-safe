@@ -48,7 +48,7 @@ describe('revocable phone pairing', () => {
     const paths = await files(); const bridge = await start(paths);
     const paired = await bridge.pair();
     expect(paired.token).toMatch(/^[a-f0-9]{64}$/);
-    expect(Date.parse(paired.device.expiresAt) - Date.parse(paired.device.createdAt)).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(Date.parse(paired.device.expiresAt) - Date.parse(paired.device.createdAt)).toBe(30 * 24 * 60 * 60 * 1000);
     const stored = await readFile(paths.devicesFile, 'utf8');
     expect(stored).not.toContain(paired.token);
     expect(JSON.parse(stored).devices[0].digest).toMatch(/^[a-f0-9]{64}$/);

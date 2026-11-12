@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { hostname } from 'node:os';
+import { isIP } from 'node:net';
 import { ConfigError, loadConfig } from './config';
 import { acquireConfigLock } from './config-lock';
 import { rotateKeys, type KeyScope } from './key-rotation';
@@ -17,8 +20,8 @@ function argumentsOf(args: string[], command: string) {
   const rotation = command === 'rotate-keys';
   const rehearsal = command === 'rehearse';
   const connection = command === 'doctor' || command === 'setup';
-  const allowed = new Set(rotation ? ['--config-dir'] : rehearsal ? ['--port', '--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir'])]);
-  const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : connection ? ['--json', '--help'] : rehearsal ? ['--help'] : ['--allow-local-urls', '--no-static', '--help']);
+  const allowed = new Set(rotation ? ['--config-dir'] : rehearsal ? ['--port', '--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir', '--listen', '--allow-origin', '--name'])]);
+  const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : connection ? ['--json', '--help'] : rehearsal ? ['--help'] : ['--allow-local-urls', '--no-static', '--tailnet-http', '--daemon', '--help']);
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (booleans.has(flag)) { flags.add(flag); continue; }
@@ -37,7 +40,7 @@ async function main() {
     return;
   }
   if (flags.has('--help')) {
-    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nSynthetic phone rehearsal (start and pair the bridge first):\n  npm run --silent bridge -- rehearse [--port NUMBER] [--config-dir PATH]\n  Use only the fixed practice phrase, never real credentials.\n  Verify the returned practice browser after explicit handback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
+    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n--listen ADDRESSES     Also listen on these private IP addresses, comma separated (for example a Tailscale IP)\n--allow-origin URLS    Further app origins allowed to call the bridge, comma separated\n--tailnet-http         Accept plain HTTP origins on Tailscale addresses (Tailscale encrypts that traffic)\n--name TEXT            Computer name shown on the phone (default: this computer's hostname)\n--daemon               Print no pairing link; phones pair with one-time codes from "keep-safe pair"\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nSynthetic phone rehearsal (start and pair the bridge first):\n  npm run --silent bridge -- rehearse [--port NUMBER] [--config-dir PATH]\n  Use only the fixed practice phrase, never real credentials.\n  Verify the returned practice browser after explicit handback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
     return;
   }
   const configDirectory = resolve(values.get('--config-dir') ?? process.env.KEEP_SAFE_CONFIG_DIR ?? '.keep-safe');
@@ -78,8 +81,13 @@ async function main() {
     return;
   }
   const selectedPublicUrl = values.get('--public-url') ?? process.env.KEEP_SAFE_PUBLIC_URL;
-  const publicUrl = connectionOrigin(selectedPublicUrl ?? `http://127.0.0.1:${port}`);
-  const appUrl = connectionOrigin(values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? (command === 'setup' || selectedPublicUrl ? hostedAppOrigin : publicUrl));
+  const tailnetHttp = flags.has('--tailnet-http');
+  const publicUrl = connectionOrigin(selectedPublicUrl ?? `http://127.0.0.1:${port}`, { tailnetHttp });
+  const appUrl = connectionOrigin(values.get('--app-url') ?? process.env.KEEP_SAFE_APP_URL ?? (command === 'setup' || (selectedPublicUrl && publicUrl.startsWith('https:')) ? hostedAppOrigin : publicUrl), { tailnetHttp });
+  const listed = (flag: string) => (values.get(flag) ?? '').split(',').map(item => item.trim()).filter(Boolean);
+  const extraOrigins = listed('--allow-origin').map(item => connectionOrigin(item, { tailnetHttp }));
+  const listenHosts = listed('--listen');
+  if (listenHosts.some(host => !isIP(host))) throw new UsageError('--listen takes IP addresses of this computer, comma separated.');
   if (command === 'setup') {
     const report = connectionSetup({ port, configDirectory, appUrl, publicUrl: selectedPublicUrl ? publicUrl : undefined });
     if (flags.has('--json')) console.log(JSON.stringify(report, null, 2));
@@ -104,13 +112,19 @@ async function main() {
       ...config, port, appUrl, publicUrl,
       subscriptionsFile: join(configDirectory, 'subscriptions.json'),
       devicesFile: join(configDirectory, 'devices.json'),
-      staticDir: flags.has('--no-static') ? undefined : resolve(values.get('--static-dir') ?? 'apps/web/dist'),
+      staticDir: flags.has('--no-static') ? undefined : values.get('--static-dir') ? resolve(values.get('--static-dir')!) : fileURLToPath(new URL('../../../apps/web/dist', import.meta.url)),
       allowLocalUrls: flags.has('--allow-local-urls'),
+      listenHosts, extraOrigins,
+      computerName: values.get('--name') ?? hostname(),
     });
   } catch (error) { await lock.release(); throw error; }
   const pairing = new URL(appUrl);
   pairing.hash = new URLSearchParams({ bridge: publicUrl, token: config.ownerToken }).toString();
-  console.log(`Keep Safe bridge listening at ${bridge.url}\nPair your phone (private owner link):\n${pairing.href}\n\nAgent credentials are in ${join(configDirectory, 'config.json')}. Do not share them.\nBrowser installed: ${bridge.info.browserAvailable ? 'yes' : 'no — run npx playwright install chromium'}\nPhone notifications: ${bridge.info.pushEnabled ? 'available after pairing' : 'disabled'}`);
+  const unreachable = listenHosts.filter(host => !bridge.listening.includes(host));
+  if (unreachable.length) console.error(`Could not listen on ${unreachable.join(', ')}. The bridge is still available on this computer.`);
+  // A background bridge writes to a log file, so it never prints owner authority.
+  if (flags.has('--daemon')) console.log(`Keep Safe bridge listening at ${bridge.url}\nPhone address: ${publicUrl}\nBrowser installed: ${bridge.info.browserAvailable ? 'yes' : 'no'}`);
+  else console.log(`Keep Safe bridge listening at ${bridge.url}\nPair your phone (private owner link):\n${pairing.href}\n\nAgent credentials are in ${join(configDirectory, 'config.json')}. Do not share them.\nBrowser installed: ${bridge.info.browserAvailable ? 'yes' : 'no — run npx playwright install chromium'}\nPhone notifications: ${bridge.info.pushEnabled ? 'available after pairing' : 'disabled'}`);
   let stopping = false;
   const shutdown = () => {
     if (stopping) return;
