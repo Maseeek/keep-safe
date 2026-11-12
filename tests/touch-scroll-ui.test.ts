@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { chromium, type Browser, type CDPSession, type Locator, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
+import { openBrowser, type BrowserFactory } from '../packages/bridge/src/browser';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startTouchLoginFixture, touchFixtureCredentials } from './fixtures/touch-login-site';
 
@@ -44,7 +45,10 @@ describe('trusted touch scrolling through the phone interface', () => {
 
   it.each([320, 390])('touches, scrolls native containers and signs in before authenticated handback at %ipx', async width => {
     const site = await startTouchLoginFixture();
-    const bridge = await createBridge({ ownerToken, agentToken, port: 0, allowLocalUrls: true, staticDir: resolve('apps/web/dist') });
+    // This fixture positions its panels for a 390 x 720 page, so the browser
+    // keeps that size instead of following the test phone's screen.
+    const fixedSize: BrowserFactory = async input => { const session = await openBrowser({ ...input, viewport: undefined }); session.resize = undefined; return session; };
+    const bridge = await createBridge({ ownerToken, agentToken, port: 0, allowLocalUrls: true, staticDir: resolve('apps/web/dist'), browserFactory: fixedSize });
     const client = new BridgeClient({ url: bridge.url, token: agentToken });
     const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: true, hasTouch: true });
     const page = await context.newPage(); const cdp = await context.newCDPSession(page); const errors: string[] = [];
@@ -159,9 +163,11 @@ describe('trusted touch scrolling through the phone interface', () => {
       expect(test.maxDelta).toBe(3000); await expect.poll(() => test.remote.evaluate(() => window.scrollY)).toBe(test.sumY); count++;
       expect(test.inputClicks).toBe(1); expect(await text.isDisabled()).toBe(true);
       await page.clock.resume(); await page.getByRole('button', { name: 'More keys', exact: true }).click();
-      await imageBox(page); const local = await page.locator('.detail-section').evaluate(element => element.scrollTop); const remote = await test.remote.evaluate(() => window.scrollY);
-      await swipe(cdp, { x: 8, y: 780 }, { x: 8, y: 300 });
-      await expect.poll(() => page.locator('.detail-section').evaluate(element => element.scrollTop)).toBeGreaterThan(local); expect(await test.remote.evaluate(() => window.scrollY)).toBe(remote); expect(test.outputScrolls).toBe(count);
+      // A swipe outside the page image moves Keep Safe's own tool tray and never reaches the website.
+      await imageBox(page); const tray = page.locator('.tool-tray'); const trayBox = (await tray.boundingBox())!;
+      const local = await tray.evaluate(element => element.scrollTop); const remote = await test.remote.evaluate(() => window.scrollY);
+      await swipe(cdp, { x: trayBox.x + 40, y: trayBox.y + trayBox.height - 30 }, { x: trayBox.x + 40, y: trayBox.y + 30 });
+      await expect.poll(() => tray.evaluate(element => element.scrollTop)).toBeGreaterThan(local); expect(await test.remote.evaluate(() => window.scrollY)).toBe(remote); expect(test.outputScrolls).toBe(count);
     } finally { await test.close(); }
   }, 30000);
 

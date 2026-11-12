@@ -147,7 +147,8 @@ dialog::backdrop { background: rgb(10 12 14 / 55%); }
 .mobile-nav button:active { transform: scale(0.94); }
 .mobile-nav button > span { position: relative; display: grid; place-items: center; height: 26px; }
 .mobile-nav i { position: absolute; top: -4px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-style: normal; font-size: 0.6875rem; line-height: 18px; text-align: center; }
-.app-shell.has-detail .mobile-nav { display: none; }
+/* A live session takes the whole screen. Other request views keep the tabs. */
+.app-shell:has(.browser-panel.is-live) .mobile-nav { display: none; }
 
 /* Cards and shared pieces */
 .content-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); padding: 20px; display: flex; flex-direction: column; gap: 12px; }
@@ -218,7 +219,7 @@ dialog::backdrop { background: rgb(10 12 14 / 55%); }
 .queue-filters button.selected { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
 .queue-filters button span { opacity: 0.7; }
 .search-field { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; border-radius: var(--r-m); background: var(--surface); border: 1px solid var(--line); color: var(--muted); }
-.search-field input { flex: 1; min-width: 0; border: 0; background: none; outline: none; color: var(--text); }
+.search-field input[type="search"] { flex: 1; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; outline: none; color: var(--text); }
 .search-field:focus-within { border-color: var(--accent); }
 .request-list { display: flex; flex-direction: column; gap: 10px; }
 .request-card {
@@ -397,8 +398,6 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .remote-controls { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .remote-toolbar { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px; margin: 0 -2px; overscroll-behavior-x: contain; }
 .remote-toolbar::-webkit-scrollbar { display: none; }
-/* A soft edge shows the row scrolls sideways. */
-.remote-toolbar { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 28px; }
 .remote-toolbar-actions, .keyboard-keys { display: flex; gap: 8px; flex: none; }
 .control-navigator { display: contents; }
 .keyboard-keys button, .more-key-grid button { display: inline-grid; place-items: center; min-width: 48px; min-height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-weight: 600; font-size: 0.9375rem; }
@@ -411,14 +410,16 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 @keyframes nudge { 50% { transform: scale(1.05); } }
 /* Present for focus and the phone keyboard, never visible: typed characters are forwarded at once. */
 .live-keyboard-input { position: absolute; left: 0; bottom: 0; width: 1px !important; height: 1px; min-height: 0 !important; padding: 0 !important; border: 0 !important; opacity: 0; pointer-events: none; font-size: 16px; }
-.more-browser-keys, .remote-text-form, .page-control-content { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-m); background: var(--surface); border: 1px solid var(--line); order: -1; max-height: 46dvh; overflow-y: auto; overscroll-behavior: contain; }
+.more-browser-keys, .remote-text-form, .page-control-content { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-m); background: var(--surface); border: 1px solid var(--line); flex: none; }
+/* Open tools stack here, above the tool row, and scroll when they outgrow it. */
+.tool-tray { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.tool-tray:not(:has(.page-control-content, .more-browser-keys, .remote-text-form)) { display: none; }
+.tool-slot { display: contents; }
 .more-browser-keys p, .remote-text-form small, .page-control-content p { font-size: 0.8125rem; color: var(--muted); }
 .more-key-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .input-with-button { display: flex; gap: 8px; }
 .input-with-button input { flex: 1; min-width: 0; }
 .checkbox-label { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 500; }
-.page-control-content { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 5; box-shadow: var(--shadow); }
-.remote-controls { position: relative; }
 .page-control-heading { display: flex; align-items: center; justify-content: space-between; }
 .page-control-list { display: flex; flex-direction: column; gap: 6px; }
 .page-control-list button { display: flex; flex-direction: column; gap: 2px; width: 100%; min-height: 52px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); text-align: left; color: var(--text); }
@@ -442,18 +443,23 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 /* Phone: the request opens over the inbox, and a live session takes the screen. */
 @media (max-width: 760px) {
   .inbox-layout.has-selection .detail-section {
-    display: block; position: fixed; inset: 0; z-index: 50; background: var(--bg); overflow-y: auto; overscroll-behavior: contain;
-    padding: calc(var(--safe-top) + 8px) 16px calc(var(--safe-bottom) + 16px);
+    display: block; position: fixed; inset: 0 0 calc(var(--nav-height) + var(--safe-bottom)) 0; z-index: 25; background: var(--bg); overflow-y: auto; overscroll-behavior: contain;
+    padding: calc(var(--safe-top) + 8px) 16px 16px;
   }
-  .detail-section:has(.browser-panel.is-live) { padding: 0; overflow: hidden; }
-  .detail-section:has(.browser-panel.is-live) > .toast-inline, .detail-section:has(.browser-panel.is-live) > .notification-notice { position: absolute; top: calc(var(--safe-top) + 56px); bottom: auto; left: 8px; right: 8px; z-index: 6; margin: 0; }
-  .detail-section:has(.browser-panel.is-live) > .notification-notice + .toast-inline, .detail-section:has(.browser-panel.is-live) > .toast-inline + .notification-notice { top: calc(var(--safe-top) + 124px); }
+  .inbox-layout.has-selection .detail-section:has(.browser-panel.is-live) { inset: 0; z-index: 50; padding: 0; overflow: hidden; }
+  /* Messages float over the lower part of the page and let taps through, so
+     they never cover the address bar or block the website. */
+  .detail-section:has(.browser-panel.is-live) > .toast-inline, .detail-section:has(.browser-panel.is-live) > .notification-notice { position: absolute; top: auto; bottom: calc(var(--safe-bottom) + 132px); left: 8px; right: 8px; z-index: 6; margin: 0; pointer-events: none; box-shadow: var(--shadow); }
+  .detail-section:has(.browser-panel.is-live) > .toast-inline button, .detail-section:has(.browser-panel.is-live) > .notification-notice button { pointer-events: auto; }
+  .detail-section:has(.browser-panel.is-live) > .notification-notice + .toast-inline, .detail-section:has(.browser-panel.is-live) > .toast-inline + .notification-notice { bottom: calc(var(--safe-bottom) + 208px); }
   .browser-panel.is-live { height: 100dvh; gap: 0; background: var(--bg); }
 }
 .browser-panel.is-live .panel-topline { padding: calc(var(--safe-top) + 4px) 8px 4px; gap: 4px; flex: none; }
 .browser-panel.is-live .micro-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .browser-panel.is-live .panel-timer { padding: 0 6px; }
-.browser-panel.is-live .detail-heading, .browser-panel.is-live .reason-box, .browser-panel.is-live .session-meta { display: none; }
+.browser-panel.is-live .reason-box, .browser-panel.is-live .session-meta { display: none; }
+/* The title stays available to screen readers while the page has the screen. */
+.browser-panel.is-live:not(.shows-details) .detail-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .browser-panel.is-live.shows-details .detail-heading, .browser-panel.is-live.shows-details .reason-box { display: flex; margin: 0 12px 8px; flex: none; }
 .browser-panel.is-live .browser-window { flex: 1; border-radius: 0; border-left: 0; border-right: 0; }
 .browser-panel.is-live .browser-chrome { display: none; }
@@ -462,15 +468,21 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .browser-panel.is-live .remote-screen { flex: 1; height: auto; min-height: 0; }
 .browser-panel.is-live .browser-state { background: var(--surface); }
 .browser-panel.is-live .remote-screen > .browser-state { background: none; }
-.browser-panel.is-live .remote-controls { padding: 8px 8px 0; flex: none; }
+.browser-panel.is-live .remote-controls { padding: 8px 8px 0; flex: 0 1 auto; min-height: 0; }
+.browser-panel.is-live .tool-tray { max-height: 46dvh; overflow-y: auto; overscroll-behavior: contain; }
+.browser-panel.is-live .remote-toolbar { flex: none; }
+.browser-panel.is-live .browser-window { position: relative; min-height: 96px; }
+.browser-panel.is-live .redirect-note { position: absolute; left: 8px; right: 8px; bottom: 8px; margin: 0; z-index: 4; pointer-events: none; box-shadow: var(--shadow); animation: note-leave 500ms ease 9s forwards; }
+.browser-panel.is-live .address.is-moved { background: var(--warn-soft); color: var(--warn); }
+@keyframes note-leave { to { opacity: 0; visibility: hidden; } }
 .browser-panel.is-live .remote-toolbar { margin: 0 -8px; padding: 2px 8px; }
 .browser-panel.is-live .input-hint { display: none; }
 .browser-panel.is-live .session-actions { padding: 8px 8px calc(var(--safe-bottom) + 8px); flex: none; }
 .browser-panel.is-live .session-actions .button { min-height: 48px; }
-.browser-panel.is-live .website-navigation-error, .browser-panel.is-live .website-navigation-hint, .browser-panel.is-live .redirect-note { margin: 6px 8px 0; flex: none; }
+.browser-panel.is-live .website-navigation-error, .browser-panel.is-live .website-navigation-hint { margin: 6px 8px 0; flex: none; }
 .browser-panel.is-live .remote-controls .website-navigation-hint { margin: 0; }
 .browser-panel.is-typing { z-index: 55; }
-.browser-panel.is-typing .session-actions, .browser-panel.is-typing .website-navigation, .browser-panel.is-typing .redirect-note { display: none; }
+.browser-panel.is-typing .session-actions, .browser-panel.is-typing .website-navigation, .browser-panel.is-typing .redirect-note, .browser-panel.is-typing .tool-tray { display: none; }
 .browser-panel.is-typing .panel-topline { padding-top: 4px; }
 .browser-panel.is-full-screen { position: fixed; inset: 0; z-index: 70; height: 100dvh; gap: 0; background: var(--bg); }
 
@@ -595,6 +607,8 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
   .browser-panel:not(.is-full-screen) .back-button { display: none; }
   .browser-panel { max-width: 520px; }
   .browser-panel.is-live .panel-topline { padding: 0; }
+  /* There is room for the request title beside the page on larger screens. */
+  .browser-panel.is-live:not(.is-full-screen) .detail-heading { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; display: flex; }
   .browser-panel.is-live { gap: 12px; }
   .browser-panel.is-live .browser-window { border-radius: var(--r-l); border: 1px solid var(--line); }
   .browser-panel.is-live .remote-screen { flex: none; height: min(66dvh, 760px); }

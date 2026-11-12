@@ -1,5 +1,24 @@
 # Change history
 
+## 12 November 2026
+
+### Connect, onboarding and interface overhaul
+
+- Pair phones with a one-time code instead of the owner key. `keep-safe pair` shows it as a QR code in the terminal and in a browser window. Codes are single use, last ten minutes, and ten wrong guesses cancel every unused code. The phone receives its own revocable key.
+- Keep a paired phone paired while it is used. Pairing now ends after 30 days without use, replacing the fixed seven days.
+- Add the `keep-safe` command: `setup`, `pair`, `up`, `down`, `status`, `mcp`, `doctor`, `rehearse`. It runs the bridge in the background, keeps keys in `~/.keep-safe`, and installs with `npx -y github:Maseeek/keep-safe` or `npm install -g github:Maseeek/keep-safe`.
+- Choose the phone route automatically. Tailscale Serve with HTTPS when certificates are on, Tailscale direct otherwise, a Cloudflare quick tunnel when `cloudflared` is installed, and local-only as the last resort. The bridge can listen on a Tailscale address in addition to loopback.
+- Let the MCP server start the bridge on demand, and tell the agent when no phone is paired. `setup` registers the server with the Claude Code and Codex CLIs when present.
+- Replace the unpaired demo landing with a welcome flow. Phones get install, computer setup and pairing steps with a QR scanner and code entry. Computers get the setup prompt to paste into an agent. The demo is one tap away.
+- Size the managed browser to the approving phone's screen at up to twice the pixel density, so websites show their mobile layout and text is sharp.
+- Make the live view full screen on phones, with a full-screen toggle elsewhere. Open tools share one scrolling tray and the page scales to the space left.
+- Type straight into the page with the phone's keyboard. A tap on a text field raises the keyboard, characters are forwarded as typed and never kept on the phone, and the view fits above the keyboard.
+- Capture frames up to ten times a second while the page changes, skip unchanged frames, refresh immediately after input, and keep the text caret visible.
+- Rebuild the interface with a single spacing scale, light and dark themes, fewer decorative elements, and shorter copy.
+- Rewrite the README and connection guide. Add a phone app guide and a command reference.
+
+Not yet verified: the Tailscale HTTPS route, the camera scanner on a physical phone, keyboard behaviour on physical iOS and Android, and notification delivery on a physical phone.
+
 ## 11 November 2026
 
 ### Agent long polling

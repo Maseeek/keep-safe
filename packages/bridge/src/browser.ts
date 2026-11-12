@@ -205,6 +205,10 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     try {
       browser = await chromium.launch({
         headless: true, proxy: { server: proxy.url },
+        // The bridge closes its own browsers on shutdown. Playwright's signal
+        // handlers would close Chromium underneath that cleanup and leave it
+        // waiting on a browser that is already gone.
+        handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
         ...(process.env.KEEP_SAFE_CHROMIUM_PATH ? { executablePath: process.env.KEEP_SAFE_CHROMIUM_PATH } : {}),
         args: [`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', '--proxy-bypass-list=<-loopback>', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
       });
@@ -326,7 +330,9 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     closingSession = (async () => {
       for (const remove of listeners.splice(0)) remove();
       for (const monitor of popupMonitors.values()) monitor.session?.off('Page.windowOpen', monitor.opened);
-      await pageControls?.clear();
+      // The browser is closing either way, so a control channel that cannot be
+      // detached must not hold up shutdown.
+      await Promise.race([pageControls?.clear(), new Promise<void>(resolve => { setTimeout(resolve, 2000).unref(); })]);
       // Closing a connected Playwright browser disconnects; it does not terminate the agent's browser.
       if (owned) await context.close().catch(() => {});
       await browser.close().catch(() => {});

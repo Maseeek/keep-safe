@@ -766,7 +766,7 @@ export function App() {
                       <button className={filter === "pending" ? "selected" : ""} aria-pressed={filter === "pending"} onClick={() => setFilter("pending")}>Needs you <span>{pending.length}</span></button>
                       <button className={filter === "active" ? "selected" : ""} aria-pressed={filter === "active"} onClick={() => setFilter("active")}>Active</button>
                     </div>
-                    {current.length > 4 || query ? (
+                    {current.length > 2 || query ? (
                       <label className="search-field">
                         <Search size={16} aria-hidden="true" />
                         <input type="search" placeholder="Find an agent or website" aria-label="Search requests" value={query} onChange={(event) => setQuery(event.target.value)} />

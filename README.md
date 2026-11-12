@@ -2,189 +2,185 @@
 
 # Keep Safe
 
-Help your agents sign in while you're away from your computer.
+Your coding agent hit a login page. Sign in from your phone.
 
-Keep Safe puts the agent's actual browser on your phone. Approve a request, interact with the website, complete the login, then hand control back. Your agent resumes in the same authenticated browser.
+Keep Safe shows the agent's real browser on your phone. You approve the request, tap and type the sign-in yourself, then hand the browser back. The agent carries on in the same signed-in browser. Passwords and cookies stay on your computer.
 
-**[Open Keep Safe](https://keep-safe-eight.vercel.app)**
+**[Open Keep Safe](https://keep-safe-eight.vercel.app)** · [Connection guide](docs/connection.md) · [Phone app guide](docs/phone.md) · [Command reference](docs/cli.md)
 
-Early access. Private source. Free initial release. The hosted app opens in a labeled demo workspace until you pair your computer.
+Free and self-hosted. Early access.
 
-## What works
+<p>
+  <img src="docs/images/phone-welcome.png" width="230" alt="Keep Safe welcome screen on a phone">
+  <img src="docs/images/phone-live.png" width="230" alt="Typing into a live GitHub sign-in page from a phone">
+  <img src="docs/images/desktop-pairing.png" width="420" alt="Pairing QR code shown on the computer">
+</p>
 
-- Mobile-first inbox with request search, filters, expiry timers, approval, denial, and activity export.
-- Live browser streaming with taps, direct touch swipes, scrolling, text entry, and keyboard controls.
-- Background pause with discarded drafts and an explicit return to live control.
-- Website Back, Forward and Reload in managed browser sessions, with fresh-image and renewed-focus checks.
-- Optional page-controls list with names, roles, password-field markers and confirmed remote focus.
-- Live website origin with scheme and port, tap-to-expand inspection, and a warning when it changes.
-- Separate owner and agent credentials, expiring control, and a bounded queue.
-- Owner-controlled history cleanup that preserves unexpired agent handoffs.
-- Opt-in seven-day phone pairing with named devices and immediate revocation.
-- Isolated managed Chromium or attachment to an existing agent Chromium browser through loopback CDP.
-- MCP tools and an HTTP API so the integration is independent of a particular model.
-- Web Push subscription support and an installable mobile web app.
-- An explicitly labeled interactive demo that never asks for real credentials.
-- Read-only connection diagnostics and a command generator for phone/tunnel setup.
-- A synthetic handoff rehearsal that checks browser resume without a real account.
+## Set up in two minutes
 
-Passwords and browser inputs are not recorded. Managed browser cookies stay in memory on the developer's computer. Existing agent sessions remain owned by that browser. The hosted Vercel frontend does not receive website cookies.
+You need Node.js 20.19 or newer on the computer your agents run on, and a phone.
 
-## Start locally
+### 1. On your computer
 
-Requirements: Node.js 20.19+ (Node 22 recommended), npm, and a computer that stays awake while your agents run.
+Paste this into any coding agent (Claude Code, Codex, Cursor, T3 Code and so on):
 
-```bash
-git clone git@github.com:Maseeek/keep-safe.git
-cd keep-safe
-npm ci
-npx playwright install chromium
-npm run build:web
-npm run bridge
+```text
+Set up Keep Safe on this computer so I can approve website logins from my phone.
+
+1. Run: npx -y github:Maseeek/keep-safe setup
+   It needs Node.js 20 or newer. It installs a browser, starts Keep Safe in the background, adds its MCP server to the agent CLIs it finds, and prints a pairing link, a code and a QR code.
+2. Show me the pairing link and code from its output, and tell me to scan the QR code in the browser window it opened.
+3. If your own MCP settings were not updated, add the JSON it printed under "Other MCP clients".
+4. From now on, when a website needs me to sign in, call the keep-safe request_login tool, wait with wait_for_login, then continue in the same browser once I hand it back. Never ask me for passwords in chat.
 ```
 
-The private repository requires GitHub access. On Linux, if Chromium reports missing system libraries, use `npx playwright install --with-deps chromium`.
-
-The bridge listens at `http://127.0.0.1:4318` and prints a private owner pairing link. Open that link locally to pair the browser. Local credentials and Web Push keys are generated in ignored `.keep-safe/`, with owner-only file permissions.
-
-Do not share the pairing link or expose the Chromium debugging port.
-
-### Use your phone remotely
-
-Your phone needs a reachable **HTTPS** bridge address. Use a trusted private network or an HTTPS tunnel to `http://127.0.0.1:4318`. The computer must remain awake. The bridge does not install or start a public tunnel automatically.
-
-Run `npm run --silent bridge -- setup` for generated connection commands and the optional temporary-tunnel guide. The helper installs and starts nothing. Follow the [connection guide](docs/connection.md) for tunnel choices, restart steps, and troubleshooting.
-
-Start the bridge with the actual tunnel and hosted app origins:
+Or run the command yourself:
 
 ```bash
-npm run bridge -- \
-  --public-url https://your-bridge.example \
-  --app-url https://keep-safe-eight.vercel.app
+npx -y github:Maseeek/keep-safe setup
 ```
 
-Open the printed pairing link on your phone. The app removes the token fragment and pairs the current tab. To keep access after closing the app, choose **Remember this phone for 7 days** when pairing, or use **Remember this phone** in Connections.
+`setup` does four things:
 
-Remembering issues a separate device key. The original owner token is never saved in persistent browser storage. Remembered keys expire after seven days; revoke a device from Connections or choose **Forget this phone** to remove its local key and request revocation. Revocation also stops that device's live control and associated notifications. If the computer is offline, local forgetting succeeds but server revocation must be completed later from another paired device or the owner link.
+1. Installs the Chromium browser Keep Safe drives, if it is missing.
+2. Starts Keep Safe in the background and picks how your phone reaches it (see [Connecting](#connecting-your-phone)).
+3. Adds the Keep Safe MCP server to Claude Code and Codex when their CLIs are installed, and prints the configuration for other MCP clients.
+4. Shows a one-time pairing QR code in the terminal and in a browser window.
 
-For same-origin self-hosting, omit `--app-url`: the bridge serves the built frontend too. `npm run bridge -- --help` lists all supported options.
+For a permanent `keep-safe` command, install it globally instead: `npm install -g github:Maseeek/keep-safe`, then `keep-safe setup`.
 
-If the connection fails, run `npm run --silent bridge -- doctor` on the computer, with the same `--port`, `--config-dir`, `--public-url`, and `--app-url` options used at startup. It checks local authority, Chromium presence, CORS, HTTPS and WebSocket transport without changing configuration. Public probes carry no keys or cookies. Add `--json` for a structured report. A passing transport check does not prove endpoint ownership, phone reachability or push delivery.
+### 2. On your phone
 
-### Connect your agents
+Scan the QR code with your camera. Keep Safe opens, pairs, and offers notifications. That is all.
 
-Generate the correct local configuration with `npm run --silent agent:config -- codex`, `claude`, or `antigravity`, then follow the [integration guide](docs/integrations.md). It exposes `request_login`, `get_login_request`, and `wait_for_login`. Agents using an existing Chromium browser pass its loopback `cdp_url`; otherwise Keep Safe opens a managed browser and returns its endpoint only after the owner completes the handoff.
+On an iPhone, add Keep Safe to your Home Screen first (Share, then Add to Home Screen), open it from there, and use **Scan QR code** inside the app. iOS keeps Home Screen apps separate from Safari, so pairing must happen in the installed app for notifications to work.
 
-For a custom bridge port or key directory, pass the same settings to the generator, for example `npm run --silent agent:config -- codex --port 5318 --config-dir ./private-keys`. It also honors `KEEP_SAFE_PORT` and `KEEP_SAFE_CONFIG_DIR`; explicit options win. Selected relative directories resolve from the command's working directory. The generated agent URL stays on loopback, separate from the phone's HTTPS tunnel.
+No camera? Open the pairing link on the phone, or type the eight-character code into the app.
 
-Target clients include T3 Code, Claude, Codex, Antigravity, and other MCP-capable agents. This is a common protocol integration, not automatic access to every IDE's internal browser. Each native browser interface needs separate compatibility testing.
+### 3. Try it
 
-Chrome 136+ requires a non-default user data directory when launching with remote debugging switches. Use a dedicated agent browser profile or Playwright's bundled Chromium, not your personal daily profile. See the [Chrome debugging change](https://developer.chrome.com/blog/remote-debugging-port).
-
-### Phone notifications
-
-Pair the app, then choose **Enable notifications** in Settings. The bridge generates Web Push keys automatically. On iPhone, add the app to the Home Screen and open it there before enabling notifications, as required by [WebKit's Web Push support](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).
-
-Settings checks the current computer's enrollment rather than assuming an existing browser subscription is registered there. **Check notification status** refreshes that check; **Turn off notifications** removes only this pairing's enrollment on that computer. Pairing and browser permission stay unchanged. A failed removal remains retryable.
-
-If notifications are already enrolled with a tab-only owner connection, **Remember this phone** verifies and transfers that browser enrollment to its new revocable device key. A failed verification or changed enrollment asks you to retry before publishing a new pairing. Ordinary bridge switching does not transfer notifications automatically.
-
-If this app's browser subscription uses another computer's notification key, enabling asks before replacing it. Accepting stops that old subscription's alerts in this browser. An older bridge can still register notifications, but cannot confirm enrollment or turn it off through these controls until updated. See the [notification check](docs/connection.md#check-phone-notifications).
-
-Opening a notification checks its public notification-source key and exact request against the currently paired computer. Alerts from another source, old alerts without that information, expired requests and missing requests show guidance. They never substitute the first request in the queue. If you are already using another live browser, **Open request** is an explicit choice that leaves that view and clears unsent text. A fresh app window needs a remembered phone key or a fresh pairing link; alerts never pair or approve a request automatically. For source-aware routing, finish any active handoff, update the bridge, close all Keep Safe tabs/app windows, then reopen the app so its worker update can activate. Untouched older app/worker pairs retain their old behavior; physical-phone delivery remains unverified.
-
-Enrollment is separate from delivery. Lock-screen delivery on a physical iPhone or Android device has not yet been verified.
-
-### Practice before using a real account
-
-After starting and pairing the bridge, run this in another terminal on the agent computer:
+Ask your agent to "use Keep Safe to sign in to GitHub", or practise with a harmless test page:
 
 ```bash
-npm run --silent bridge -- rehearse
+keep-safe rehearse     # or: npx -y github:Maseeek/keep-safe rehearse
 ```
 
-Approve **Practice browser handoff** on your phone. In the live browser, type only `PRACTICE` into **Practice phrase**, choose **Practice sign-in**, wait for its success page, then choose **Done, hand back**. The command checks that the returned browser remains signed in after reload and closes the practice browser.
+## Connecting your phone
 
-The practice page is synthetic and isolated. It does not contact an external website or need `--allow-local-urls`. Use the same `--port` and `--config-dir` as your running bridge when customized. The check uses existing agent authority and does not start another bridge or change keys. See the [rehearsal guide](docs/connection.md#rehearse-a-login-handoff) for cancellation, expiry and verification limits.
+The browser runs on your computer, so your phone needs a way to reach it. `setup` chooses the best one available. Pick one yourself with `--route`.
 
-### Replace owner or agent keys
+| Route | When it is used | Address stays the same | Notifications |
+| --- | --- | --- | --- |
+| Tailscale with HTTPS | Tailscale is running and HTTPS certificates are on for your tailnet | Yes | Yes |
+| Tailscale | Tailscale is running without HTTPS certificates | Yes | No |
+| Cloudflare quick tunnel | `cloudflared` is installed and Tailscale is not running | No, it changes on every restart | Yes |
+| This computer only | Nothing else is available | Yes | Not from a phone |
 
-Stop every bridge using the configuration directory before updating or rotating keys. Bridges started before this update do not create the new configuration lock. Stopping the bridge closes its managed browser sessions, so finish or end any active handoff first.
+Tailscale is the recommended route. It is free for personal use, private to your own devices, and the address never changes, so your phone stays paired. Install Tailscale on the computer and the phone, sign in to both, and run `keep-safe setup`. Turn on HTTPS certificates in the Tailscale admin console (DNS page) to get notifications and Home Screen install, then run `keep-safe up --restart`.
 
-To replace the agent key:
+The [connection guide](docs/connection.md) covers each route, pairing, and troubleshooting.
+
+## How pairing works
+
+`keep-safe pair` asks the local bridge for an eight-character code and shows it as a QR code. The code works once and expires after ten minutes. The phone trades it for its own key. Only a digest of that key is stored on your computer.
+
+A paired phone stays paired while you use it and for 30 days after its last use. Revoke any phone from **Connect** in the app. The owner key never leaves your computer in this flow.
+
+## Commands
+
+```text
+keep-safe setup      Install the browser, start Keep Safe, add it to your agents, show a pairing QR code
+keep-safe pair       Show a new QR code to pair a phone
+keep-safe up         Start Keep Safe in the background
+keep-safe down       Stop it
+keep-safe status     Show the phone address and paired phones
+keep-safe mcp        Run the MCP server for an agent (starts Keep Safe if needed)
+keep-safe doctor     Diagnose the connection
+keep-safe rehearse   Practise a handoff with a harmless test page
+```
+
+Keys and state live in `~/.keep-safe`. See the [command reference](docs/cli.md) for options, key rotation and recovery.
+
+## Use it from your agents
+
+`setup` registers the MCP server for you where it can. To add it by hand:
 
 ```bash
-npm run bridge -- rotate-keys --agent
+claude mcp add --scope user keep-safe -- npx -y github:Maseeek/keep-safe mcp
+codex mcp add keep-safe -- npx -y github:Maseeek/keep-safe mcp
 ```
 
-Choose `--owner` instead to replace the owner pairing key and revoke all remembered phones and notification subscriptions. Choose `--all` to replace both keys. Exactly one scope is required. Add `--config-dir PATH` when using a different configuration directory.
+For other MCP clients, use this configuration:
 
-The rotation command prints a result without printing keys. Restart the bridge afterward. Owner/all rotation requires fresh phone pairing links. Agent/all rotation also requires restarting MCP clients that cached the old agent key. Agent-only rotation preserves existing phone pairing and Web Push keys.
-
-Updated bridge CLI processes hold an exclusive `bridge.lock` in the configuration directory until shutdown finishes. Another bridge or key operation using that directory will refuse to start. Rotation requires an existing valid configuration and writes replacements atomically with private file permissions. If a write fails, keep the bridge stopped; some remembered phones may already have been revoked.
-
-#### Recover a lock after a crash
-
-An abrupt crash or interruption during startup can leave `bridge.lock`. It contains process/host metadata, not keys. Inspect that file in your actual configuration directory and confirm the named process has exited on that host. Only after confirming every bridge/key operation using that directory has stopped, remove the stale lock and retry. Never remove a live process's lock. For the default directory on Linux/macOS, the removal command is `rm .keep-safe/bridge.lock`.
-
-The CLI lifecycle and rotation checks are verified on Linux. Other operating systems and filesystems require separate validation, especially directory syncing and crash recovery.
-
-### Clear finished history
-
-Open **Activity → Clear finished history** and confirm removal. A finished request becomes eligible after its original expiry, once browser startup, input, handback and closure have finished. Pending/active requests and unexpired completed or declined outcomes remain available to agents. All connected owners receive the updated history.
-
-Request metadata stays in memory on the computer and resets on bridge restart. Eligible entries clear automatically 24 hours after their original expiry; manual cleanup or the 100-record capacity limit can remove them earlier. Pending or failed browser cleanup protects the record until closure succeeds. If all 100 records are protected, new requests receive a capacity error rather than silently losing a recent outcome.
-
-This control removes request metadata. It does not delete downloaded history exports, paired phones, keys, notification subscriptions, or cookies belonging to an externally attached browser. Managed browsers still close at the original request deadline. The demo has a labeled, tab-only cleanup flow. Older bridges show an update message before enabling cleanup.
-
-## Development and checks
-
-```bash
-npm run dev        # frontend development server, port 5173
-npm run bridge     # separate local bridge
-npm run typecheck
-npm test           # builds the frontend, then runs tests
-npm run build      # typecheck and production frontend build
+```json
+{
+  "mcpServers": {
+    "keep-safe": { "command": "npx", "args": ["-y", "github:Maseeek/keep-safe", "mcp"] }
+  }
+}
 ```
 
-Tests cover request authorization, state transitions, expiry, private-network restrictions, browser ownership, password-field clearing, MCP wire compatibility, and real Chromium login/resume flows. Built-app mobile tests exercise both the demo and a real login through the phone controls. CI runs on pushes and pull requests with read-only repository permissions.
+The server offers three tools: `request_login`, `wait_for_login` and `get_login_request`. It starts the background bridge on demand, so it keeps working after a reboot. If no phone is paired, `request_login` tells the agent to ask you to run `keep-safe pair`.
 
-Leaving a request on mobile stops its live stream and discards pending scroll input. Reopening resumes the same unexpired browser. Temporary connection and input-rate failures reconnect without deleting a valid pairing.
+Agents with their own Chromium browser pass its loopback debugging address as `cdp_url`. Otherwise Keep Safe opens a separate managed browser and gives the agent its address only after you hand it back. The [integration guide](docs/integrations.md) has the HTTP API and per-client notes.
 
-When the browser reports that Keep Safe is hidden or leaving the page, viewing and input pause, the control connection closes, and unsent text plus its reveal setting are cleared. The website may continue running on your computer; the request keeps its original expiry and the agent still waits for handback. Returning does not restart the stream. Choose **Resume browser**, wait for a new image, then confirm a field or tap/Tab before typing. **Done, hand back** remains an explicit choice while paused once the computer is connected. Update the bridge for the closed-connection queue fix. Mobile suspension and app-switcher snapshots still require physical-device testing; timely lifecycle events are browser-dependent.
+## On the phone
 
-In a managed browser session, **Website navigation** provides **Back**, **Forward** and **Reload**. These control the website shown in the image. Navigation discards unsent text and its reveal setting, waits for confirmation and a fresh image, then requires a field selection or intentional browser tap/Tab before typing. Current password fields are cleared before leaving the page. Navigation that would resend a document form submission is blocked; if navigation cannot be confirmed, the app pauses for an explicit resume and page check. It never retries the navigation automatically. Update the local bridge to enable these controls. Attached external browsers use the website's own links and buttons because their existing history, cache and service workers are outside this safeguard.
+- An inbox of requests with the agent, the website and the time left.
+- A full-screen live view. The managed browser is sized to your phone's screen, so websites show their mobile layout.
+- Tap to click, swipe to scroll. Tap a text field and type with your phone's keyboard. Characters go straight to the page and are not kept on the phone.
+- A tool row for Tab, Enter, Backspace, more keys, pasted text, and a list of the page's fields and buttons.
+- Website Back, Forward and Reload in managed browsers.
+- The live website address, with a warning when it changes.
+- **Done, hand back** returns the browser to the agent. **End session** declines.
 
-Phone controls use larger text and touch targets, with named remote keys and keyboard-accessible confirmations. Open **More keys** for Space, Escape, Shift+Tab, arrow keys, Home/End, Page Up/Down, Delete and Select all. These send keyboard commands to the selected remote control; the separate scroll buttons move the page. Session status messages appear inside the mobile request so they do not cover the controls.
+Details are in the [phone app guide](docs/phone.md).
 
-Swipe inside the live browser image to scroll the website; swipe outside it to move Keep Safe. Short taps click the website. Cancelled gestures and multi-finger input do not become remote taps. Browser pinch zoom remains separate from remote scrolling. Update the computer bridge for scrolling at the touched position inside nested panels or embedded pages; older bridges retain their previous wheel position. Automated touch checks use Chromium emulation; physical phones and screen readers still need testing.
+## Security at a glance
 
-During a live session, open **Page controls** to list supported labeled fields and buttons, choose one to focus, then use **Type text** or the remote keys. The list includes native controls inside nested open web components and supported HTTP(S) embedded pages. Embedded controls show their own origin, including when it matches the top page. Labels resolve within their own root, so a matching ID elsewhere does not rename a field. The list does not read field values or link addresses. It shows up to 50 controls across a bounded scan and refreshes only when requested; a limited scan reports its actual count. Password fields are marked, while entered text remains outside the list. Focus confirms the target and its frame chain. After an unconfirmed focus attempt, text and ordinary keys stay blocked until a fresh confirmed focus or an explicit browser tap, Tab or Shift+Tab. Refreshing the list or reconnecting the same request does not confirm focus.
+- Keep Safe does not store passwords, log input, record the screen or export cookies.
+- Phones pair with single-use codes and hold their own revocable keys. Agents use a separate key and cannot approve requests or pair phones.
+- The agent gets the browser back only after you choose **Done, hand back**. Before that, in-flight input is drained and remaining password fields are cleared.
+- The managed browser reaches public websites only. Private and local network addresses are blocked.
+- Chromium's debugging port stays on loopback.
 
-Embedded scanning requires an explicit request from the updated dashboard. Older cached dashboards keep their main-page list, so they cannot silently show child controls under the top page's origin. Frames with a `sandbox` attribute, `srcdoc` content or an opaque security origin are omitted, as are frames beyond the scan limits. Some forms still need browser taps or keys.
-
-Before handback, the bridge clears password inputs in document and open component roots across session pages and frames. Verification exports only an empty/nonempty verdict. An exceeded scan limit, immediate field reinsertion or clearing error withholds handback. A popup still loading its first page also blocks handback; wait for it to load and retry. A popup opened by a clearing event requires a retry. Closed components, activity before a browser window becomes tracked, and secrets retained by a destination website's own JavaScript remain outside this clearing boundary.
+[Architecture and security boundaries](docs/architecture.md) has the full account, including what Keep Safe does not protect against.
 
 ## Limits to know
 
-- The bridge and agent computer must be running and reachable. The hosted dashboard alone does not run a browser.
-- A handoff expires after ten minutes by default, with a maximum of thirty minutes. A managed browser closes at the original request deadline even after completion; the agent must resume before then.
-- Requests and activity stay in memory. Eligible finished records clear after 24 hours, earlier manual/capacity cleanup, or bridge restart; pending browser cleanup can postpone deletion.
-- Agents must pause browser input while the owner is in control. Existing debugging clients cannot be forcibly stopped by Keep Safe.
-- Phone passkeys, biometrics, hardware security keys, native password-manager integration, and every third-party login provider are not universally supported or verified.
-- The webpage image has an optional structured control navigator, not a complete accessibility tree. Names are approximations from site-provided labels; unsupported frames, closed shadow roots and complex custom widgets may be omitted. Native controls in open roots and supported embedded pages are bounded by scan limits. A website can react to normal focus events. Physical screen-reader use and broader custom-widget navigation remain unfinished.
-- There is no hosted multi-user account service or billing yet. Future team/managed-relay plans are in [product direction](docs/product.md).
+- Your computer must be awake and running Keep Safe. The hosted app alone does not run a browser.
+- A handoff lasts ten minutes by default and thirty at most. A managed browser closes at that deadline even after handback, so the agent must resume before then.
+- Requests and activity are kept in memory and reset when Keep Safe restarts.
+- Agents must pause while you are in control. Keep Safe cannot stop another program that already holds the browser's debugging address.
+- Phone passkeys, biometrics and hardware security keys do not transfer into the remote browser. Some websites block automated browsers.
+- Notification delivery on a physical phone and the Tailscale HTTPS route have not been verified end to end by the maintainers yet. Tailscale without HTTPS, local use and Chromium phone emulation are tested.
+- The page controls list is a helper, not a complete accessibility tree.
+
+## Development
+
+```bash
+git clone https://github.com/Maseeek/keep-safe.git
+cd keep-safe
+npm ci
+npx playwright install chromium
+npm run dev          # frontend dev server on port 5173
+npm run bridge       # foreground bridge using ./.keep-safe
+npm run keep-safe -- status   # the CLI from this checkout
+npm run typecheck
+npm test             # builds the frontend, then runs every test
+```
+
+Tests cover request authorization, pairing codes, expiry, private-network restrictions, password clearing, MCP wire compatibility, and real Chromium sign-in and resume flows through the built phone app.
 
 ## Project records
 
-- [Agreed product brief and autonomy limits](docs/alignment.md)
-- [Architecture, data handling, and security boundaries](docs/architecture.md)
+- [Product brief](docs/alignment.md) and [product direction](docs/product.md)
+- [Architecture and security](docs/architecture.md)
 - [Agent integrations and HTTP protocol](docs/integrations.md)
-- [Phone connection and diagnostics](docs/connection.md)
-- [Product direction and future offer hypotheses](docs/product.md)
-- [Usability, repeat-use and demand validation plan](docs/validation.md)
-- [Delivery and recurring-work configuration](docs/delivery.md)
-- [Owner contact status](docs/contact.md)
-- [Progress](docs/progress.md), [backlog](docs/backlog.md), and [change history](CHANGELOG.md)
+- [Connection guide](docs/connection.md), [phone app guide](docs/phone.md), [command reference](docs/cli.md)
+- [Validation plan](docs/validation.md), [delivery](docs/delivery.md), [owner contact](docs/contact.md)
+- [Progress](docs/progress.md), [backlog](docs/backlog.md), [change history](CHANGELOG.md)
 
-Autonomous development is authorized until **Saturday 24 October 2026 at 09:00 London time**, within **£0 additional spend**. Hourly continuation runs are configured and require this T3 environment to remain available.
+## License
+
+[MIT](LICENSE)

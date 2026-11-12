@@ -71,7 +71,8 @@ export async function up(options: UpOptions): Promise<{ state: DaemonState; star
   if (await bridgeHealthy(port)) throw new CliError(`Another Keep Safe bridge already uses port ${port}. Stop it first, or pick another port with --port.`);
   await clearDeadLock(directory, port);
   // Keep the previous kind of route across restarts unless asked to change.
-  const choice: RouteChoice = options.route ?? (previous?.route.kind === 'cloudflare' ? 'cloudflare' : previous?.route.kind === 'local' ? 'local' : 'auto');
+  const preset = ['auto', 'tailscale', 'cloudflare', 'local'].includes(process.env.KEEP_SAFE_ROUTE ?? '') ? process.env.KEEP_SAFE_ROUTE as RouteChoice : undefined;
+  const choice: RouteChoice = options.route ?? preset ?? (previous?.route.kind === 'cloudflare' ? 'cloudflare' : previous?.route.kind === 'local' ? 'local' : 'auto');
   const route = await chooseRoute(choice, port, directory);
   if (previous?.route.servePort && previous.route.servePort !== route.servePort) await stopTailscaleServe(previous.route.servePort);
   const args = ['--import', tsxLoader(), bridgeCli, '--daemon', '--port', String(port), '--config-dir', directory, '--public-url', route.publicUrl, '--app-url', route.appUrl,

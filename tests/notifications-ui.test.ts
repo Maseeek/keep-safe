@@ -112,7 +112,14 @@ async function rememberForm(page: Page, name: string) {
   await page.getByLabel('Name this phone', { exact: true }).fill(name);
 }
 async function initialRememberDialog(page: Page, bridge: Bridge, name: string) {
-  await page.locator('.demo-banner').getByRole('button', { name: 'Connect your computer', exact: true }).click();
+  // An unpaired window opens on the welcome screen. The owner-token dialog is
+  // one tap away on a computer and at the pairing step on a phone.
+  const ownerToken$ = page.getByRole('button', { name: /Use an owner token/ });
+  if (!await ownerToken$.count()) {
+    await page.getByRole('button', { name: /Get started/ }).click();
+    await page.getByRole('button', { name: /I can see the QR code/ }).click();
+  }
+  await ownerToken$.click();
   await page.getByLabel('Bridge address', { exact: true }).fill(bridge.url);
   await page.getByLabel('Owner token from your bridge terminal', { exact: true }).fill(ownerToken);
   await page.getByRole('checkbox', { name: /Keep this phone paired/ }).check();
@@ -436,7 +443,8 @@ describe('notification enrollment on a phone', () => {
       // authority stays valid so the unpublished device can still be revoked.
       await page.route(`${bridge.url}/api/devices`, route => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"Synthetic pairing is no longer accepted."}' }), { times: 1 });
       await page.getByRole('button', { name: 'Refresh paired devices', exact: true }).click();
-      await page.getByText('Demo mode', { exact: true }).waitFor();
+      // A rejected pairing returns the app to its unpaired welcome screen.
+      await page.getByRole('button', { name: /Get started/ }).waitFor();
       expect(await pairing(page)).toEqual({ device: null, session: null });
       const late = page.waitForResponse(response => response.url() === `${bridge.url}/api/devices` && response.request().method() === 'POST');
       release();
@@ -444,7 +452,7 @@ describe('notification enrollment on a phone', () => {
       await expect.poll(() => devices(bridge)).toEqual([]);
       await page.waitForLoadState('networkidle');
       expect(await pairing(page)).toEqual({ device: null, session: null });
-      expect(await page.getByText('Demo mode', { exact: true }).isVisible()).toBe(true);
+      expect(await page.getByRole('button', { name: /Get started/ }).isVisible()).toBe(true);
       expect((await fetch(`${bridge.url}/api/info`, { headers: { Authorization: `Bearer ${unpublishedToken}` } })).status).toBe(401);
       expect(await post(bridge, ownerToken, 'status', subscription)).toEqual({ enabled: false });
       expect((await mockState(page)).permissionRequests).toBe(0);

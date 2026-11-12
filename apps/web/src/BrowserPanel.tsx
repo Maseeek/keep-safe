@@ -114,6 +114,9 @@ export function BrowserPanel({
   const [taps, setTaps] = useState<{ id: number; x: number; y: number }[]>([]);
   const [lift, setLift] = useState(0);
   const [keyboardArea, setKeyboardArea] = useState<{ top: number; height: number } | null>(null);
+  const [tray, setTray] = useState<HTMLDivElement | null>(null);
+  /** The stage as it is right now. Open tools borrow from it, and the page scales to what is left. */
+  const [stageBox, setStageBox] = useState<{ width: number; height: number } | null>(null);
   const panel = useRef<HTMLElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const keyboard = useRef<LiveKeyboardHandle>(null);
@@ -144,10 +147,11 @@ export function BrowserPanel({
   // is laid out for this screen rather than letterboxed into it.
   useLayoutEffect(() => {
     const element = stage.current;
-    if (!live || !element) { setStageSize(null); return; }
+    if (!live || !element) { setStageSize(null); setStageBox(null); return; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const measure = (immediate: boolean) => {
       const width = Math.floor(element.clientWidth); const height = Math.floor(element.clientHeight);
+      if (width > 0 && height > 0) setStageBox(previous => previous && previous.width === width && previous.height === height ? previous : { width, height });
       if (width < 200 || height < 200) return;
       const apply = () => {
         setStageSize(previous => previous && previous.width === width && previous.height === height ? previous : { width, height });
@@ -157,7 +161,7 @@ export function BrowserPanel({
       if (immediate) apply();
       // The on-screen keyboard and rotation animate through many sizes.
       // Open tool panels borrow space from the page; that is not a new screen size.
-      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".page-control-content, .more-browser-keys, .remote-text-form")) apply(); }, 250);
+      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form")) apply(); }, 250);
     };
     measure(true);
     const observer = new ResizeObserver(() => measure(false));
@@ -279,8 +283,10 @@ export function BrowserPanel({
   useEffect(() => {
     if (target?.editable && canInput && !showKeyboard) keyboard.current?.focus();
   }, [target?.at]); // eslint-disable-line react-hooks/exhaustive-deps
-  const displaySize = liveFrame && stageSize ? (() => {
-    const scale = Math.min(stageSize.width / liveFrame.width, stageSize.height / liveFrame.height);
+  // With the phone keyboard open the page keeps its size and slides instead.
+  const fitTo = keyboardArea ? stageSize : stageBox ?? stageSize;
+  const displaySize = liveFrame && fitTo ? (() => {
+    const scale = Math.min(fitTo.width / liveFrame.width, fitTo.height / liveFrame.height);
     return { width: Math.round(liveFrame.width * scale), height: Math.round(liveFrame.height * scale) };
   })() : undefined;
   const sendText = (event: React.FormEvent) => {
@@ -299,7 +305,7 @@ export function BrowserPanel({
   const toolsOpen = showKeyboard || showMoreKeys;
   const addressButton = (
           <button
-      className="address"
+      className={`address${active && liveFrame && !isDemo && address.label !== requestedAddress.label ? " is-moved" : ""}`}
       title={address.label}
       aria-label={`Website origin: ${address.label}`}
       aria-expanded={showOrigin}
@@ -386,7 +392,7 @@ export function BrowserPanel({
             <span>{address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
           </div>
         ) : null}
-        {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && workspace.navigationAvailable ? (
+        {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
           <div className="website-navigation" role="group" aria-label="Website navigation">
             <span>Website navigation</span>
             <div>
@@ -510,6 +516,18 @@ export function BrowserPanel({
             ) : null}
           </div>
         )}
+        {active &&
+        liveFrame &&
+        !isDemo &&
+        address.label !== requestedAddress.label ? (
+          <div className="redirect-note">
+            <ExternalLink size={14} />
+            <span>
+              This page moved to <strong>{address.label}</strong>. Check
+              the address before entering credentials.
+            </span>
+          </div>
+        ) : null}
       </div>
       {active && !isDemo && workspace.navigationError ? <p className="website-navigation-error" role="alert">{workspace.navigationError}</p> : null}
       {active && !isDemo && workspace.navigationUncertain ? <p className="website-navigation-hint" role="status">Resume and check the website before handing back.</p> : null}
@@ -520,6 +538,62 @@ export function BrowserPanel({
               ? "Use the website’s own links and buttons in this browser."
               : "Update the bridge on your computer for website Back, Forward and Reload."}</p>
           ) : null}
+          <div className="tool-tray">
+            <div className="tool-slot" ref={setTray} />
+          {showMoreKeys ? (
+              <div className="more-browser-keys" id={moreKeysId} role="group" aria-label="More browser keys">
+                <p>Send a key to the browser’s selected control. The scroll buttons above move the page.</p>
+                <div className="more-key-grid">
+                  {additionalKeys.map(({ key, label }) => {
+                    const name = key === "ControlOrMeta+A" ? "Select all in browser" : `Press ${key} in browser`;
+                    return <button key={key} title={name} aria-label={name}
+                      disabled={!canInput || (key !== "Shift+Tab" && keyInputBlocked)}
+                      onClick={() => workspace.send({ type: "key", key })}>{label}</button>;
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {showKeyboard ? (
+              <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
+                <label htmlFor="remote-input">
+                  Tap a field in the browser, then send text
+                </label>
+                <div className="input-with-button">
+                  <input
+                    ref={draftInput}
+                    id="remote-input"
+                    type={showText ? "text" : "password"}
+                    value={text}
+                    onChange={(event) => setText(event.target.value)}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder="Text to send to the selected field"
+                    disabled={!canInput || workspace.focusBlocked}
+                  />
+                  <button
+                    className="button button-dark button-small"
+                    type="submit"
+                    disabled={!canInput || !text || workspace.focusBlocked}
+                  >
+                    Send <ArrowUp size={14} />
+                  </button>
+                </div>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={showText}
+                    onChange={(event) => setShowText(event.target.checked)}
+                  />
+                  Show text
+                </label>
+                <small>
+                  Sent directly to the browser and cleared here. Never saved by
+                  Keep Safe.
+                </small>
+              </form>
+            ) : null}
+          </div>
           <div className="remote-toolbar">
             <div className="remote-toolbar-actions">
               <LiveKeyboard ref={keyboard} enabled={canInput && !workspace.focusBlocked} wanted={!!target?.editable} kind={target?.kind}
@@ -541,7 +615,7 @@ export function BrowserPanel({
               >
                 More keys <ChevronDown size={15} aria-hidden="true" className={showMoreKeys ? "more-keys-chevron expanded" : "more-keys-chevron"} />
               </button>
-              {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} /> : null}
+              {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} tray={tray} /> : null}
             </div>
             <div className="keyboard-keys" role="group" aria-label="Common browser controls">
               <button
@@ -592,59 +666,6 @@ export function BrowserPanel({
               </button>
             </div>
           </div>
-          {showMoreKeys ? (
-            <div className="more-browser-keys" id={moreKeysId} role="group" aria-label="More browser keys">
-              <p>Send a key to the browser’s selected control. The scroll buttons above move the page.</p>
-              <div className="more-key-grid">
-                {additionalKeys.map(({ key, label }) => {
-                  const name = key === "ControlOrMeta+A" ? "Select all in browser" : `Press ${key} in browser`;
-                  return <button key={key} title={name} aria-label={name}
-                    disabled={!canInput || (key !== "Shift+Tab" && keyInputBlocked)}
-                    onClick={() => workspace.send({ type: "key", key })}>{label}</button>;
-                })}
-              </div>
-            </div>
-          ) : null}
-          {showKeyboard ? (
-            <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
-              <label htmlFor="remote-input">
-                Tap a field in the browser, then send text
-              </label>
-              <div className="input-with-button">
-                <input
-                  ref={draftInput}
-                  id="remote-input"
-                  type={showText ? "text" : "password"}
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  placeholder="Text to send to the selected field"
-                  disabled={!canInput || workspace.focusBlocked}
-                />
-                <button
-                  className="button button-dark button-small"
-                  type="submit"
-                  disabled={!canInput || !text || workspace.focusBlocked}
-                >
-                  Send <ArrowUp size={14} />
-                </button>
-              </div>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={showText}
-                  onChange={(event) => setShowText(event.target.checked)}
-                />
-                Show text
-              </label>
-              <small>
-                Sent directly to the browser and cleared here. Never saved by
-                Keep Safe.
-              </small>
-            </form>
-          ) : null}
           <p className="input-hint">Tap the page to click, swipe to scroll. Tap a text field, then type.</p>
         </div>
       ) : null}
@@ -691,18 +712,6 @@ export function BrowserPanel({
         <ShieldCheck size={13} aria-hidden="true" />
         Passwords stay with the website. Cookies stay on your computer.
       </p> : null}
-      {active &&
-      liveFrame &&
-      !isDemo &&
-      address.label !== requestedAddress.label ? (
-        <div className="redirect-note">
-          <ExternalLink size={14} />
-          <span>
-            This page moved to <strong>{address.label}</strong>. Check
-            the address before entering credentials.
-          </span>
-        </div>
-      ) : null}
       {denyOpen ? (
         <dialog
           ref={denyDialog}

@@ -17,7 +17,7 @@
 ## After first release
 
 - [x] Independent cross-provider architecture review and fixes for confirmed findings. Further release reviews remain part of iteration.
-- [x] Opt-in seven-day phone pairing, device listing, and immediate device revocation.
+- [x] Phone pairing with separate keys, device listing, and immediate device revocation. Originally a fixed seven days, now 30 days after last use.
 - [x] Compatibility examples and config generator for T3 Code, Codex, Claude and Antigravity.
 - [x] Multi-hop popup recovery, touched-page password clearing, and documented unsupported authentication methods.
 - [x] Full live origin display, mobile stream release on leaving a request, and scroll/rate-limit reconnect regression coverage.
@@ -37,5 +37,16 @@
 - [x] Background browser pause with draft clearing, explicit resume, renewed focus and safe controller release. Controlled lifecycle signals with real sockets/Chromium pass; physical-phone suspension and app-switcher behavior remain unverified.
 - [x] Managed-browser Back, Forward and Reload, with document form-resubmission blocking, draft clearing, fresh-image/focus requirements and explicit recovery after interrupted navigation. Attached browsers retain website controls; broader widgets and physical accessibility remain open.
 - [x] Notification routing bound to current pairing metadata and the exact request, with neutral legacy/wrong-source startup and explicit protection for an active browser view. Physical notification display/delivery remains unverified.
+
+- [x] One-time pairing codes with QR, link and typed entry, replacing owner-key links for normal setup. Phone keys renew on use and end after 30 idle days.
+- [x] `keep-safe` command with background bridge, automatic route choice (Tailscale, Cloudflare quick tunnel, local), agent registration and on-demand start from the MCP server.
+- [x] Welcome flow for phones and computers, with the agent setup prompt and a demo entry.
+- [x] Phone-sized managed browser, full-screen live view, live typing with the phone keyboard, faster frame updates.
+- [x] Interface rebuild with light and dark themes.
+- [ ] Verify on physical phones: camera scanner, keyboard raise and fit on iOS and Android, Home Screen pairing on iOS, notification delivery.
+- [ ] Verify the Tailscale HTTPS route end to end on a tailnet with certificates enabled.
+- [ ] Start the bridge at login (systemd user unit, launchd agent) from `keep-safe setup`.
+- [ ] Publish to npm so `npx keep-safe` works without the GitHub prefix.
+- [ ] Momentum scrolling and pinch zoom forwarded to the remote page.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

@@ -47,7 +47,7 @@ describe('mobile readability and keyboard access', () => {
     const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true });
     const page = await context.newPage();
     try {
-      await page.goto(bridge.url);
+      await page.goto(`${bridge.url}/?demo`);
       const filters = page.getByRole('group', { name: 'Filter requests' }).getByRole('button');
       for (const button of await filters.all()) await touchTarget(button);
       const nav = page.getByRole('navigation', { name: 'Mobile navigation' });
