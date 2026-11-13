@@ -43,6 +43,10 @@
 - [x] Welcome flow for phones and computers, with the agent setup prompt and a demo entry.
 - [x] Phone-sized managed browser, full-screen live view, live typing with the phone keyboard, faster frame updates.
 - [x] Interface rebuild with light and dark themes.
+- [x] Default route that needs nothing on the phone: a supervised Cloudflare quick tunnel with a fetched, checksum-verified `cloudflared`. One scan pairs, a second scan re-links the same phone, and notifications carry a changed address.
+- [x] Short QR code page link (`/#qr=CODE`) for agents to hand over, and `setup` output written for a person who cannot see the terminal.
+- [ ] An address that survives a computer restart without notifications. Needs a small hosted directory; the owner's free Supabase organisation had no project slot on 13 November 2026.
+- [ ] Show the pairing QR code on the website before setup runs. Depends on the directory above.
 - [ ] Verify on physical phones: camera scanner, keyboard raise and fit on iOS and Android, Home Screen pairing on iOS, notification delivery.
 - [ ] Verify the Tailscale HTTPS route end to end on a tailnet with certificates enabled.
 - [ ] Start the bridge at login (systemd user unit, launchd agent) from `keep-safe setup`.

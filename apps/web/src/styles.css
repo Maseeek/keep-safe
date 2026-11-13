@@ -550,7 +550,13 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .desk-code { display: flex; flex-direction: column; gap: 2px; }
 .desk-code span { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .desk-code strong { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 1.75rem; letter-spacing: 0.08em; }
-.desk-address { font-size: 0.875rem; }
+.desk-address { font-size: 0.875rem; overflow-wrap: anywhere; }
+.desk-more { width: 100%; border-top: 1px solid var(--line); padding-top: 14px; text-align: left; }
+.desk-more summary { cursor: pointer; font-size: 0.9375rem; font-weight: 600; color: var(--muted); }
+.desk-more[open] summary { margin-bottom: 12px; }
+.desk-more > * + * { margin-top: 12px; }
+.desk-more .desk-code strong { font-size: 1.25rem; }
+.pair-form-hint { font-size: 0.875rem; color: var(--muted); margin: 0; }
 .desk-note { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; text-align: left; }
 .desk-note svg { flex: none; }
 .desk-result { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 24px; background: var(--surface-2); color: var(--muted); }

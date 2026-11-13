@@ -12,7 +12,9 @@ MCP and HTTP clients use a different agent token. An agent can create a login re
 
 A phone pairs with a one-time code. Only the owner key can create one, through `POST /api/pairing`, and the `keep-safe` command sends that key to the bridge on loopback only. A code is eight characters from a 30-character alphabet, lives ten minutes in memory, and works once. `POST /api/pair` exchanges it for a device key and is the only unauthenticated route that changes state. It shares the unauthenticated rate limit, keeps the allowed-origin check, marks the code used before its first await, and counts wrong codes: ten misses cancel every unused code. A bridge restart cancels unclaimed codes.
 
-The pairing link carries the code and the bridge address in the URL fragment. The app removes the fragment before any network request. Neither the link, the QR code, nor the desktop pairing page contains a key. The desktop page learns only whether its own code is waiting, claimed or expired.
+The pairing link carries the code and the bridge address in the URL fragment. The bridge builds it from its current public address and returns it with the code. The app removes the fragment before any network request. Neither the link, the QR code, nor the desktop pairing page contains a key. The desktop page is opened as `/#qr=CODE` on loopback. It asks `POST /api/pair/status` about that one code and learns only whether it is waiting, claimed or expired, and while it is waiting, its link.
+
+A phone that is already paired can claim a new code without getting a new key. It sends its device ID and an HMAC of the code, keyed by the SHA-256 digest of its device key. The bridge holds that digest, checks the proof, and answers with the existing device. The key itself is never sent to the scanned address, the proof is useless for any other code, and a wrong proof simply pairs a new phone. This is how a phone moves to a new bridge address with one scan.
 
 Device keys are stored as digests. A key expires 30 days after its last use and is renewed at most once a day while in use. Revocation is immediate. A device key cannot create pairing codes, and the agent key cannot either, so neither can add a phone.
 
@@ -22,7 +24,13 @@ The owner key remains bootstrap authority. The foreground bridge still prints an
 
 The bridge always listens on loopback. `--listen` adds named private addresses, which `keep-safe up` uses for the computer's Tailscale address. Every request there passes the same origin check and authentication as on loopback. Plain HTTP origins are accepted only for loopback, and for Tailscale addresses when `--tailnet-http` is given: the Tailscale range `100.64.0.0/10`, `*.ts.net` names and bare machine names. Tailscale encrypts that traffic between the owner's devices.
 
-With Tailscale Serve the bridge stays on loopback and Tailscale terminates HTTPS for tailnet members only. A Cloudflare quick tunnel publishes the bridge on a public address, where the keys and pairing codes are the only barrier. That route is for trying Keep Safe, and its address changes on restart.
+With Tailscale Serve the bridge stays on loopback and Tailscale terminates HTTPS for tailnet members only.
+
+The default route is a Cloudflare quick tunnel, so a phone needs nothing installed and no shared network. It publishes the bridge on a random public HTTPS address, where device keys and pairing codes are the only barrier, and Cloudflare carries the traffic. The bridge still listens on loopback only. `keep-safe up` fetches a pinned `cloudflared` release into the configuration folder and checks its SHA-256 before use. The bridge starts it with `--tunnel`, reads the address from its log, checks that the address answers, and accepts that address as an app origin while it is current.
+
+The tunnel process is detached and recorded in `tunnel.json`. A bridge restart adopts it when the recorded process is still `cloudflared`, serves the same port and its address still answers, so the address survives restarts and updates. The bridge checks it every five seconds and opens a new tunnel when it has ended. A recorded process ID is only ever stopped after confirming it is `cloudflared`.
+
+The address changes when the computer restarts. There is no directory service. Instead each request notification carries the current address, which Web Push encrypts for that phone, and the service worker stores it against the bridge's notification key. The app adopts it when its connection fails, only for the computer it is paired with. A phone without notifications scans a new code, as described under Pairing.
 
 ## Live view
 
@@ -36,7 +44,7 @@ After a tap, Tab, Enter or a page-control focus, the bridge reads the type of th
 
 The additional spending cap is £0. A local browser avoids paid always-on browser compute and keeps website sessions on the user's computer. Vercel serves the frontend while the bridge owns the persistent interactive connection. See [Vercel function limits](https://vercel.com/docs/functions/limitations).
 
-Remote access requires the computer to remain awake and a secure route to the bridge. A user-controlled HTTPS tunnel or private network can provide this. Cloudflare's [Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) are an evaluation option with availability and concurrency limits. They are not a production service-level guarantee. Keep Safe does not install or start a public tunnel silently.
+Remote access requires the computer to remain awake and a secure route to the bridge. A user-controlled HTTPS tunnel or private network can provide this. Cloudflare's [Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) are an evaluation option with availability and concurrency limits. They are not a production service-level guarantee. `keep-safe setup` opens the tunnel as its default route, says so, and `keep-safe status` shows the address. `--route tailscale` and `--route local` avoid it.
 
 ## Data and lifetime
 

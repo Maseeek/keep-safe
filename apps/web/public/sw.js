@@ -1,4 +1,5 @@
-/* No fetch handler: credentials and live browser frames are never cached. */
+/* No fetch handler: credentials and live browser frames are never cached.
+   The only stored item is the paired computer's current address. */
 function notificationIntent(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1 ||
       typeof value.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.requestId) ||
@@ -15,6 +16,17 @@ self.addEventListener('push', (event) => {
   try { data = event.data ? event.data.json() : {}; } catch { /* Use safe defaults. */ }
   if (!data || typeof data !== 'object' || Array.isArray(data)) data = {};
   const intent = notificationIntent(data.notificationIntent);
+  // The computer's public address can change. Its notifications say where it
+  // is now, so the app can follow. Only an address is kept, never page data.
+  const moved = intent && typeof data.bridge === 'string' && /^https:\/\/[a-z0-9.-]{1,253}(:\d{1,5})?$/i.test(data.bridge)
+    ? { sourceKey: intent.sourceKey, url: data.bridge, at: Date.now() } : null;
+  if (moved) event.waitUntil((async () => {
+    try {
+      const cache = await caches.open('keep-safe-link-v1');
+      await cache.put('/__keep-safe/link', new Response(JSON.stringify(moved), { headers: { 'Content-Type': 'application/json' } }));
+      for (const client of await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) client.postMessage({ type: 'bridge-address', sourceKey: moved.sourceKey, url: moved.url });
+    } catch { /* The notification still shows; the app can pair again. */ }
+  })());
   event.waitUntil(self.registration.showNotification('Keep Safe · Your agent needs you', {
     body: typeof data.body === 'string' ? data.body.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 240) : 'A browser request is waiting for your approval.',
     icon: '/icon-192.png',

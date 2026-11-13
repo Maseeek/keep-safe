@@ -655,7 +655,7 @@ export function App() {
   const sectionTitle = section === "inbox" ? "Inbox" : section === "activity" ? "Activity" : section === "devices" ? "Connect" : "Settings";
   const statusLabel = isDemo ? "Demo mode" : workspace.status === "connected" ? "Bridge connected" : workspace.status === "connecting" ? "Connecting…" : "Bridge offline";
 
-  if (deskLink) return <PairingDesk link={deskLink} />;
+  if (deskLink) return <PairingDesk code={deskLink.code} link={deskLink.link} />;
 
   if (!workspace.connection && !demo) return (
     <div className="welcome-shell">
@@ -735,9 +735,9 @@ export function App() {
               <LoaderCircle size={16} className="spin" aria-hidden="true" />
               <div>
                 <strong>{workspace.status === "error" ? "Connection needs attention" : "Looking for your computer…"}</strong>
-                <p>{workspace.error || "Keep your computer awake and Keep Safe running there. This reconnects on its own."}</p>
+                <p>{workspace.error || "Keep your computer awake and Keep Safe running there. This reconnects on its own. If the computer restarted, scan a new code from it."}</p>
               </div>
-              <button className="text-link" onClick={() => navigate("devices")}>Check pairing <ArrowRight size={14} aria-hidden="true" /></button>
+              <button className="text-link" onClick={() => setPairOpen(true)}>Scan new code <ArrowRight size={14} aria-hidden="true" /></button>
             </div>
           ) : null}
           {section === "inbox" ? (

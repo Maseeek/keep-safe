@@ -28,8 +28,8 @@ Paste this into any coding agent (Claude Code, Codex, Cursor, T3 Code and so on)
 Set up Keep Safe on this computer so I can approve website logins from my phone.
 
 1. Run: npx -y github:Maseeek/keep-safe setup
-   It needs Node.js 20 or newer. It installs a browser, starts Keep Safe in the background, adds its MCP server to the agent CLIs it finds, and prints a pairing link, a code and a QR code.
-2. Show me the pairing link and code from its output, and tell me to scan the QR code in the browser window it opened.
+   It needs Node.js 20 or newer and takes a minute or two the first time. It starts Keep Safe in the background, adds its MCP server to the agent CLIs it finds, and opens a page with a QR code in my browser.
+2. I cannot see your terminal. Give me the "QR code page" link from its output as a clickable link, and tell me to scan the QR code on that page with my phone camera. One scan pairs my phone.
 3. If your own MCP settings were not updated, add the JSON it printed under "Other MCP clients".
 4. From now on, when a website needs me to sign in, call the keep-safe request_login tool, wait with wait_for_login, then continue in the same browser once I hand it back. Never ask me for passwords in chat.
 ```
@@ -43,19 +43,21 @@ npx -y github:Maseeek/keep-safe setup
 `setup` does four things:
 
 1. Installs the Chromium browser Keep Safe drives, if it is missing.
-2. Starts Keep Safe in the background and picks how your phone reaches it (see [Connecting](#connecting-your-phone)).
+2. Starts Keep Safe in the background and opens a secure link your phone can reach from anywhere (see [Connecting](#connecting-your-phone)).
 3. Adds the Keep Safe MCP server to Claude Code and Codex when their CLIs are installed, and prints the configuration for other MCP clients.
-4. Shows a one-time pairing QR code in the terminal and in a browser window.
+4. Opens a page with a one-time pairing QR code in your browser, and prints the same code in the terminal.
+
+If an agent ran it for you, it gives you a **QR code page** link such as `http://127.0.0.1:4318/#qr=ABCD2345`. Open it on the computer.
 
 For a permanent `keep-safe` command, install it globally instead: `npm install -g github:Maseeek/keep-safe`, then `keep-safe setup`.
 
 ### 2. On your phone
 
-Scan the QR code with your camera. Keep Safe opens, pairs, and offers notifications. That is all.
+Scan the QR code with your camera. Keep Safe opens, pairs, and offers notifications. That is all: one scan, on Wi-Fi or mobile data, with nothing to install or type.
 
 On an iPhone, add Keep Safe to your Home Screen first (Share, then Add to Home Screen), open it from there, and use **Scan QR code** inside the app. iOS keeps Home Screen apps separate from Safari, so pairing must happen in the installed app for notifications to work.
 
-No camera? Open the pairing link on the phone, or type the eight-character code into the app.
+No camera? Choose **Cannot scan?** on the QR code page, copy the pairing link and open it on the phone.
 
 ### 3. Try it
 
@@ -67,22 +69,26 @@ keep-safe rehearse     # or: npx -y github:Maseeek/keep-safe rehearse
 
 ## Connecting your phone
 
-The browser runs on your computer, so your phone needs a way to reach it. `setup` chooses the best one available. Pick one yourself with `--route`.
+The browser runs on your computer, so your phone needs a way to reach it. By default Keep Safe opens a secure public link through a free Cloudflare tunnel. It needs no account, and the phone needs nothing installed. Pick another route with `--route`.
 
-| Route | When it is used | Address stays the same | Notifications |
-| --- | --- | --- | --- |
-| Tailscale with HTTPS | Tailscale is running and HTTPS certificates are on for your tailnet | Yes | Yes |
-| Tailscale | Tailscale is running without HTTPS certificates | Yes | No |
-| Cloudflare quick tunnel | `cloudflared` is installed and Tailscale is not running | No, it changes on every restart | Yes |
-| This computer only | Nothing else is available | Yes | Not from a phone |
+| Route | How to get it | Phone needs | Address stays the same | Notifications |
+| --- | --- | --- | --- | --- |
+| Secure public link | The default | Nothing | Until the computer restarts | Yes |
+| Tailscale with HTTPS | `--route tailscale`, with HTTPS certificates on for your tailnet | Tailscale | Always | Yes |
+| Tailscale | `--route tailscale` | Tailscale | Always | No |
+| This computer only | `--route local` | Not reachable | Always | No |
 
-Tailscale is the recommended route. It is free for personal use, private to your own devices, and the address never changes, so your phone stays paired. Install Tailscale on the computer and the phone, sign in to both, and run `keep-safe setup`. Turn on HTTPS certificates in the Tailscale admin console (DNS page) to get notifications and Home Screen install, then run `keep-safe up --restart`.
+The first run fetches Cloudflare's `cloudflared` program into `~/.keep-safe/bin` and checks it against its published checksum. The link's address is random and only answers a paired phone or a valid one-time code. Traffic passes through Cloudflare.
+
+When the computer restarts, the link gets a new address. A phone with notifications on follows it by itself, because each notification carries the current address. Otherwise run `keep-safe pair` and scan once more. The phone keeps its key.
+
+Tailscale keeps everything inside your own private network and its address never changes. Install it on the computer and the phone, sign in to both, and run `keep-safe up --route tailscale`.
 
 The [connection guide](docs/connection.md) covers each route, pairing, and troubleshooting.
 
 ## How pairing works
 
-`keep-safe pair` asks the local bridge for an eight-character code and shows it as a QR code. The code works once and expires after ten minutes. The phone trades it for its own key. Only a digest of that key is stored on your computer.
+`keep-safe pair` asks the local bridge for an eight-character code and shows it as a QR code, together with the computer's address. The code works once and expires after ten minutes. The phone trades it for its own key. Only a digest of that key is stored on your computer.
 
 A paired phone stays paired while you use it and for 30 days after its last use. Revoke any phone from **Connect** in the app. The owner key never leaves your computer in this flow.
 
@@ -153,7 +159,8 @@ Details are in the [phone app guide](docs/phone.md).
 - Requests and activity are kept in memory and reset when Keep Safe restarts.
 - Agents must pause while you are in control. Keep Safe cannot stop another program that already holds the browser's debugging address.
 - Phone passkeys, biometrics and hardware security keys do not transfer into the remote browser. Some websites block automated browsers.
-- Notification delivery on a physical phone and the Tailscale HTTPS route have not been verified end to end by the maintainers yet. Tailscale without HTTPS, local use and Chromium phone emulation are tested.
+- On the default route the phone's address changes when the computer restarts. A phone without notifications needs one new scan after that.
+- Notification delivery on a physical phone and the Tailscale HTTPS route have not been verified end to end by the maintainers yet. The secure public link, Tailscale without HTTPS, local use and Chromium phone emulation are tested.
 - The page controls list is a helper, not a complete accessibility tree.
 
 ## Development

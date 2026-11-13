@@ -1,8 +1,7 @@
-import { execFile, spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { hostedAppOrigin } from '../../bridge/src/connection-options';
+import { ensureCloudflared } from './cloudflared';
 
 export type RouteKind = 'tailscale-https' | 'tailscale' | 'cloudflare' | 'local';
 export type RouteChoice = 'auto' | 'tailscale' | 'cloudflare' | 'local';
@@ -10,17 +9,18 @@ export type RouteChoice = 'auto' | 'tailscale' | 'cloudflare' | 'local';
 /** How a phone reaches this computer. */
 export interface Route {
   kind: RouteKind;
-  /** The address the phone uses for the bridge. */
+  /** The address the phone uses for the bridge. Empty while a tunnel is still opening. */
   publicUrl: string;
   /** Where the phone loads the app from. Equals publicUrl when the bridge serves it. */
   appUrl: string;
   listen: string[];
   allowOrigins: string[];
   tailnetHttp: boolean;
-  /** False when the address changes on restart, so phones must pair again. */
+  /** False when the address can change, such as after the computer restarts. */
   stable: boolean;
   notes: string[];
-  tunnelPid?: number;
+  /** The bridge keeps a tunnel open with this program. */
+  tunnelBinary?: string;
   servePort?: number;
 }
 
@@ -94,31 +94,13 @@ export async function stopTailscaleServe(servePort: number): Promise<void> {
   if (state) await run(state.binary, ['serve', `--https=${servePort}`, 'off'], 10_000);
 }
 
-export async function cloudflaredBinary(directory: string): Promise<string | undefined> {
-  return findBinary(['cloudflared', join(directory, 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')]);
-}
-
-/** A free temporary tunnel. Its address changes on every start. */
-async function cloudflare(binary: string, port: number, directory: string): Promise<Route | undefined> {
-  const logFile = join(directory, 'tunnel.log');
-  const log = openSync(logFile, 'w', 0o600);
-  let pid: number | undefined;
-  try {
-    const child = spawn(binary, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`], { detached: true, stdio: ['ignore', log, log], windowsHide: true });
-    child.unref();
-    pid = child.pid;
-  } finally { closeSync(log); }
-  if (!pid) return undefined;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(await readFile(logFile, 'utf8').catch(() => ''));
-    if (match) return {
-      kind: 'cloudflare', publicUrl: match[0], appUrl: hostedAppOrigin, listen: [], allowOrigins: [], tailnetHttp: false, stable: false, tunnelPid: pid,
-      notes: ['This is a temporary Cloudflare address. It changes whenever Keep Safe restarts, and phones pair again after that. Use Tailscale for an address that stays.'],
-    };
-  }
-  try { process.kill(pid); } catch { /* Already gone. */ }
-  return undefined;
+/** A free Cloudflare quick tunnel that the bridge keeps open. Any phone can
+ * reach it, on any network, with nothing installed on the phone. */
+function cloudflare(binary: string): Route {
+  return {
+    kind: 'cloudflare', publicUrl: '', appUrl: hostedAppOrigin, listen: [], allowOrigins: [], tailnetHttp: false, stable: false, tunnelBinary: binary,
+    notes: ['The phone address changes when this computer restarts. A phone with notifications on follows it by itself. Otherwise run "keep-safe pair" and scan again. For an address that never changes, use --route tailscale.'],
+  };
 }
 
 function local(port: number, notes: string[]): Route {
@@ -126,25 +108,22 @@ function local(port: number, notes: string[]): Route {
   return { kind: 'local', publicUrl, appUrl: publicUrl, listen: [], allowOrigins: [], tailnetHttp: false, stable: true, notes };
 }
 
-export async function chooseRoute(choice: RouteChoice, port: number, directory: string): Promise<Route> {
-  if (choice === 'local') return local(port, ['Only this computer can open Keep Safe. Choose Tailscale or Cloudflare to reach it from a phone.']);
-  if (choice === 'auto' || choice === 'tailscale') {
-    const state = await tailscaleState();
-    if (state) {
-      if (state.https) {
-        const route = await tailscaleHttps(state, port);
-        if (route) return route;
-        return tailscaleDirect(state, port, 'Tailscale Serve could not start. On Linux, run "sudo tailscale set --operator=$USER" once, then "keep-safe up --restart".');
-      }
-      return tailscaleDirect(state, port, 'Turn on HTTPS certificates for your tailnet (Tailscale admin console, DNS page), then run "keep-safe up --restart".');
-    }
-    if (choice === 'tailscale') throw new Error('Tailscale is not running on this computer. Install it from https://tailscale.com/download, sign in, then try again.');
+export async function chooseRoute(choice: RouteChoice, port: number, directory: string, log: (line: string) => void = () => {}): Promise<Route> {
+  if (choice === 'local') return local(port, ['Only this computer can open Keep Safe. Run "keep-safe up --route auto" to reach it from a phone.']);
+  if (choice === 'auto' || choice === 'cloudflare') {
+    const binary = await ensureCloudflared(directory, log);
+    if (binary) return cloudflare(binary);
+    if (choice === 'cloudflare') throw new Error('The secure link helper (cloudflared) could not be fetched. Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ and try again.');
   }
-  const binary = await cloudflaredBinary(directory);
-  if (binary) {
-    const route = await cloudflare(binary, port, directory);
-    if (route) return route;
-    if (choice === 'cloudflare') throw new Error('The Cloudflare tunnel did not start. Check tunnel.log in the Keep Safe folder.');
-  } else if (choice === 'cloudflare') throw new Error('cloudflared is not installed. See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/');
-  return local(port, ['No way to reach this computer from a phone was found. Install Tailscale on this computer and your phone (free, https://tailscale.com/download), then run "keep-safe up --restart".']);
+  const state = await tailscaleState();
+  if (state) {
+    if (state.https) {
+      const route = await tailscaleHttps(state, port);
+      if (route) return route;
+      return tailscaleDirect(state, port, 'Tailscale Serve could not start. On Linux, run "sudo tailscale set --operator=$USER" once, then "keep-safe up --restart".');
+    }
+    return tailscaleDirect(state, port, 'Turn on HTTPS certificates for your tailnet (Tailscale admin console, DNS page), then run "keep-safe up --restart".');
+  }
+  if (choice === 'tailscale') throw new Error('Tailscale is not running on this computer. Install it from https://tailscale.com/download, sign in, then try again.');
+  return local(port, ['No way to reach this computer from a phone was found: the secure link helper could not be fetched and Tailscale is not running. Check the internet connection, then run "keep-safe up --restart".']);
 }

@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, rename, unlink, mkdir, chmod } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { DevicePairResult, PairedDevice } from '../../shared/src/protocol';
@@ -64,6 +64,15 @@ export async function createDeviceStore(path: string | undefined, now: () => num
       const digest = createHash('sha256').update(token).digest();
       for (const device of devices.values()) if (timingSafeEqual(digest, Buffer.from(device.digest, 'hex')) && active(device.id, true)) return publicDevice(device);
       return undefined;
+    },
+    /** Lets a paired phone show it holds its key without sending it. The proof
+     * is keyed by the stored digest and bound to one message. */
+    prove(id: unknown, message: string, proof: unknown) {
+      if (typeof id !== 'string' || typeof proof !== 'string' || !/^[a-f0-9]{64}$/.test(proof)) return undefined;
+      const device = devices.get(id);
+      if (!device || !active(id, true)) return undefined;
+      const expected = createHmac('sha256', Buffer.from(device.digest, 'hex')).update(message).digest();
+      return timingSafeEqual(expected, Buffer.from(proof, 'hex')) ? publicDevice(device) : undefined;
     },
     list(currentId?: string) { return [...devices.values()].filter(device => active(device.id)).map(device => ({ ...publicDevice(device), ...(device.id === currentId ? { current: true } : {}) })); },
     async pair(name: string): Promise<DevicePairResult> {

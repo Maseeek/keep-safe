@@ -16,6 +16,9 @@ export interface Connection {
   url: string;
   token: string;
   device?: PairedDevice;
+  /** The computer's notification key. Tells this phone which computer an
+   * address update in a notification came from. */
+  source?: string;
 }
 export interface BrowserFrame {
   requestId: string;
@@ -75,6 +78,42 @@ export function parseInvite(text: string, fallbackUrl?: string): PairingInvite |
   const code = clean(value);
   if (!code || !fallbackUrl) return null;
   try { return { url: validateBridgeUrl(fallbackUrl), code }; } catch { return null; }
+}
+
+/** A pairing link for an app served somewhere else, such as a computer's own
+ * Tailscale address. The scanner opens it, as the phone camera would. */
+export function foreignPairingLink(text: string): string | null {
+  try {
+    const link = new URL(text.trim());
+    const params = new URLSearchParams(link.hash.slice(1));
+    if (!["https:", "http:"].includes(link.protocol) || link.origin === window.location.origin || params.get("bridge")) return null;
+    if (link.username || link.password || link.pathname !== "/" || !/^[A-Za-z0-9]{8}$/.test((params.get("pair") ?? "").replace(/[^A-Za-z0-9]/g, ""))) return null;
+    return link.href;
+  } catch { return null; }
+}
+
+const linkCache = "keep-safe-link-v1";
+const linkRecord = "/__keep-safe/link";
+const validSource = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{87}$/.test(value);
+/** The newest address a notification from the paired computer carried. The
+ * service worker stores it; only that computer can send to this phone. */
+async function notifiedAddress(): Promise<{ sourceKey?: unknown; url?: unknown } | null> {
+  try {
+    if (!("caches" in window)) return null;
+    const hit = await (await caches.open(linkCache)).match(linkRecord);
+    return hit ? (await hit.json()) as { sourceKey?: unknown; url?: unknown } : null;
+  } catch { return null; }
+}
+const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+/** Shows the computer this phone already holds a key, without sending the key. */
+async function relinkProof(connection: Connection | null, code: string): Promise<{ id: string; proof: string } | undefined> {
+  try {
+    if (!connection?.device || !globalThis.crypto?.subtle) return undefined;
+    const text = new TextEncoder();
+    const digest = await crypto.subtle.digest("SHA-256", text.encode(connection.token));
+    const key = await crypto.subtle.importKey("raw", digest, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return { id: connection.device.id, proof: hex(await crypto.subtle.sign("HMAC", key, text.encode(`keep-safe-relink:${code}`))) };
+  } catch { return undefined; }
 }
 
 export function defaultDeviceName(): string {
@@ -177,7 +216,7 @@ function parseDevice(value: unknown): PairedDevice | undefined {
   };
 }
 
-function initialState(): { connection: Connection | null; notice: string; invite?: PairingInvite | null } {
+function initialState(): { connection: Connection | null; notice: string; invite?: PairingInvite | null; previous?: Connection | null } {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const url = params.get("bridge");
   const token = params.get("token");
@@ -185,7 +224,8 @@ function initialState(): { connection: Connection | null; notice: string; invite
     // A one-time code: take it out of the address bar, then let the app claim it.
     const invite = parseInvite(window.location.href);
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    if (invite) return { connection: null, notice: "", invite };
+    // A phone that is already paired keeps that pairing to prove itself with.
+    if (invite) return { connection: null, notice: "", invite, previous: storedState().connection };
     return { connection: null, notice: "That pairing link is not valid. Create a fresh one on your computer.", invite: null };
   }
   if (url !== null || token !== null) {
@@ -208,6 +248,11 @@ function initialState(): { connection: Connection | null; notice: string; invite
       return { connection: null, notice: "" };
     }
   }
+  return storedState();
+}
+
+/** The pairing this browser already holds, from this tab or from the remembered phone. */
+function storedState(): { connection: Connection | null; notice: string } {
   try {
     const saved = sessionStorage.getItem(storageKey);
     if (saved) {
@@ -218,6 +263,7 @@ function initialState(): { connection: Connection | null; notice: string; invite
           connection: {
             ...validateConnection(value.url, value.token),
             ...(device ? { device } : {}),
+            ...(validSource(value.source) ? { source: value.source } : {}),
           },
           notice: readStoredNotice(),
         };
@@ -234,6 +280,7 @@ function initialState(): { connection: Connection | null; notice: string; invite
         url?: string;
         token?: string;
         device?: unknown;
+        source?: unknown;
       };
       const device = parseDevice(value.device);
       if (!device) {
@@ -250,6 +297,7 @@ function initialState(): { connection: Connection | null; notice: string; invite
       const connection: Connection = {
         ...validateConnection(value.url || "", value.token || ""),
         device,
+        ...(validSource(value.source) ? { source: value.source } : {}),
       };
       try {
         sessionStorage.setItem(storageKey, JSON.stringify(connection));
@@ -359,6 +407,17 @@ export function useWorkspace(onError: (message: string) => void) {
   const currentConnection = useRef(connection);
   currentConnection.current = connection;
   const connectionAttempt = useRef(0);
+  const previousPairing = useRef(initial.previous ?? null);
+  const followAddress = useRef<(source: Connection, record?: { sourceKey?: unknown; url?: unknown } | null) => Promise<void>>(async () => {});
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const moved = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; sourceKey?: unknown; url?: unknown } | null;
+      if (data?.type === "bridge-address" && currentConnection.current) void followAddress.current(currentConnection.current, data);
+    };
+    navigator.serviceWorker.addEventListener("message", moved);
+    return () => navigator.serviceWorker.removeEventListener("message", moved);
+  }, []);
   const [pairingNotice, setPairingNotice] = useState(initial.notice);
   const [requests, setRequests] = useState<LoginRequest[]>(() =>
     initial.connection ? [] : demoRequests(),
@@ -616,6 +675,14 @@ export function useWorkspace(onError: (message: string) => void) {
           setStatus("connected");
           setError("");
           setInfo(message.info);
+          if (connection.device && !connection.source && validSource(message.info.vapidPublicKey)) {
+            // Phones paired before address updates existed learn the key here.
+            connection.source = message.info.vapidPublicKey;
+            try {
+              if (localStorage.getItem(deviceStorageKey)) localStorage.setItem(deviceStorageKey, JSON.stringify({ version: 1, ...connection }));
+              sessionStorage.setItem(storageKey, JSON.stringify(connection));
+            } catch { /* Kept in memory for this tab. */ }
+          }
           currentRequests.current = message.requests;
           setRequests(message.requests);
           if (watchId.current && !paused.current && visible() && activeRequest(watchId.current, message.requests)) {
@@ -720,6 +787,8 @@ export function useWorkspace(onError: (message: string) => void) {
         }
         attempts += 1;
         setStatus("reconnecting");
+        // The computer's address may have changed: a notification carries the new one.
+        void followAddress.current(connection);
         retry = setTimeout(
           open,
           Math.min(1000 * 2 ** Math.min(attempts, 4), 15000),
@@ -842,30 +911,47 @@ export function useWorkspace(onError: (message: string) => void) {
     setNavigationAvailable(false);
     setConnection(next);
   };
-  /** Trades a one-time code for this phone's own revocable key. */
+  /** Moves a paired phone to the computer's new address. The key stays the same. */
+  followAddress.current = async (source: Connection, record?: { sourceKey?: unknown; url?: unknown } | null) => {
+    if (!source.device || !source.source) return;
+    const found = record ?? await notifiedAddress();
+    if (!found || found.sourceKey !== source.source || typeof found.url !== "string" || currentConnection.current !== source) return;
+    let url: string;
+    try { url = validateBridgeUrl(found.url); } catch { return; }
+    if (url === source.url) return;
+    const next: Connection = { ...source, url };
+    try { if (localStorage.getItem(deviceStorageKey)) localStorage.setItem(deviceStorageKey, JSON.stringify({ version: 1, ...next })); }
+    catch { /* The move still applies to this tab. */ }
+    adopt(next);
+  };
+  /** Trades a one-time code for this phone's own revocable key. A phone that is
+   * already paired with that computer keeps its key and only changes address. */
   const pairWithCode = async (invite: PairingInvite, name = defaultDeviceName()) => {
     const attempt = ++connectionAttempt.current;
     setPairingBusy(true);
     setPairingError("");
     try {
       const url = validateBridgeUrl(invite.url);
+      const existing = currentConnection.current ?? previousPairing.current;
+      const again = await relinkProof(existing, invite.code);
       let response: Response;
       try {
         response = await fetch(`${url}/api/pair`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: invite.code, name: name.trim().slice(0, 60) || defaultDeviceName() }),
+          body: JSON.stringify({ code: invite.code, name: name.trim().slice(0, 60) || defaultDeviceName(), ...(again ? { device: again } : {}) }),
           credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(15000),
         });
       } catch {
-        throw new Error("Could not reach your computer. Check that Keep Safe is running there and that this phone can reach it (for Tailscale, connect the Tailscale app).");
+        throw new Error("Could not reach your computer. Check that it is awake and online, then run keep-safe pair there for a fresh code.");
       }
-      const body = (await response.json().catch(() => ({}))) as Partial<DevicePairResult> & { error?: string };
+      const body = (await response.json().catch(() => ({}))) as Partial<DevicePairResult> & { error?: string; relinked?: boolean; info?: BridgeInfo };
       if (response.status === 404) throw new Error("Keep Safe on your computer is out of date. Update it, then pair again.");
       if (!response.ok) throw new Error(body.error || "That code did not work. Create a fresh one on your computer.");
-      if (!body.device || !body.token || !Number.isFinite(Date.parse(body.device.expiresAt)))
+      const token = body.relinked && existing?.device?.id === body.device?.id ? existing?.token : body.token;
+      if (!body.device || !token || !Number.isFinite(Date.parse(body.device.expiresAt)))
         throw new Error("Your computer sent an unexpected answer. Update Keep Safe there and try again.");
       if (attempt !== connectionAttempt.current) throw new Error("Pairing was replaced by a newer attempt.");
-      const next: Connection = { ...validateConnection(url, body.token), device: { ...body.device, current: true } };
+      const next: Connection = { ...validateConnection(url, token), device: { ...body.device, current: true }, ...(validSource(body.info?.vapidPublicKey) ? { source: body.info.vapidPublicKey } : {}) };
       clearPairingStorage();
       try { localStorage.setItem(deviceStorageKey, JSON.stringify({ version: 1, ...next })); }
       catch { /* Private browsing: paired until this tab closes. */ }

@@ -13,11 +13,11 @@ type TestClient = { url: string; frameType: string; focus: ReturnType<typeof vi.
 function client(url = origin + '/', frameType = 'top-level'): TestClient {
   return { url, frameType, focus: vi.fn().mockResolvedValue(undefined), postMessage: vi.fn() };
 }
-function worker(clients: TestClient[] = []) {
+function worker(clients: TestClient[] = [], globals: object = {}) {
   const listeners = new Map<string, (event: unknown) => void>();
   const showNotification = vi.fn().mockResolvedValue(undefined); const openWindow = vi.fn().mockResolvedValue(null);
   const matchAll = vi.fn().mockResolvedValue(clients);
-  runInNewContext(script, { self: { location: { origin }, registration: { showNotification }, clients: { matchAll, openWindow }, addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener) }, URL, URLSearchParams, atob, btoa });
+  runInNewContext(script, { self: { location: { origin }, registration: { showNotification }, clients: { matchAll, openWindow }, addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener) }, URL, URLSearchParams, atob, btoa, ...globals });
   async function dispatch(type: string, fields: object) {
     const pending: Promise<unknown>[] = [];
     listeners.get(type)!({ ...fields, waitUntil: (promise: Promise<unknown>) => pending.push(promise) }); await Promise.all(pending);
@@ -28,6 +28,22 @@ function worker(clients: TestClient[] = []) {
 }
 
 describe('source-bound notification worker routing', () => {
+  it('remembers the computer\'s new public address from its own notification, and nothing else', async () => {
+    const put = vi.fn().mockResolvedValue(undefined); const open = vi.fn().mockResolvedValue({ put });
+    const warm = client(); const test = worker([warm], { caches: { open }, Response, Date });
+    const shown = await test.push({ body: 'Synthetic', notificationIntent: intent, bridge: 'https://new-words.trycloudflare.com' });
+    expect(shown.data).toEqual({ notificationIntent: intent });
+    expect(open).toHaveBeenCalledExactlyOnceWith('keep-safe-link-v1'); expect(put).toHaveBeenCalledOnce();
+    expect(put.mock.calls[0][0]).toBe('/__keep-safe/link');
+    expect(await (put.mock.calls[0][1] as Response).json()).toMatchObject({ sourceKey, url: 'https://new-words.trycloudflare.com' });
+    expect(warm.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'bridge-address', sourceKey, url: 'https://new-words.trycloudflare.com' });
+    // Not HTTPS, not a bare origin, or not tied to a known computer: ignored.
+    for (const payload of [{ notificationIntent: intent, bridge: 'http://plain.example' }, { notificationIntent: intent, bridge: 'https://host.example/path?x=1' }, { notificationIntent: intent, bridge: 'https://user:pw@host.example' }, { bridge: 'https://no-source.example' }, { notificationIntent: intent, bridge: 42 }]) await test.push(payload);
+    expect(put).toHaveBeenCalledOnce(); expect(warm.postMessage).toHaveBeenCalledOnce();
+    // A browser without cache storage still shows the notification.
+    const bare = worker(); expect((await bare.push({ notificationIntent: intent, bridge: 'https://new-words.trycloudflare.com' })).data).toEqual({ notificationIntent: intent });
+  });
+
   it('keeps only a canonical public source and UUID, bounds text and separates notification tags', async () => {
     const test = worker(); const shown = await test.push({ body: 'a'.repeat(300) + '\n', notificationIntent: { ...intent, requestId: requestId.toUpperCase(), privateToken: 'synthetic-ignored-token' }, url: 'https://untrusted.example/path' });
     expect(shown.body.length).toBe(240); expect(shown.data).toEqual({ notificationIntent: intent }); expect(shown.tag).toBe(`request-${sourceKey}-${requestId}`);

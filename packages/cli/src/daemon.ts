@@ -1,14 +1,17 @@
 import { spawn } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
+import { closeSync, openSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { readExistingConfig, type BridgeConfig } from '../../bridge/src/config';
+import { stopTunnel } from '../../bridge/src/tunnel';
 import { bridgeHealthy, localJson } from './local';
 import { bridgeCli, packageRoot, tsxLoader } from './paths';
 import { chooseRoute, stopTailscaleServe, type Route, type RouteChoice } from './routes';
 
-export interface DaemonState { version: 1; pid: number; port: number; startedAt: string; route: Route }
+export interface DaemonState { version: 1; pid: number; port: number; startedAt: string; route: Route; /** The Keep Safe release that started it. */ build?: string; /** The route the person asked for, kept across restarts. */ requested?: RouteChoice }
+/** A background bridge from an older release is replaced on the next command. */
+export const build = (JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { version: string }).version;
 export class CliError extends Error {}
 
 const stateFile = (directory: string) => join(directory, 'daemon.json');
@@ -23,7 +26,11 @@ export async function readState(directory: string): Promise<DaemonState | undefi
 
 export async function running(directory: string): Promise<DaemonState | undefined> {
   const state = await readState(directory);
-  return state && alive(state.pid) && await bridgeHealthy(state.port) ? state : undefined;
+  if (!state || !alive(state.pid) || !await bridgeHealthy(state.port)) return undefined;
+  if (state.route.kind !== 'cloudflare') return state;
+  // A tunnel address can change while the bridge runs: ask for the current one.
+  const live = await bridgeStatus(directory, state.port);
+  return { ...state, route: { ...state.route, publicUrl: live?.publicUrl ?? '' } };
 }
 
 /** A lock left by a crashed bridge on this computer is safe to clear once its process is gone. */
@@ -50,13 +57,13 @@ export async function down(directory: string, options: { keepRoute?: boolean } =
   if (!state) return false;
   const stopped = await stopProcess(state.pid, 15_000);
   if (!stopped) throw new CliError('The bridge is still finishing a browser session. Try again in a moment.');
-  if (state.route.tunnelPid) await stopProcess(state.route.tunnelPid, 3000);
+  if (!options.keepRoute) await stopTunnel(directory);
   if (state.route.servePort && !options.keepRoute) await stopTailscaleServe(state.route.servePort);
   await unlink(stateFile(directory)).catch(() => {});
   return true;
 }
 
-export interface UpOptions { directory: string; port?: number; route?: RouteChoice; restart?: boolean; allowLocalUrls?: boolean }
+export interface UpOptions { directory: string; port?: number; route?: RouteChoice; restart?: boolean; allowLocalUrls?: boolean; log?: (line: string) => void }
 
 /** Starts the bridge in the background, or returns the one already running. */
 export async function up(options: UpOptions): Promise<{ state: DaemonState; started: boolean }> {
@@ -64,7 +71,7 @@ export async function up(options: UpOptions): Promise<{ state: DaemonState; star
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const previous = await readState(directory);
   const live = await running(directory);
-  const sameSettings = live && (!options.port || options.port === live.port) && (!options.route || options.route === 'auto' || live.route.kind.startsWith(options.route));
+  const sameSettings = live && live.build === build && (!options.port || options.port === live.port) && (!options.route || options.route === (live.requested ?? 'auto'));
   if (live && sameSettings && !options.restart) return { state: live, started: false };
   if (previous) await down(directory, { keepRoute: true });
   const port = options.port ?? previous?.port ?? Number(process.env.KEEP_SAFE_PORT ?? 4318);
@@ -72,10 +79,12 @@ export async function up(options: UpOptions): Promise<{ state: DaemonState; star
   await clearDeadLock(directory, port);
   // Keep the previous kind of route across restarts unless asked to change.
   const preset = ['auto', 'tailscale', 'cloudflare', 'local'].includes(process.env.KEEP_SAFE_ROUTE ?? '') ? process.env.KEEP_SAFE_ROUTE as RouteChoice : undefined;
-  const choice: RouteChoice = options.route ?? preset ?? (previous?.route.kind === 'cloudflare' ? 'cloudflare' : previous?.route.kind === 'local' ? 'local' : 'auto');
-  const route = await chooseRoute(choice, port, directory);
+  const choice: RouteChoice = options.route ?? preset ?? previous?.requested ?? 'auto';
+  const route = await chooseRoute(choice, port, directory, options.log);
   if (previous?.route.servePort && previous.route.servePort !== route.servePort) await stopTailscaleServe(previous.route.servePort);
-  const args = ['--import', tsxLoader(), bridgeCli, '--daemon', '--port', String(port), '--config-dir', directory, '--public-url', route.publicUrl, '--app-url', route.appUrl,
+  if (route.kind !== 'cloudflare') await stopTunnel(directory);
+  const args = ['--import', tsxLoader(), bridgeCli, '--daemon', '--port', String(port), '--config-dir', directory, '--app-url', route.appUrl,
+    ...(route.tunnelBinary ? ['--tunnel', route.tunnelBinary] : ['--public-url', route.publicUrl]),
     ...(route.listen.length ? ['--listen', route.listen.join(',')] : []),
     ...(route.allowOrigins.length ? ['--allow-origin', route.allowOrigins.join(',')] : []),
     ...(route.tailnetHttp ? ['--tailnet-http'] : []),
@@ -93,13 +102,22 @@ export async function up(options: UpOptions): Promise<{ state: DaemonState; star
   for (let attempt = 0; attempt < 100; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 200));
     if (await bridgeHealthy(port)) {
-      const state: DaemonState = { version: 1, pid, port, startedAt: new Date().toISOString(), route };
+      if (route.kind === 'cloudflare') {
+        // The tunnel opens a few seconds after the bridge. Wait for its address.
+        for (let wait = 0; wait < 120 && alive(pid); wait++) {
+          const live = await bridgeStatus(directory, port);
+          if (live?.publicUrl) { route.publicUrl = live.publicUrl; break; }
+          if (live?.link === 'failed') break;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (!route.publicUrl) route.notes = ['The secure link for the phone has not opened yet. Check the internet connection. Keep Safe keeps trying; run "keep-safe status" to see when it is ready.', ...route.notes];
+      }
+      const state: DaemonState = { version: 1, pid, port, startedAt: new Date().toISOString(), route, build, requested: choice };
       await writeFile(stateFile(directory), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
       return { state, started: true };
     }
     if (!alive(pid)) break;
   }
-  if (route.tunnelPid) await stopProcess(route.tunnelPid, 2000);
   const reason = (await readFile(logFile, 'utf8').catch(() => '')).trim().split('\n').slice(-3).join(' ');
   if (alive(pid)) await stopProcess(pid, 5000);
   throw new CliError(`The bridge did not start. ${reason || 'Check that the port is free.'}`);
@@ -109,7 +127,7 @@ export async function ownerConfig(directory: string): Promise<BridgeConfig> {
   return readExistingConfig(directory);
 }
 
-export interface BridgeStatus { phones: number; notifications: number; browserAvailable: boolean }
+export interface BridgeStatus { phones: number; notifications: number; browserAvailable: boolean; version?: string; link?: string; publicUrl?: string }
 export async function bridgeStatus(directory: string, port: number): Promise<BridgeStatus | undefined> {
   try {
     const config = await ownerConfig(directory);

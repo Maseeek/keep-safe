@@ -1,3 +1,4 @@
+import { createHash, createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { createBridge, type BridgeOptions } from '../src/server';
@@ -104,6 +105,63 @@ describe('one-time pairing codes', () => {
     expect(Date.parse(renewed.data.devices[0].expiresAt)).toBeGreaterThan(Date.parse(paired.data.device.expiresAt) + 19 * day);
     bridge.advance(31 * day);
     expect((await bridge.call('/api/devices', undefined, paired.data.token)).status).toBe(401);
+  });
+});
+
+const relinkProof = (token: string, code: string) => createHmac('sha256', createHash('sha256').update(token).digest()).update(`keep-safe-relink:${code}`).digest('hex');
+
+describe('scanning again and a changing public address', () => {
+  it('keeps a paired phone\'s key when it scans a new code, and never accepts a wrong proof', async () => {
+    const bridge = await start();
+    const first = await bridge.call('/api/pair', { code: (await bridge.invite()).code, name: 'Pixel' });
+    const { token, device } = first.data as { token: string; device: { id: string } };
+
+    const second = await bridge.invite();
+    const again = await bridge.call('/api/pair', { code: second.code, name: 'Renamed', device: { id: device.id, proof: relinkProof(token, second.code) } });
+    expect(again.status).toBe(200);
+    expect(again.data).toMatchObject({ relinked: true, device: { id: device.id, name: 'Pixel' } });
+    expect(again.data.token).toBeUndefined();
+    expect((await bridge.call('/api/pair/status', { code: second.code })).data).toEqual({ state: 'claimed', name: 'Pixel' });
+    expect((await bridge.call('/api/devices', undefined, ownerToken)).data.devices).toHaveLength(1);
+    expect((await bridge.call('/api/requests', undefined, token)).status).toBe(200);
+
+    // A proof made for another code, or with another key, pairs a new phone instead.
+    const third = await bridge.invite();
+    const wrong = await bridge.call('/api/pair', { code: third.code, name: 'Other', device: { id: device.id, proof: relinkProof(token, second.code) } });
+    expect(wrong.status).toBe(201);
+    expect(wrong.data.device.id).not.toBe(device.id);
+    expect(wrong.data.token).toMatch(/^[a-f0-9]{64}$/);
+    // The proof alone is not a credential: without a valid code nothing happens.
+    expect((await bridge.call('/api/pair', { code: 'AAAAAAAA', device: { id: device.id, proof: relinkProof(token, 'AAAAAAAA') } })).status).toBe(401);
+  });
+
+  it('builds the pairing link from the current public address and accepts that origin', async () => {
+    let address: string | undefined;
+    let state = 'starting';
+    const bridge = await start({ appUrl: 'https://app.example', link: { url: () => address, state: () => state, ready: async () => !!address } });
+    // No address yet: a code would be useless, so none is created.
+    const early = await bridge.call('/api/pairing', {}, ownerToken);
+    expect(early.status).toBe(503);
+    expect((await bridge.call('/api/status', undefined, agentToken)).data).toMatchObject({ link: 'starting', version: '0.3.0' });
+    expect((await bridge.call('/api/status', undefined, agentToken)).data.publicUrl).toBeUndefined();
+
+    address = 'https://first-words.trycloudflare.com'; state = 'ready';
+    const created = await bridge.call('/api/pairing', {}, ownerToken);
+    expect(created.status).toBe(201);
+    expect(created.data.link).toBe(`https://app.example/#pair=${created.data.code}&bridge=${encodeURIComponent(address)}`);
+    expect(created.data.link).not.toContain(ownerToken);
+    expect((await bridge.call('/api/pair/status', { code: created.data.code })).data.link).toBe(created.data.link);
+    expect((await bridge.call('/api/status', undefined, agentToken)).data).toMatchObject({ link: 'ready', publicUrl: address });
+    expect((await bridge.call('/api/pair/status', { code: created.data.code }, undefined, address)).status).toBe(200);
+
+    // The address moved: the old origin stops being accepted and links follow.
+    address = 'https://second-words.trycloudflare.com';
+    expect((await bridge.call('/api/pair/status', { code: created.data.code }, undefined, 'https://first-words.trycloudflare.com')).status).toBe(403);
+    expect((await bridge.call('/api/pair/status', { code: created.data.code })).data.link).toContain(encodeURIComponent(address));
+    // Without a separate app, the bridge's own address is the whole link.
+    const own = await start();
+    const code = (await own.invite()).code;
+    expect((await own.call('/api/pair/status', { code })).data.link).toBe(`${own.url}/#pair=${code}`);
   });
 });
 

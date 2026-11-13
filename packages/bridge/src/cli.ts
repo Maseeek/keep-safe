@@ -11,6 +11,7 @@ import { connectionOrigin, connectionPort, hostedAppOrigin } from './connection-
 import { diagnoseConnection } from './doctor';
 import { connectionSetup } from './setup';
 import { RehearsalError, runRehearsal } from './rehearsal';
+import { startTunnel, type Tunnel } from './tunnel';
 
 class UsageError extends Error {}
 
@@ -20,7 +21,7 @@ function argumentsOf(args: string[], command: string) {
   const rotation = command === 'rotate-keys';
   const rehearsal = command === 'rehearse';
   const connection = command === 'doctor' || command === 'setup';
-  const allowed = new Set(rotation ? ['--config-dir'] : rehearsal ? ['--port', '--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir', '--listen', '--allow-origin', '--name'])]);
+  const allowed = new Set(rotation ? ['--config-dir'] : rehearsal ? ['--port', '--config-dir'] : ['--port', '--config-dir', '--app-url', '--public-url', ...(connection ? [] : ['--static-dir', '--listen', '--allow-origin', '--name', '--tunnel'])]);
   const booleans = new Set(rotation ? ['--owner', '--agent', '--all', '--help'] : connection ? ['--json', '--help'] : rehearsal ? ['--help'] : ['--allow-local-urls', '--no-static', '--tailnet-http', '--daemon', '--help']);
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
@@ -40,7 +41,7 @@ async function main() {
     return;
   }
   if (flags.has('--help')) {
-    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n--listen ADDRESSES     Also listen on these private IP addresses, comma separated (for example a Tailscale IP)\n--allow-origin URLS    Further app origins allowed to call the bridge, comma separated\n--tailnet-http         Accept plain HTTP origins on Tailscale addresses (Tailscale encrypts that traffic)\n--name TEXT            Computer name shown on the phone (default: this computer's hostname)\n--daemon               Print no pairing link; phones pair with one-time codes from "keep-safe pair"\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nSynthetic phone rehearsal (start and pair the bridge first):\n  npm run --silent bridge -- rehearse [--port NUMBER] [--config-dir PATH]\n  Use only the fixed practice phrase, never real credentials.\n  Verify the returned practice browser after explicit handback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
+    console.log(`Keep Safe local browser bridge\n\nUsage: npm run bridge -- [options]\n\n--port NUMBER          Loopback port (default 4318; KEEP_SAFE_PORT)\n--config-dir PATH      Local keys directory (default .keep-safe; KEEP_SAFE_CONFIG_DIR)\n--public-url URL       HTTPS tunnel root origin (KEEP_SAFE_PUBLIC_URL)\n--app-url URL          Allowed frontend root origin (KEEP_SAFE_APP_URL)\n--static-dir PATH      Built frontend directory (default apps/web/dist)\n--no-static            Disable built frontend hosting\n--allow-local-urls     Allow explicit loopback HTTP test/development websites\n--listen ADDRESSES     Also listen on these private IP addresses, comma separated (for example a Tailscale IP)\n--allow-origin URLS    Further app origins allowed to call the bridge, comma separated\n--tailnet-http         Accept plain HTTP origins on Tailscale addresses (Tailscale encrypts that traffic)\n--name TEXT            Computer name shown on the phone (default: this computer's hostname)\n--tunnel PATH          Keep a free Cloudflare quick tunnel open with this cloudflared program, so any phone can reach the bridge\n--daemon               Print no pairing link; phones pair with one-time codes from "keep-safe pair"\n\nConnection help (same port/config/app/public options; optional --json):\n  npm run --silent bridge -- setup\n  npm run --silent bridge -- doctor --app-url https://keep-safe-eight.vercel.app --public-url https://YOUR-TUNNEL.trycloudflare.com\n  setup prints commands without reading keys or starting a tunnel.\n  doctor reads existing config without changing it; keys go only to local loopback.\n\nSynthetic phone rehearsal (start and pair the bridge first):\n  npm run --silent bridge -- rehearse [--port NUMBER] [--config-dir PATH]\n  Use only the fixed practice phrase, never real credentials.\n  Verify the returned practice browser after explicit handback.\n\nOffline key replacement (stop every bridge first):\n  npm run bridge -- rotate-keys --owner|--agent|--all [--config-dir PATH]\n  --owner replaces the owner key and revokes remembered phones and notifications.\n  --agent replaces the agent key; restart connected MCP clients after rotation.\n  --all performs both. No keys are printed by this command.\n\nThe bridge binds only to 127.0.0.1. Use a trusted HTTPS tunnel to reach it from a phone.\nKeep pairing links private. Passwords, browser frames and cookies are never written by the bridge.\nCompleted managed browsers stay available to the agent until the request expiry time.`);
     return;
   }
   const configDirectory = resolve(values.get('--config-dir') ?? process.env.KEEP_SAFE_CONFIG_DIR ?? '.keep-safe');
@@ -104,10 +105,12 @@ async function main() {
     return;
   }
   const lock = await acquireConfigLock(configDirectory, 'bridge');
+  let tunnel: Tunnel | undefined;
   let bridge: Awaited<ReturnType<typeof createBridge>>;
   let config: Awaited<ReturnType<typeof loadConfig>>;
   try {
     config = await loadConfig(configDirectory);
+    if (values.get('--tunnel')) tunnel = startTunnel({ binary: values.get('--tunnel')!, port, directory: configDirectory, verify: process.env.KEEP_SAFE_TUNNEL_CHECK !== 'off', onAddress: address => console.log(`Phone address: ${address}`) });
     bridge = await createBridge({
       ...config, port, appUrl, publicUrl,
       subscriptionsFile: join(configDirectory, 'subscriptions.json'),
@@ -116,19 +119,21 @@ async function main() {
       allowLocalUrls: flags.has('--allow-local-urls'),
       listenHosts, extraOrigins,
       computerName: values.get('--name') ?? hostname(),
+      ...(tunnel ? { link: tunnel } : {}),
     });
-  } catch (error) { await lock.release(); throw error; }
+  } catch (error) { tunnel?.stop(); await lock.release(); throw error; }
   const pairing = new URL(appUrl);
   pairing.hash = new URLSearchParams({ bridge: publicUrl, token: config.ownerToken }).toString();
   const unreachable = listenHosts.filter(host => !bridge.listening.includes(host));
   if (unreachable.length) console.error(`Could not listen on ${unreachable.join(', ')}. The bridge is still available on this computer.`);
   // A background bridge writes to a log file, so it never prints owner authority.
-  if (flags.has('--daemon')) console.log(`Keep Safe bridge listening at ${bridge.url}\nPhone address: ${publicUrl}\nBrowser installed: ${bridge.info.browserAvailable ? 'yes' : 'no'}`);
+  if (flags.has('--daemon')) console.log(`Keep Safe bridge listening at ${bridge.url}\n${tunnel ? 'Opening a secure link for the phone.' : `Phone address: ${publicUrl}`}\nBrowser installed: ${bridge.info.browserAvailable ? 'yes' : 'no'}`);
   else console.log(`Keep Safe bridge listening at ${bridge.url}\nPair your phone (private owner link):\n${pairing.href}\n\nAgent credentials are in ${join(configDirectory, 'config.json')}. Do not share them.\nBrowser installed: ${bridge.info.browserAvailable ? 'yes' : 'no — run npx playwright install chromium'}\nPhone notifications: ${bridge.info.pushEnabled ? 'available after pairing' : 'disabled'}`);
   let stopping = false;
   const shutdown = () => {
     if (stopping) return;
     stopping = true;
+    tunnel?.stop();
     void bridge.close().then(() => lock.release()).then(() => process.exit(0)).catch(() => {
       console.error('Bridge cleanup did not finish. Check that it stopped, then follow README lock recovery instructions.');
       process.exit(1);

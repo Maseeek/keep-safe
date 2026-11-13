@@ -479,3 +479,15 @@ Not verified: any physical phone (camera scanner, keyboard raise and fit, Home S
 - `npx -y github:Maseeek/keep-safe` installed from GitHub in a clean directory and ran `status`, `up`, `pair` and `down`.
 - Vercel preview deployments sit behind Vercel sign-in, so the preview was not opened. Its build passed.
 
+## One-scan pairing on 13 November 2026
+
+The owner tried the overhaul and reported that the website prompt produced no QR code, that a QR code which did appear was not recognised, and that the app then asked for a code and a computer address. They asked for one scan with no extra information, with Tailscale optional.
+
+- Cause, read from the owner's `~/.keep-safe`: `setup` chose the Tailscale route because Tailscale was running on the computer. The tailnet has no HTTPS certificates, so the pairing link was `http://pop-os…ts.net:4318`. The owner's phone had been off that tailnet for 30 days, so the link could not load, and the hosted app's scanner rejected the `http` address and fell back to manual entry.
+- The default route is now a Cloudflare quick tunnel that Keep Safe opens and supervises. `cloudflared` 2026.11.0 is fetched into the configuration folder and checked against its SHA-256. Tailscale needs `--route tailscale`.
+- Considered a hosted directory on Supabase, which the owner offered, so a phone could find the computer from a code alone. The owner's only Supabase organisation is on the free plan with both active project slots in use, and adding Keep Safe tables to an unrelated project was not appropriate. Built without a database instead: the pairing link carries the address, the tunnel outlives bridge restarts, notifications carry a changed address, and a second scan re-links the same phone.
+- `setup` and `pair` print a short QR code page link and tell an agent what to hand over. The website prompt asks for that link.
+- Real run in a temporary configuration folder on this computer: first `setup` took 33 seconds including the 40 MB download, the tunnel answered from the public internet, and a Chromium phone emulation paired through the hosted app in under a second. `up --restart` kept the same address. After the tunnel process was killed, the bridge opened a new one within about 30 seconds and `status` showed the new address.
+- Typecheck and 411 tests in 45 files pass locally, 10 of them new: the tunnel supervisor, re-linking with a proof, the address in notifications, the service worker storing it, the app following it, the short QR page link, a foreign pairing link, and the CLI on the default route with a stand-in tunnel program.
+
+Not verified: a physical phone, a real notification delivering a new address, and the default route on macOS or Windows (the download and process checks there are untested). GitHub Actions is still blocked by the account's billing lock.

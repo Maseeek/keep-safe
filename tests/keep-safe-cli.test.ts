@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -58,7 +58,7 @@ describe('keep-safe command', () => {
     expect(invitation.code).toMatch(/^[A-Z2-9]{8}$/);
     expect(invitation.display).toBe(`${invitation.code.slice(0, 4)}-${invitation.code.slice(4)}`);
     expect(invitation.link).toBe(`http://127.0.0.1:${port}/#pair=${invitation.code}`);
-    expect(new URL(invitation.desktopUrl).hash).toContain('desk=');
+    expect(invitation.desktopUrl).toBe(`http://127.0.0.1:${port}/#qr=${invitation.code}`);
 
     const config = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as { ownerToken: string; agentToken: string };
     // Nothing printed or logged carries a key.
@@ -72,13 +72,59 @@ describe('keep-safe command', () => {
     expect(claimed.status).toBe(201);
     expect(JSON.parse((await run(['status', '--json', ...common])).stdout)).toMatchObject({ running: true, phones: 1 });
     const human = (await run(['pair', '--no-open', '--no-wait', ...common])).stdout;
-    expect(human).toContain('Pairing code: ');
+    expect(human).toContain('PAIR YOUR PHONE');
+    expect(human).toMatch(/QR code page \(open on this computer\):\n\s+http:\/\/127\.0\.0\.1:\d+\/#qr=[A-Z2-9]{8}\n/);
+    // An agent relays the output, so it is told what to hand over.
+    expect(human).toContain('If you are an AI agent running this for someone');
     expect(human).toMatch(/[█▀▄]{10,}/);
 
     expect((await run(['down', ...common])).stdout).toContain('Keep Safe stopped.');
     expect(JSON.parse((await run(['status', '--json', ...common])).stdout)).toEqual({ running: false });
     await expect(fetch(`http://127.0.0.1:${port}/api/health`)).rejects.toThrow();
   }, 90_000);
+
+  it('opens a secure public link by default, keeps it across restarts, and replaces an older background bridge', async () => {
+    const { directory, port, common } = await workspace();
+    // Stands in for cloudflared, so no real tunnel is opened.
+    const helper = join(directory, 'cloudflared');
+    await writeFile(helper, `#!/usr/bin/env node
+const fs = require('fs');
+const count = Number(fs.existsSync(__dirname + '/starts') ? fs.readFileSync(__dirname + '/starts', 'utf8') : 0) + 1;
+fs.writeFileSync(__dirname + '/starts', String(count));
+setTimeout(() => console.error('INF |  https://fake-link-' + count + '.trycloudflare.com  |'), 100);
+setInterval(() => {}, 1000);
+`);
+    await chmod(helper, 0o755);
+    const env = { KEEP_SAFE_ROUTE: 'auto', KEEP_SAFE_CLOUDFLARED: helper, KEEP_SAFE_TUNNEL_CHECK: 'off' };
+    const started = await run(['up', '--port', String(port), '--json', ...common], env);
+    expect(started.code).toBe(0);
+    expect(JSON.parse(started.stdout)).toMatchObject({ started: true, route: { kind: 'cloudflare', publicUrl: 'https://fake-link-1.trycloudflare.com', appUrl: 'https://keep-safe-eight.vercel.app' } });
+
+    const { invitation } = JSON.parse((await run(['pair', '--json', '--no-open', ...common], env)).stdout) as { invitation: { code: string; link: string; desktopUrl: string } };
+    expect(invitation.link).toBe(`https://keep-safe-eight.vercel.app/#pair=${invitation.code}&bridge=${encodeURIComponent('https://fake-link-1.trycloudflare.com')}`);
+    expect(invitation.desktopUrl).toBe(`http://127.0.0.1:${port}/#qr=${invitation.code}`);
+    // The hosted app may call this bridge; the code alone pairs the phone.
+    const claimed = await fetch(`http://127.0.0.1:${port}/api/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://keep-safe-eight.vercel.app' }, body: JSON.stringify({ code: invitation.code }) });
+    expect(claimed.status).toBe(201);
+
+    // A restart keeps the tunnel, so the paired phone's address does not change.
+    const tunnel = JSON.parse(await readFile(join(directory, 'tunnel.json'), 'utf8')) as { pid: number };
+    const restarted = JSON.parse((await run(['up', '--restart', '--json', ...common], env)).stdout) as { started: boolean; route: { publicUrl: string } };
+    expect(restarted).toMatchObject({ started: true, route: { publicUrl: 'https://fake-link-1.trycloudflare.com' } });
+    expect(JSON.parse(await readFile(join(directory, 'tunnel.json'), 'utf8')).pid).toBe(tunnel.pid);
+    expect(JSON.parse((await run(['status', '--json', ...common], env)).stdout)).toMatchObject({ running: true, phones: 1, link: 'ready', publicUrl: 'https://fake-link-1.trycloudflare.com' });
+
+    // A background bridge left by an older release is replaced, not reused.
+    const state = JSON.parse(await readFile(join(directory, 'daemon.json'), 'utf8')) as Record<string, unknown>;
+    delete state.build;
+    await writeFile(join(directory, 'daemon.json'), JSON.stringify(state));
+    expect(JSON.parse((await run(['up', '--json', ...common], env)).stdout)).toMatchObject({ started: true, route: { kind: 'cloudflare' } });
+    expect(JSON.parse((await run(['up', '--json', ...common], env)).stdout)).toMatchObject({ started: false });
+
+    expect((await run(['down', ...common], env)).stdout).toContain('Keep Safe stopped.');
+    await expect.poll(() => { try { process.kill(tunnel.pid, 0); return true; } catch { return false; } }, { timeout: 5000 }).toBe(false);
+    await expect(readFile(join(directory, 'tunnel.json'), 'utf8')).rejects.toThrow();
+  }, 120_000);
 
   it('stops promptly while a phone has a live browser and its page controls open', async () => {
     const { directory, port, common } = await workspace();

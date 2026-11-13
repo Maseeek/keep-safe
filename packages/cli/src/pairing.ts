@@ -8,15 +8,12 @@ export interface Invitation { code: string; display: string; expiresAt: string; 
 /** Asks the local bridge for a one-time code. The owner key stays on loopback. */
 export async function invite(directory: string, state: DaemonState): Promise<Invitation> {
   const config = await ownerConfig(directory);
-  const result = await localJson<PairingCode & { error?: string }>(state.port, '/api/pairing', { token: config.ownerToken, body: {} });
-  if (result.status !== 201) throw new CliError(result.data.error ?? 'The bridge could not create a pairing code.');
-  const { code, expiresAt } = result.data;
-  const link = new URL(state.route.appUrl);
-  // The phone already knows the bridge address when the bridge serves the app.
-  link.hash = new URLSearchParams({ pair: code, ...(state.route.appUrl === state.route.publicUrl ? {} : { bridge: state.route.publicUrl }) }).toString();
-  const desktop = new URL(`http://127.0.0.1:${state.port}/`);
-  desktop.hash = new URLSearchParams({ desk: link.href }).toString();
-  return { code, display: `${code.slice(0, 4)}-${code.slice(4)}`, expiresAt, link: link.href, desktopUrl: desktop.href };
+  // The bridge waits for its secure link before answering, so allow for that.
+  const result = await localJson<PairingCode & { error?: string }>(state.port, '/api/pairing', { token: config.ownerToken, body: {}, timeoutMs: 60_000 });
+  if (result.status !== 201 || !result.data.link) throw new CliError(result.data.error ?? 'The bridge could not create a pairing code.');
+  const { code, expiresAt, link } = result.data;
+  // Short enough to paste into a chat: the page asks the bridge for the rest.
+  return { code, display: `${code.slice(0, 4)}-${code.slice(4)}`, expiresAt, link, desktopUrl: `http://127.0.0.1:${state.port}/#qr=${code}` };
 }
 
 export async function pairingState(state: DaemonState, code: string): Promise<{ state: PairingState; name?: string }> {

@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, Check, ClipboardPaste, Copy, LoaderCircle, Share2, X } from "lucide-react";
-import { parseInvite, type PairingInvite, type Workspace } from "./workspace";
+import { foreignPairingLink, parseInvite, type PairingInvite, type Workspace } from "./workspace";
 import { qrPath } from "./qr";
 
 export const installCommand = "npx -y github:Maseeek/keep-safe setup";
 export const agentPrompt = `Set up Keep Safe on this computer so I can approve website logins from my phone.
 
 1. Run: ${installCommand}
-   It needs Node.js 20 or newer. It installs a browser, starts Keep Safe in the background, adds its MCP server to the agent CLIs it finds, and prints a pairing link, a code and a QR code.
-2. Show me the pairing link and code from its output, and tell me to scan the QR code in the browser window it opened.
+   It needs Node.js 20 or newer and takes a minute or two the first time. It starts Keep Safe in the background, adds its MCP server to the agent CLIs it finds, and opens a page with a QR code in my browser.
+2. I cannot see your terminal. Give me the "QR code page" link from its output as a clickable link, and tell me to scan the QR code on that page with my phone camera. One scan pairs my phone.
 3. If your own MCP settings were not updated, add the JSON it printed under "Other MCP clients".
 4. From now on, when a website needs me to sign in, call the keep-safe request_login tool, wait with wait_for_login, then continue in the same browser once I hand it back. Never ask me for passwords in chat.`;
 
@@ -137,29 +137,33 @@ export function PairForm({ workspace, onPaired, autoScan = false }: { workspace:
   const [problem, setProblem] = useState("");
   const selfHosted = servedByBridge;
   const [needsAddress, setNeedsAddress] = useState(false);
-  const submit = async (invite: PairingInvite | null) => {
-    if (!invite) { setProblem("That does not look like a Keep Safe pairing code or link."); return; }
+  const submit = async (invite: PairingInvite | null, scanned?: string) => {
+    // A code for an app the computer serves itself: open it, as the camera would.
+    const elsewhere = !invite && scanned ? foreignPairingLink(scanned) : null;
+    if (elsewhere) { window.location.assign(elsewhere); return; }
+    if (!invite) { setProblem("That is not a Keep Safe pairing code. Use the QR code or link your computer shows after keep-safe pair."); return; }
     setProblem("");
     if (await workspace.pairWithCode(invite)) onPaired?.();
   };
   const fromText = (value: string) => parseInvite(value, address.trim() || (selfHosted ? window.location.origin : undefined));
   const bareCode = /^[A-Za-z0-9]{4}[\s-]?[A-Za-z0-9]{4}$/.test(text.trim());
   useEffect(() => { setNeedsAddress(bareCode && !selfHosted); }, [bareCode, selfHosted]);
-  if (scanning) return <QrScanner onCancel={() => setScanning(false)} onResult={value => { setScanning(false); void submit(parseInvite(value)); }} />;
+  if (scanning) return <QrScanner onCancel={() => setScanning(false)} onResult={value => { setScanning(false); void submit(parseInvite(value), value); }} />;
   return (
-    <form className="pair-form" onSubmit={event => { event.preventDefault(); void submit(fromText(text)); }}>
+    <form className="pair-form" onSubmit={event => { event.preventDefault(); void submit(fromText(text), needsAddress ? undefined : text); }}>
       <button type="button" className="button button-dark button-large" onClick={() => { workspace.clearPairingError(); setProblem(""); setScanning(true); }} disabled={workspace.pairingBusy}>
         <Camera size={18} aria-hidden="true" /> Scan QR code
       </button>
-      <div className="pair-form-divider"><span>or enter it</span></div>
-      <label htmlFor="pair-code">Pairing code or link</label>
+      <div className="pair-form-divider"><span>{selfHosted ? "or enter it" : "or paste the link"}</span></div>
+      <label htmlFor="pair-code">{selfHosted ? "Pairing code or link" : "Pairing link"}</label>
       <div className="pair-form-row">
-        <input id="pair-code" value={text} onChange={event => setText(event.target.value)} placeholder="ABCD-2345" autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} enterKeyHint="go" />
+        <input id="pair-code" value={text} onChange={event => setText(event.target.value)} placeholder={selfHosted ? "ABCD-2345" : "Paste the pairing link"} autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} enterKeyHint="go" />
         {navigator.clipboard?.readText ? <button type="button" className="icon-button" aria-label="Paste from clipboard" onClick={() => { void navigator.clipboard.readText().then(value => setText(value.trim()), () => {}); }}><ClipboardPaste size={18} /></button> : null}
       </div>
       {needsAddress ? <>
-        <label htmlFor="pair-address">Computer address <span>shown next to the code</span></label>
-        <input id="pair-address" value={address} onChange={event => setAddress(event.target.value)} placeholder="my-computer.tailnet.ts.net" inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+        <p className="pair-form-hint">A typed code also needs your computer's address. Scanning the QR code or pasting the pairing link is quicker.</p>
+        <label htmlFor="pair-address">Computer address <span>shown under "Cannot scan?"</span></label>
+        <input id="pair-address" value={address} onChange={event => setAddress(event.target.value)} placeholder="example-words.trycloudflare.com" inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
       </> : null}
       {problem || workspace.pairingError ? <p className="form-error" role="alert">{problem || workspace.pairingError}</p> : null}
       <button type="submit" className="button button-light" disabled={!text.trim() || workspace.pairingBusy || (needsAddress && !address.trim())}>

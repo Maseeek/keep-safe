@@ -29,6 +29,8 @@ export interface BridgeOptions {
   /** Further exact origins allowed to call the bridge, such as its own tailnet address. */
   extraOrigins?: string[];
   computerName?: string;
+  /** A public address that can change while the bridge runs, such as a tunnel. */
+  link?: { url(): string | undefined; state(): string; ready(timeoutMs: number): Promise<boolean> };
 }
 
 interface Entry {
@@ -155,11 +157,21 @@ export async function createBridge(options: BridgeOptions) {
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.2.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.3.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
   // live in memory only: a restart cancels every unclaimed code.
+  const allowedOrigin = (origin: string) => origins.has(origin) || origin === options.link?.url();
+  let localUrl = '';
+  /** What the phone opens: the app, the one-time code, and where this computer is. */
+  const pairingLink = (code: string) => {
+    const address = options.link ? options.link.url() : options.publicUrl ?? localUrl;
+    if (!address) return undefined;
+    const link = new URL(options.appUrl ?? address);
+    link.hash = new URLSearchParams({ pair: code, ...(link.origin === new URL(address).origin ? {} : { bridge: address }) }).toString();
+    return link.href;
+  };
   const pairingCodes = new Map<string, { expiresAt: number; claimed?: { name: string; at: number } }>();
   let pairingFailures = 0;
   const prunePairing = () => { for (const [code, item] of pairingCodes) if (now() >= item.expiresAt + (item.claimed ? 120_000 : 0)) pairingCodes.delete(code); };
@@ -439,10 +451,13 @@ export async function createBridge(options: BridgeOptions) {
   async function notify(request: LoginRequest) {
     if (!options.vapid) return;
     let pruned = false;
+    // The notification also carries where this computer is now, so a phone
+    // finds it again after the public address changed. Push encrypts it.
+    const address = options.link?.url();
     await Promise.all([...subscriptions.values()].map(async subscription => {
       if (subscription.deviceId && !devices.active(subscription.deviceId)) return;
       try {
-        await webpush.sendNotification(subscription, JSON.stringify({ body: `${request.agent}: ${request.title}`, notificationIntent: { version: 1, requestId: request.id, sourceKey: options.vapid!.publicKey } }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000, agent: pushTransport.agent });
+        await webpush.sendNotification(subscription, JSON.stringify({ body: `${request.agent}: ${request.title}`, notificationIntent: { version: 1, requestId: request.id, sourceKey: options.vapid!.publicKey }, ...(address ? { bridge: address } : {}) }), { vapidDetails: { subject: 'mailto:keep-safe@localhost.invalid', ...options.vapid! }, TTL: 600, timeout: 5000, agent: pushTransport.agent });
       } catch (error) {
         // A delayed response must not remove a newer enrollment or a migration
         // to another owner principal using the same browser subscription.
@@ -463,7 +478,7 @@ export async function createBridge(options: BridgeOptions) {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     const origin = request.headers.origin;
-    if (origin && !origins.has(origin)) throw new HttpError(403, 'This app origin is not allowed.');
+    if (origin && !allowedOrigin(origin)) throw new HttpError(403, 'This app origin is not allowed.');
     if (origin) { response.setHeader('Access-Control-Allow-Origin', origin); response.setHeader('Vary', 'Origin'); }
     response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -501,7 +516,8 @@ export async function createBridge(options: BridgeOptions) {
       const body = await jsonBody(request);
       const found = findPairing(body.code);
       const state: PairingState = !found || (!found.item.claimed && now() >= found.item.expiresAt) ? 'expired' : found.item.claimed ? 'claimed' : 'waiting';
-      json(response, 200, { state, ...(found?.item.claimed ? { name: found.item.claimed.name } : {}), ...(found && state === 'waiting' ? { expiresAt: new Date(found.item.expiresAt).toISOString() } : {}) }); return;
+      const link = found && state === 'waiting' ? pairingLink(found.code) : undefined;
+      json(response, 200, { state, ...(found?.item.claimed ? { name: found.item.claimed.name } : {}), ...(found && state === 'waiting' ? { expiresAt: new Date(found.item.expiresAt).toISOString(), ...(link ? { link } : {}) } : {}) }); return;
     }
     if (url.pathname === '/api/pair' && request.method === 'POST') {
       rate(request);
@@ -512,6 +528,15 @@ export async function createBridge(options: BridgeOptions) {
       // Single use: mark before the first await so a second claim cannot race it.
       const claim = { name, at: now() };
       found.item.claimed = claim;
+      // A phone that is already paired and scans again keeps its key: only
+      // the address it uses changes. It proves the key instead of sending it.
+      const again = body.device && typeof body.device === 'object' && !Array.isArray(body.device) ? body.device as Record<string, unknown> : undefined;
+      const known = again ? devices.prove(again.id, `keep-safe-relink:${found.code}`, again.proof) : undefined;
+      if (known) {
+        claim.name = known.name;
+        pairingFailures = 0;
+        json(response, 200, { device: known, relinked: true, info }); return;
+      }
       const pairing = devicePairing.then(() => devices.pair(name));
       devicePairing = pairing.then(() => {}, () => {});
       try {
@@ -579,10 +604,12 @@ export async function createBridge(options: BridgeOptions) {
       if (open.length >= 5) pairingCodes.delete(open[0][0]);
       let code = '';
       for (let index = 0; index < 8; index++) code += pairingAlphabet[randomInt(pairingAlphabet.length)];
+      // A code is only useful once the phone has somewhere to send it.
+      if (options.link && !await options.link.ready(45_000)) throw new HttpError(503, 'The secure link to this computer is not ready. Check the internet connection, then try again.');
       const expiresAt = now() + pairingCodeLifetimeMs;
       pairingCodes.set(code, { expiresAt });
       pairingFailures = 0;
-      json(response, 201, { code, expiresAt: new Date(expiresAt).toISOString() }); return;
+      json(response, 201, { code, expiresAt: new Date(expiresAt).toISOString(), link: pairingLink(code) }); return;
     }
     const revoke = /^\/api\/devices\/([a-f0-9-]{36})\/revoke$/.exec(url.pathname);
     if (revoke && request.method === 'POST') {
@@ -593,7 +620,7 @@ export async function createBridge(options: BridgeOptions) {
       json(response, 200, { ok: true }); return;
     }
     // Counts only: lets an agent tell its user that no phone is paired yet.
-    if (url.pathname === '/api/status' && request.method === 'GET') { json(response, 200, { phones: devices.list().length, notifications: subscriptions.size, browserAvailable: info.browserAvailable }); return; }
+    if (url.pathname === '/api/status' && request.method === 'GET') { json(response, 200, { phones: devices.list().length, notifications: subscriptions.size, browserAvailable: info.browserAvailable, version: info.version, ...(options.link ? { link: options.link.state(), ...(options.link.url() ? { publicUrl: options.link.url() } : {}) } : {}) }); return; }
     if (url.pathname === '/api/info' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, info); return; }
     if (url.pathname === '/api/history/clear' && request.method === 'POST') {
       requireOwner();
@@ -721,7 +748,7 @@ export async function createBridge(options: BridgeOptions) {
   const upgrade = (request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {
     if (stopping) { socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n', () => socket.destroy()); return; }
     const url = new URL(request.url ?? '/', 'http://localhost');
-    if (url.pathname !== '/ws' || url.search || (request.headers.origin && !origins.has(request.headers.origin))) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
+    if (url.pathname !== '/ws' || url.search || (request.headers.origin && !allowedOrigin(request.headers.origin))) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
     if (clients.size >= 10) { socket.destroy(); return; }
     sockets.handleUpgrade(request, socket, head, ws => sockets.emit('connection', ws));
   };
@@ -748,6 +775,7 @@ export async function createBridge(options: BridgeOptions) {
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 4318, '127.0.0.1', resolve); });
   const address = server.address() as { port: number };
   const url = `http://127.0.0.1:${address.port}`;
+  localUrl = url;
   origins.add(url); origins.add(`http://localhost:${address.port}`);
   const listening: string[] = [];
   for (const extra of extraServers) {

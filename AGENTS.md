@@ -13,6 +13,7 @@ Read `docs/alignment.md`, `docs/backlog.md`, and `docs/progress.md` before choos
 - The phone controls a live browser. Label demo interactions clearly and never request real credentials in the demo.
 - Owner and agent credentials have separate roles. Persistent phone pairing uses separate expiring, revocable keys; never persist the master owner token in localStorage.
 - Phones pair with single-use codes that only the owner key can create. Never let the agent key or a paired phone create one, and never put a key in a pairing link, QR code or log.
+- The default route is public. Never send a device key to an address taken from a QR code, link or notification unless it is the computer the phone paired with. Notifications may carry the bridge address and nothing else about the connection.
 - Agent browser endpoints are available only after explicit handback. Drain in-flight owner input and clear remaining password fields before releasing managed browser access.
 - Keep Chromium debugging endpoints on loopback. Preserve the managed browser's DNS/IP network boundary and do not expose private files through static hosting.
 - Do not claim native IDE browser compatibility or physical-device push delivery without direct evidence.
@@ -20,7 +21,8 @@ Read `docs/alignment.md`, `docs/backlog.md`, and `docs/progress.md` before choos
 ## Verification and delivery
 
 - `npm run typecheck` checks all TypeScript.
-- `npm run keep-safe -- <command>` runs the CLI from the checkout. Tests that start it set `KEEP_SAFE_ROUTE=local` and a temporary `--config-dir`, so they never touch Tailscale, a tunnel or `~/.keep-safe`.
+- `npm run keep-safe -- <command>` runs the CLI from the checkout. Tests that start it set `KEEP_SAFE_ROUTE=local` and a temporary `--config-dir`, so they never touch Tailscale, a tunnel or `~/.keep-safe`. Tests of the default route point `KEEP_SAFE_CLOUDFLARED` at a stand-in program and set `KEEP_SAFE_TUNNEL_CHECK=off`, so nothing is downloaded and no real tunnel opens.
+- Bump the version in `package.json` when the background bridge changes behaviour. The CLI replaces a running bridge whose recorded release differs.
 - `npm test` builds the frontend, then runs the full suite, including real Chromium and built mobile UI flows. Install Chromium with `npx playwright install chromium` if absent.
 - Run the checks appropriate to changes. Fix actual product defects instead of forcing browser clicks or weakening assertions to pass tests.
 - Use the T3 collaborative preview first. Follow its documented fallback rules when unavailable or repeatedly failing.

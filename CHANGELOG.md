@@ -1,5 +1,22 @@
 # Change history
 
+## 13 November 2026
+
+### One-scan pairing from any phone
+
+- Open a secure public link by default, through a free Cloudflare quick tunnel. A phone pairs with one scan on any network, with nothing installed and nothing typed. `keep-safe up` fetches a pinned `cloudflared` release into `~/.keep-safe/bin` and checks its SHA-256 first. Tailscale is now chosen with `--route tailscale` and is no longer picked just because it is running.
+- Keep the tunnel across Keep Safe restarts and updates, so the phone's address only changes when the computer restarts. The bridge replaces a tunnel that ended.
+- Follow a changed address. Each request notification carries the computer's current address, and the app moves to it. Without notifications, scanning a new code re-links the same phone: it proves it holds its key and keeps it, so no second phone is created.
+- Print a short **QR code page** link (`http://127.0.0.1:PORT/#qr=CODE`) and end `setup` and `pair` output with what an agent should hand to the person. The website prompt asks the agent for that link.
+- Simplify the QR code page: the code, link and address sit behind **Cannot scan?**.
+- Open a scanned or pasted pairing link for an app the computer serves itself (the Tailscale route without HTTPS) instead of rejecting it and asking for an address.
+- Replace a background bridge started by an older release on the next command.
+- Keep an existing pairing when a paired phone opens a new pairing link.
+
+Fixes the first-run problems reported on 13 November: `setup` chose Tailscale because it was running on the computer, the phone was not on that tailnet, and the hosted app's scanner refused the resulting `http` link and asked for a code and an address.
+
+Not yet verified: any of this on a physical phone, including the address update carried by a real notification.
+
 ## 12 November 2026
 
 ### Connect, onboarding and interface overhaul

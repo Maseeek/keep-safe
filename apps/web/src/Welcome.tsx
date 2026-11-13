@@ -82,7 +82,7 @@ export function Welcome({ workspace, onDemo, onOwnerToken, onPaired }: { workspa
         {workspace.pairingError ? <>
           <h1 id="welcome-title">That code did not work</h1>
           <p className="welcome-lead">{workspace.pairingError}</p>
-          <p>Codes last ten minutes and work once. On your computer, run <code>keep-safe pair</code> for a new one.</p>
+          <p>Codes last ten minutes and work once. On your computer, run <code>keep-safe pair</code> for a new one, or ask your agent to.</p>
           <PairForm workspace={workspace} onPaired={onPaired} />
           <button className="text-link" onClick={() => { workspace.dropPendingInvite(); workspace.clearPairingError(); setStep("intro"); }}>Start over</button>
         </> : <>
@@ -135,7 +135,7 @@ export function Welcome({ workspace, onDemo, onOwnerToken, onPaired }: { workspa
         <section className="welcome-step" aria-labelledby="welcome-title">
           <span className="welcome-icon"><MonitorSmartphone size={26} strokeWidth={1.6} aria-hidden="true" /></span>
           <h1 id="welcome-title">Set up your computer</h1>
-          <p className="welcome-lead">On the computer your agents run on, paste this into any coding agent. It installs Keep Safe and shows a QR code.</p>
+          <p className="welcome-lead">On the computer your agents run on, paste this into any coding agent. It installs Keep Safe and opens a page with a QR code.</p>
           <PromptCard compact />
           <div className="welcome-actions">
             <button className="button button-dark button-large" onClick={next}>I can see the QR code <ArrowRight size={18} aria-hidden="true" /></button>
@@ -145,7 +145,7 @@ export function Welcome({ workspace, onDemo, onOwnerToken, onPaired }: { workspa
         <section className="welcome-step" aria-labelledby="welcome-title">
           <span className="welcome-icon"><KeyRound size={26} strokeWidth={1.6} aria-hidden="true" /></span>
           <h1 id="welcome-title">Pair this phone</h1>
-          <p className="welcome-lead">Scan the QR code on your computer. The code works once and expires in ten minutes.</p>
+          <p className="welcome-lead">Scan the QR code on your computer. One scan is all it takes, on Wi-Fi or mobile data.</p>
           <PairForm workspace={workspace} onPaired={onPaired} />
           <button className="text-link" onClick={onOwnerToken}>Use an owner token instead</button>
         </section>
@@ -187,15 +187,15 @@ function DesktopWelcome({ workspace, onDemo, onOwnerToken, onPaired }: { workspa
         <HandoffArt />
       </section>
       <section className="landing-steps" aria-label="How it works">
-        <article><span>1</span><h2>Paste the prompt</h2><p>Your agent installs Keep Safe on this computer, connects it to your agents and opens a QR code.</p></article>
-        <article><span>2</span><h2>Scan with your phone</h2><p>The phone pairs with a one-time code. With Tailscale the connection stays private and never changes.</p></article>
+        <article><span>1</span><h2>Paste the prompt</h2><p>Your agent installs Keep Safe on this computer and connects it to your agents. It takes a minute or two.</p></article>
+        <article><span>2</span><h2>Scan the QR code</h2><p>A page with a QR code opens on this computer. Point your phone camera at it. One scan pairs the phone, with nothing else to install or type.</p></article>
         <article><span>3</span><h2>Approve from anywhere</h2><p>An agent asks, your phone pings, you sign in on the live page and hand the browser back.</p></article>
       </section>
       <section className="landing-phone">
         <QrCode value={window.location.origin} label="QR code that opens Keep Safe on your phone" />
         <div>
           <h2>Starting on your phone?</h2>
-          <p>Scan this to open Keep Safe there. It walks you through adding it to your Home Screen, then asks for the QR code your computer shows.</p>
+          <p>This code only opens Keep Safe on your phone. It walks you through adding it to your Home Screen. The code that pairs your phone appears after you paste the prompt above.</p>
           <div className="landing-links">
             <button className="text-link" onClick={() => setPairing(!pairing)} aria-expanded={pairing}><Bell size={14} aria-hidden="true" /> Pair this browser with a code</button>
             <button className="text-link" onClick={onOwnerToken}>Use an owner token</button>

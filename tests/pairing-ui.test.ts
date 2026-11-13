@@ -131,11 +131,15 @@ describe('pairing and onboarding', () => {
     const page = await context.newPage();
     try {
       const code = await invite();
-      const link = `${bridge.url}/#pair=${code}`;
-      await page.goto(`${bridge.url}/#${new URLSearchParams({ desk: link })}`);
+      // The short address a person clicks in a chat: the page asks the bridge for the link.
+      await page.goto(`${bridge.url}/#qr=${code}`);
       await page.getByRole('heading', { name: 'Scan with your phone', exact: true }).waitFor();
       await page.getByRole('img', { name: 'Pairing QR code', exact: true }).waitFor();
+      // Nothing to type by default: the code and link sit behind one disclosure.
+      expect(await page.locator('.desk-code strong').isVisible()).toBe(false);
+      await page.getByText('Cannot scan?', { exact: true }).click();
       expect(await page.locator('.desk-code strong').innerText()).toBe(`${code.slice(0, 4)}-${code.slice(4)}`);
+      await page.getByRole('button', { name: 'Copy pairing link', exact: true }).waitFor();
       // The page holds no key: it only watches the code it was given.
       expect(await page.content()).not.toContain(ownerToken);
       const claim = await fetch(`${bridge.url}/api/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Pocket phone' }) });
@@ -143,10 +147,90 @@ describe('pairing and onboarding', () => {
       await page.getByRole('heading', { name: 'Pocket phone is paired', exact: true }).waitFor();
       expect(await page.getByRole('img', { name: 'Pairing QR code', exact: true }).count()).toBe(0);
 
+      // The longer form that carries the whole link still works.
+      const next = await invite();
+      await page.goto(`${bridge.url}/#${new URLSearchParams({ desk: `${bridge.url}/#pair=${next}` })}`);
+      await page.reload();
+      await page.getByRole('img', { name: 'Pairing QR code', exact: true }).waitFor();
       // A link that is not a pairing link is ignored rather than drawn as a QR code.
       await page.goto(`${bridge.url}/#${new URLSearchParams({ desk: 'https://example.com/phish' })}`);
       await page.reload();
       await page.getByRole('heading', { level: 1 }).filter({ hasText: 'Your agent hit a login page.' }).waitFor();
+    } finally { await context.close(); await bridge.close(); }
+  });
+
+  it('keeps the same phone when it scans again, and follows the computer to a new address', async () => {
+    const { bridge, invite } = await start();
+    const context = await browser.newContext(phone);
+    const page = await context.newPage();
+    const devices = async () => (await (await fetch(`${bridge.url}/api/devices`, { headers: { Authorization: `Bearer ${ownerToken}` } })).json() as { devices: { id: string }[] }).devices;
+    try {
+      await page.goto(`${bridge.url}/#pair=${await invite()}`);
+      await page.getByRole('heading', { name: 'Paired with test-desk', exact: true }).waitFor();
+      const first = JSON.parse((await stored(page)).local!) as { token: string; url: string; source: string; device: { id: string } };
+      expect(first.source).toBe(bridge.info.vapidPublicKey ?? first.source);
+
+      // Scanning a second code on a paired phone re-links it: same key, same entry.
+      await page.goto(`${bridge.url}/#pair=${await invite()}`);
+      await page.reload();
+      await page.getByRole('heading', { name: 'Paired with test-desk', exact: true }).waitFor();
+      const second = JSON.parse((await stored(page)).local!) as { token: string; device: { id: string } };
+      expect(second.token).toBe(first.token);
+      expect(second.device.id).toBe(first.device.id);
+      expect(await devices()).toHaveLength(1);
+
+      // The computer's address changed while the phone was away. A notification
+      // left the new one behind, so the phone finds its way without pairing again.
+      const source = 'B' + 'A'.repeat(86);
+      const moved = `http://localhost:${new URL(bridge.url).port}`;
+      await page.evaluate(async ({ key, record, source }) => {
+        const saved = JSON.parse(localStorage.getItem(key)!);
+        localStorage.setItem(key, JSON.stringify({ ...saved, url: 'http://127.0.0.1:9', source }));
+        sessionStorage.clear();
+        await (await caches.open('keep-safe-link-v1')).put('/__keep-safe/link', new Response(JSON.stringify(record)));
+      }, { key: deviceKey, source, record: { sourceKey: source, url: moved, at: Date.now() } });
+      await page.goto(bridge.url);
+      await page.reload();
+      await page.getByText('Bridge connected', { exact: true }).waitFor({ timeout: 20_000 });
+      const followed = JSON.parse((await stored(page)).local!) as { token: string; url: string };
+      expect(followed.url).toBe(moved);
+      expect(followed.token).toBe(first.token);
+      expect(await devices()).toHaveLength(1);
+
+      // An address from some other computer's notification is ignored.
+      await page.evaluate(async ({ key }) => {
+        const saved = JSON.parse(localStorage.getItem(key)!);
+        localStorage.setItem(key, JSON.stringify({ ...saved, url: 'http://127.0.0.1:9' }));
+        sessionStorage.clear();
+        await (await caches.open('keep-safe-link-v1')).put('/__keep-safe/link', new Response(JSON.stringify({ sourceKey: 'C' + 'A'.repeat(86), url: 'http://localhost:1', at: Date.now() })));
+      }, { key: deviceKey });
+      await page.reload();
+      await page.getByText('Looking for your computer…', { exact: true }).waitFor({ timeout: 20_000 });
+      await page.getByRole('button', { name: /Scan new code/ }).waitFor();
+      expect((JSON.parse((await stored(page)).local!) as { url: string }).url).toBe('http://127.0.0.1:9');
+    } finally { await context.close(); await bridge.close(); }
+  });
+
+  it('opens a pairing link for an app the computer serves itself instead of rejecting it', async () => {
+    const { bridge } = await start();
+    const context = await browser.newContext(phone);
+    const page = await context.newPage();
+    try {
+      await page.route('http://100.100.100.100:4318/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>App on the computer</h1>' }));
+      await page.goto(bridge.url);
+      await page.getByRole('button', { name: /Get started/ }).click();
+      await page.getByRole('button', { name: /I can see the QR code/ }).click();
+      await page.getByLabel('Pairing code or link', { exact: true }).fill('http://100.100.100.100:4318/#pair=ABCD2345');
+      await page.getByRole('button', { name: 'Pair this phone', exact: true }).click();
+      await page.getByRole('heading', { name: 'App on the computer', exact: true }).waitFor();
+      // Anything else is refused with a plain message, and nothing is opened.
+      await page.goto(bridge.url);
+      await page.getByRole('button', { name: /Get started/ }).click();
+      await page.getByRole('button', { name: /I can see the QR code/ }).click();
+      await page.getByLabel('Pairing code or link', { exact: true }).fill('https://example.com/#token=abc');
+      await page.getByRole('button', { name: 'Pair this phone', exact: true }).click();
+      await page.getByRole('alert').filter({ hasText: 'That is not a Keep Safe pairing code.' }).waitFor();
+      expect(new URL(page.url()).origin).toBe(bridge.url);
     } finally { await context.close(); await bridge.close(); }
   });
 

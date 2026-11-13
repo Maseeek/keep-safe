@@ -7,10 +7,12 @@ Keys and state live in `~/.keep-safe`. Change that with `--config-dir PATH` or `
 ## setup
 
 ```bash
-keep-safe setup [--route auto|tailscale|cloudflare|local] [--port NUMBER] [--no-agents] [--agents claude,codex] [--no-open] [--json]
+keep-safe setup [--route auto|tailscale|local] [--port NUMBER] [--no-agents] [--agents claude,codex] [--no-open] [--json]
 ```
 
-Installs Chromium if needed, starts Keep Safe in the background, registers the MCP server with agent CLIs, and shows a pairing QR code. It is safe to run again: an existing bridge and existing registrations are kept.
+Installs Chromium if needed, starts Keep Safe in the background with a secure public link for the phone, registers the MCP server with agent CLIs, and shows a pairing QR code in the terminal and in a browser window. It is safe to run again: an existing bridge and existing registrations are kept.
+
+When an agent runs `setup` for you, you cannot see its terminal. The output ends with the **QR code page** link for the agent to pass on, such as `http://127.0.0.1:4318/#qr=ABCD2345`.
 
 - `--no-agents` skips registration. `--agents claude` limits it to the named CLIs.
 - Registration runs `claude mcp add --scope user keep-safe -- <command>` and `codex mcp add keep-safe -- <command>` when those CLIs are installed and no `keep-safe` server is registered yet. Nothing else in your agent configuration is touched.
@@ -22,7 +24,7 @@ Installs Chromium if needed, starts Keep Safe in the background, registers the M
 keep-safe pair [--no-open] [--no-wait] [--json]
 ```
 
-Starts Keep Safe if it is not running, creates a one-time code, and prints a QR code, link and code. In a terminal it waits until a phone uses the code. `keep-safe` with no command does the same.
+Starts Keep Safe if it is not running, creates a one-time code, opens the QR code page in a browser, and prints the QR code, the QR code page link and the pairing link. In a terminal it waits until a phone uses the code. `keep-safe` with no command does the same.
 
 ## up, down, status
 
@@ -32,9 +34,13 @@ keep-safe down
 keep-safe status [--json]
 ```
 
-`up` starts the bridge as a background process and records it in `daemon.json`. It reuses a running bridge unless `--restart` is given or the route or port differs. A restart keeps the same kind of route unless you pass `--route`.
+`up` starts the bridge as a background process and records it in `daemon.json`. It reuses a running bridge unless `--restart` is given, the route or port differs, or the bridge was started by an older Keep Safe release. A restart keeps the route you chose unless you pass `--route`.
 
-`down` stops the bridge, the Cloudflare tunnel if one was started, and the Tailscale Serve entry Keep Safe created. Stopping closes managed browsers and clears the in-memory request queue, so finish any active handoff first.
+Routes: `auto` (the default) opens a secure public link through a Cloudflare quick tunnel, fetching `cloudflared` into `~/.keep-safe/bin` the first time. `tailscale` keeps the connection inside your tailnet. `local` serves this computer only. `KEEP_SAFE_ROUTE` sets the default, and `KEEP_SAFE_CLOUDFLARED` points at a `cloudflared` program to use instead of fetching one. The [connection guide](connection.md#routes) compares them.
+
+The tunnel runs as its own process and is left running across `up --restart`, so the phone's address survives restarts and updates. The bridge replaces it if it ends.
+
+`down` stops the bridge, the tunnel, and the Tailscale Serve entry Keep Safe created. Stopping closes managed browsers and clears the in-memory request queue, so finish any active handoff first.
 
 `up` clears a lock left by a crashed bridge when the process named in the lock is gone, the lock was written on this computer, and nothing answers on the port. Any other lock is left alone.
 

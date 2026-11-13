@@ -57,6 +57,8 @@ export interface PairingCode {
   /** Eight characters, shown grouped as XXXX-XXXX. Single use. */
   code: string;
   expiresAt: string;
+  /** What the phone opens or scans. Carries the code and this computer's address, never a key. */
+  link?: string;
 }
 
 export type PairingState = 'waiting' | 'claimed' | 'expired';

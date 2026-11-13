@@ -54,6 +54,8 @@ Finished requests are listed with their outcome. **Export** saves the list as a 
 
 Shows the computer you are paired with, its address, and the phones paired with it. **Pair again** opens the scanner and code entry. **Forget this phone** removes this phone's key. **Revoke** removes another phone. The card at the bottom has the setup prompt for another computer.
 
+If the app shows **Looking for your computer**, the computer is asleep, Keep Safe is not running there, or its address changed after a restart. With notifications on, the next request brings the new address and the app reconnects. Otherwise choose **Scan new code** and scan the code from `keep-safe pair`. Your phone keeps its place in the list.
+
 **Update pairing** connects with an owner token. It is for advanced setups and for older bridges that have no pairing codes.
 
 ## Settings

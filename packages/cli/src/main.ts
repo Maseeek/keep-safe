@@ -34,7 +34,7 @@ Checks
   rotate-keys      Replace keys (stop Keep Safe first)
 
 Options
-  --route auto|tailscale|cloudflare|local   How your phone reaches this computer (default auto)
+  --route auto|tailscale|local   How your phone reaches this computer (default auto: a secure public link)
   --port NUMBER          Local port (default 4318)
   --config-dir PATH      Where keys and state live (default ~/.keep-safe)
   --restart              Restart even if already running
@@ -44,7 +44,8 @@ Options
   --agents LIST          setup: only these agent CLIs (claude,codex)
   --json                 Machine-readable output
 
-Tailscale is used when it is running: private, encrypted, and the address never changes.
+By default any phone can pair with one scan, on any network. Nothing is installed on the phone.
+Use --route tailscale to keep the connection inside your own Tailscale network instead.
 Docs: https://github.com/Maseeek/keep-safe#readme`;
 
 const valued = new Set(['--route', '--port', '--config-dir', '--agents']);
@@ -72,7 +73,7 @@ function parse(args: string[]) {
 type Options = ReturnType<typeof parse>;
 
 const routeLabel = (state: DaemonState) => ({
-  'tailscale-https': 'Tailscale (private, HTTPS)', tailscale: 'Tailscale (private)', cloudflare: 'Cloudflare temporary tunnel', local: 'this computer only',
+  'tailscale-https': 'Tailscale (private, HTTPS)', tailscale: 'Tailscale (private)', cloudflare: 'secure public link', local: 'this computer only',
 })[state.route.kind];
 
 async function ensureBrowser(log: (line: string) => void): Promise<boolean> {
@@ -89,21 +90,21 @@ async function ensureBrowser(log: (line: string) => void): Promise<boolean> {
   return code === 0 && browserAvailable();
 }
 
-function printInvitation(invitation: Invitation, state: DaemonState, opened: boolean) {
+const address = (state: DaemonState) => state.route.publicUrl || 'still opening';
+
+function printInvitation(invitation: Invitation, opened: boolean) {
   const minutes = Math.max(1, Math.round((Date.parse(invitation.expiresAt) - Date.now()) / 60_000));
-  console.log(`\nPair your phone\n\n${terminalQr(invitation.link)}\n`);
-  console.log(`  Scan the QR code with your phone camera, or open this link on the phone:\n  ${invitation.link}\n`);
-  console.log(`  Pairing code: ${invitation.display}   (single use, valid ${minutes} minutes)`);
-  if (state.route.appUrl !== state.route.publicUrl) console.log(`  Typing it in instead? Computer address: ${state.route.publicUrl}`);
-  if (opened) console.log('\n  The same QR code is open in a browser window on this computer.');
-  else console.log(`\n  To show the QR code in a browser on this computer, open:\n  ${invitation.desktopUrl}`);
+  console.log(`\nPAIR YOUR PHONE   (one scan, valid ${minutes} minutes)\n\n${terminalQr(invitation.link)}\n`);
+  console.log('  Scan the QR code with your phone camera. That is the whole setup.\n');
+  console.log(`  QR code page (open on this computer${opened ? ', already opened in your browser' : ''}):\n  ${invitation.desktopUrl}\n`);
+  console.log(`  Pairing link (open on the phone instead of scanning):\n  ${invitation.link}`);
 }
 
 async function pairFlow(options: Options, state: DaemonState, wait: boolean) {
   const invitation = await invite(options.directory, state);
   const opened = !options.flags.has('--no-open') && openInBrowser(invitation.desktopUrl);
   if (options.flags.has('--json')) return { invitation, opened };
-  printInvitation(invitation, state, opened);
+  printInvitation(invitation, opened);
   if (wait) {
     console.log('\nWaiting for your phone... (Ctrl+C to stop waiting; the code stays valid)');
     const result = await waitForPhone(state, invitation);
@@ -120,9 +121,9 @@ async function setup(options: Options) {
   const json = options.flags.has('--json');
   const say = (line: string) => { if (!json) console.log(line); };
   const browser = await ensureBrowser(line => (json ? console.error(line) : console.log(line)));
-  const { state, started } = await up({ directory: options.directory, port: options.port, route: options.route, restart: options.flags.has('--restart'), allowLocalUrls: options.flags.has('--allow-local-urls') });
+  const { state, started } = await up({ directory: options.directory, port: options.port, route: options.route, restart: options.flags.has('--restart'), allowLocalUrls: options.flags.has('--allow-local-urls'), log: line => console.error(line) });
   say(`Keep Safe ${started ? 'is now running' : 'was already running'} in the background.\n`);
-  say(`  Phone address   ${state.route.publicUrl}   (${routeLabel(state)})`);
+  say(`  Phone address   ${address(state)}   (${routeLabel(state)})`);
   if (!browser) say('  Browser         Chromium could not be installed. Run: npx playwright install chromium');
   const agents = options.flags.has('--no-agents') ? [] : await registerAgents(options.directory, options.agents);
   if (agents.length) say(`  Agents          ${agents.map(agentLine).join(' · ')}`);
@@ -133,7 +134,7 @@ async function setup(options: Options) {
   for (const note of state.route.notes) console.log(`\n  Note: ${note}`);
   console.log(`\nOther MCP clients (Cursor, T3 Code, Antigravity and so on) can use this configuration:\n${snippet}`);
   console.log('\nNext: scan the QR code. Then ask an agent to "use Keep Safe to sign in to a website" to try it, or run: keep-safe rehearse');
-  console.log('If you are an AI agent running this for someone: show them the link and pairing code above, or point them at the browser window with the QR code.');
+  console.log(`\nIf you are an AI agent running this for someone: they cannot see this terminal. Give them this link to click, and tell them to scan the QR code on that page with their phone camera:\n${invitation.desktopUrl}`);
 }
 
 async function status(options: Options) {
@@ -141,7 +142,7 @@ async function status(options: Options) {
   const phones = state ? await bridgeStatus(options.directory, state.port) : undefined;
   if (options.flags.has('--json')) { console.log(JSON.stringify({ running: !!state, ...(state ? { port: state.port, route: state.route, startedAt: state.startedAt, ...phones } : {}) }, null, 2)); return; }
   if (!state) { console.log('Keep Safe is not running. Start it with: keep-safe up'); return; }
-  console.log(`Keep Safe is running (since ${new Date(state.startedAt).toLocaleString()}).\n\n  Phone address   ${state.route.publicUrl}   (${routeLabel(state)})\n  Local address   http://127.0.0.1:${state.port}\n  Paired phones   ${phones?.phones ?? 'unknown'}${phones && !phones.phones ? '   (run keep-safe pair)' : ''}\n  Notifications   ${phones ? `${phones.notifications} phone${phones.notifications === 1 ? '' : 's'}` : 'unknown'}\n  Browser         ${phones?.browserAvailable === false ? 'missing (run keep-safe setup)' : 'ready'}`);
+  console.log(`Keep Safe is running (since ${new Date(state.startedAt).toLocaleString()}).\n\n  Phone address   ${address(state)}   (${routeLabel(state)})\n  Local address   http://127.0.0.1:${state.port}\n  Paired phones   ${phones?.phones ?? 'unknown'}${phones && !phones.phones ? '   (run keep-safe pair)' : ''}\n  Notifications   ${phones ? `${phones.notifications} phone${phones.notifications === 1 ? '' : 's'}` : 'unknown'}\n  Browser         ${phones?.browserAvailable === false ? 'missing (run keep-safe setup)' : 'ready'}`);
   for (const note of state.route.notes) console.log(`\n  Note: ${note}`);
 }
 
@@ -200,7 +201,7 @@ async function main() {
   }
   const options = parse(command.startsWith('--') ? [command, ...rest] : rest);
   const json = options.flags.has('--json');
-  const startOptions = { directory: options.directory, port: options.port, route: options.route, restart: options.flags.has('--restart'), allowLocalUrls: options.flags.has('--allow-local-urls') };
+  const startOptions = { directory: options.directory, port: options.port, route: options.route, restart: options.flags.has('--restart'), allowLocalUrls: options.flags.has('--allow-local-urls'), log: (line: string) => console.error(line) };
   switch (command.startsWith('--') ? 'connect' : command) {
     case 'setup': await setup(options); return;
     case 'mcp': await mcp(options); return;
@@ -213,17 +214,17 @@ async function main() {
     case 'up': {
       const { state, started } = await up(startOptions);
       if (json) { console.log(JSON.stringify({ running: true, started, port: state.port, route: state.route }, null, 2)); return; }
-      console.log(`Keep Safe ${started ? 'is now running' : 'was already running'} in the background.\n\n  Phone address   ${state.route.publicUrl}   (${routeLabel(state)})`);
+      console.log(`Keep Safe ${started ? 'is now running' : 'was already running'} in the background.\n\n  Phone address   ${address(state)}   (${routeLabel(state)})`);
       for (const note of state.route.notes) console.log(`\n  Note: ${note}`);
       console.log('\nPair a phone with: keep-safe pair');
       return;
     }
     case 'pair': case 'connect': {
       const { state, started } = await up(startOptions);
-      if (!json && started) console.log(`Keep Safe is now running in the background. Phone address: ${state.route.publicUrl} (${routeLabel(state)})`);
+      if (!json && started) console.log(`Keep Safe is now running in the background. Phone address: ${address(state)} (${routeLabel(state)})`);
       const result = await pairFlow(options, state, !options.flags.has('--no-wait') && !json && process.stdout.isTTY === true);
       if (json) console.log(JSON.stringify({ running: true, started, port: state.port, route: state.route, ...result }, null, 2));
-      else for (const note of state.route.notes) console.log(`\n  Note: ${note}`);
+      else if (!process.stdout.isTTY) console.log(`\nIf you are an AI agent running this for someone: they cannot see this terminal. Give them this link to click, and tell them to scan the QR code on that page with their phone camera:\n${result.invitation.desktopUrl}`);
       return;
     }
     default: throw new CliError(`Unknown command ${command}. Run keep-safe help.`);
