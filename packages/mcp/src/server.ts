@@ -33,7 +33,7 @@ export function createMcpServer(client: LoginClient) {
     const request = await client.create({ ...input, cdpUrl: cdp_url, ttlSeconds: ttl_seconds });
     const status = await client.status?.();
     return result(request, status?.phones === 0
-      ? 'No phone is paired with this computer, so nobody will see this request. Run "npx -y github:Maseeek/keep-safe pair --no-wait" on this computer, give the owner the "QR code page" link from its output to click, and ask them to scan the QR code on that page with their phone camera. The request stays open until it expires.'
+      ? 'No phone is paired with this computer, so nobody will see this request. Run "npx -y github:Maseeek/keep-safe pair --no-wait" on this computer, give the owner the "QR code page" link from its output to click, and ask them to scan the QR code on that page with their phone camera. If your client can show HTML inline, add --html FILE and show the owner that file instead of the link. The request stays open until it expires.'
       : status && status.notifications === 0 ? 'A phone is paired but has notifications off. Tell the owner to open Keep Safe on their phone to approve this request.' : undefined);
   });
 

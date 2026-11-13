@@ -502,3 +502,14 @@ The owner asked an agent to sign in to Stripe through Keep Safe. `request_login`
 - Typecheck and 413 tests in 45 files pass locally. Two of the tests are new, and both fail against the previous code. One drives a real stdio MCP server with another setup's key. The other replaces the agent key under a running `keep-safe mcp` server.
 
 Not changed: `keep-safe setup` still reports an existing Keep Safe entry as "already set up" without checking which form it uses. Codex entries added by `setup` get Codex's default tool timeout, which can be shorter than `wait_for_login`'s 120 seconds.
+
+## Inline QR code in T3 Code on 13 November 2026
+
+The owner asked for the pairing QR code to appear inside T3 Code through its own display tools, instead of as a link to open.
+
+- `keep-safe pair --html FILE` (and `setup`) writes the QR code as a self-contained HTML page: an SVG code kept black on white, no page background, T3's theme variables, no scripts and no outside resources. The file is owner-only and holds the one-time pairing link and nothing else. `--json` reports its path as `html`.
+- Agent hand-off text and the MCP no-phone message tell agents in clients that show HTML inline to use the option.
+- Real run against the owner's running bridge on the default route: T3's `html_preview` showed the page, jsQR decoded the preview screenshot back to the exact pairing link, and `html_render` displayed it in the thread.
+- Typecheck and 414 tests in 45 files pass locally. One test is new and the pairing CLI test now covers the HTML file, its file mode and that it carries no key.
+
+Not verified: a phone scanning the code rendered in T3 Code.
