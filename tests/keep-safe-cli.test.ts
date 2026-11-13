@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { startLoginFixture } from './fixtures/login-site';
-import { terminalQr } from '../packages/cli/src/qr';
+import { qrHtml, svgQr, terminalQr } from '../packages/cli/src/qr';
 
 const bin = resolve('bin/keep-safe.mjs');
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -40,6 +40,17 @@ describe('keep-safe command', () => {
     expect(lines.length).toBeGreaterThan(10);
     expect(new Set(lines.map(line => line.length)).size).toBe(1);
     expect(lines.join('')).toMatch(/^[█▀▄ ]+$/);
+  });
+
+  it('draws an inline HTML QR page that keeps its own contrast and carries only the pairing link', () => {
+    const link = 'https://keep-safe-eight.vercel.app/#pair=ABCD2345&bridge=https%3A%2F%2Fx.trycloudflare.com';
+    expect(svgQr(link)).toMatch(/^<svg [^>]*viewBox="0 0 (\d+) \1"[^>]*><rect width="\1" height="\1" fill="#fff"\/><path d="(M\d+ \d+h\d+v1h-\d+z)+" fill="#000"\/><\/svg>$/);
+    const page = qrHtml(link, new Date(Date.now() + 600_000).toISOString());
+    expect(page).toMatch(/^<!doctype html>/);
+    expect(page).toContain(link.replaceAll('&', '&#38;'));
+    // html_render puts it on the thread background: no page background, no remote resources, no viewport heights.
+    expect(page).not.toMatch(/(html|body)\s*\{[^}]*background/);
+    expect(page).not.toMatch(/\b(src|href)=|url\(|@import|\bvh\b|<script/);
   });
 
   it('starts a background bridge, pairs a phone with a one-time code, and stops', async () => {
@@ -77,6 +88,15 @@ describe('keep-safe command', () => {
     // An agent relays the output, so it is told what to hand over.
     expect(human).toContain('If you are an AI agent running this for someone');
     expect(human).toMatch(/[█▀▄]{10,}/);
+
+    const htmlFile = join(directory, 'pair.html');
+    const withHtml = JSON.parse((await run(['pair', '--json', '--no-open', '--html', htmlFile, ...common])).stdout) as { html: string; invitation: { link: string } };
+    expect(withHtml.html).toBe(htmlFile);
+    const page = await readFile(htmlFile, 'utf8');
+    expect(page).toContain(withHtml.invitation.link);
+    expect(page).not.toContain(config.ownerToken);
+    expect(page).not.toContain(config.agentToken);
+    expect((await stat(htmlFile)).mode & 0o077).toBe(0);
 
     expect((await run(['down', ...common])).stdout).toContain('Keep Safe stopped.');
     expect(JSON.parse((await run(['status', '--json', ...common])).stdout)).toEqual({ running: false });

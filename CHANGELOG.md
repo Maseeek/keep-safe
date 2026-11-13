@@ -2,6 +2,10 @@
 
 ## 13 November 2026
 
+### Inline QR code for agent clients
+
+- Add `--html FILE` to `pair` and `setup`. It writes the pairing QR code as a self-contained HTML page that clients with inline HTML rendering, such as T3 Code's `html_render`, can show in the conversation. The page holds only the one-time pairing link, and the file is owner-only. Agent hand-off text and the MCP no-phone message mention the option.
+
 ### Agent key mismatch
 
 - Explain a refused agent key correctly. The MCP tools used to say "Use the agent token, not the owner pairing token", which was wrong. The usual cause is an older checkout MCP entry, which reads `<checkout>/.keep-safe` while the `keep-safe` command's bridge on the same port uses `~/.keep-safe`. The error now says so, names the MCP entry to use instead and tells the agent never to ask for a key.

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
+import { chmod, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { browserAvailable } from '../../bridge/src/browser';
 import { ConfigError } from '../../bridge/src/config';
@@ -11,7 +12,7 @@ import { mcpSnippet, registerAgents, type Registration } from './agents';
 import { bridgeStatus, CliError, down, ownerConfig, readState, running, up, type DaemonState } from './daemon';
 import { invite, openInBrowser, waitForPhone, type Invitation } from './pairing';
 import { bridgeCli, configDirectory, tsxLoader } from './paths';
-import { terminalQr } from './qr';
+import { qrHtml, terminalQr } from './qr';
 import type { RouteChoice } from './routes';
 
 const help = `Keep Safe: sign in to websites for your coding agents, from your phone.
@@ -40,6 +41,8 @@ Options
   --restart              Restart even if already running
   --no-open              Do not open the QR page in a desktop browser
   --no-wait              Print the QR code and return without waiting for the phone
+  --html FILE            Also write the QR code as a self-contained HTML page, for clients
+                         that show HTML inline (T3 Code's html_render, for example)
   --no-agents            setup: do not register the MCP server with agent CLIs
   --agents LIST          setup: only these agent CLIs (claude,codex)
   --json                 Machine-readable output
@@ -48,7 +51,7 @@ By default any phone can pair with one scan, on any network. Nothing is installe
 Use --route tailscale to keep the connection inside your own Tailscale network instead.
 Docs: https://github.com/Maseeek/keep-safe#readme`;
 
-const valued = new Set(['--route', '--port', '--config-dir', '--agents']);
+const valued = new Set(['--route', '--port', '--config-dir', '--agents', '--html']);
 const switches = new Set(['--restart', '--no-open', '--no-wait', '--no-agents', '--json', '--allow-local-urls', '--help', '-h']);
 
 function parse(args: string[]) {
@@ -67,6 +70,7 @@ function parse(args: string[]) {
     port: values.has('--port') ? connectionPort(values.get('--port')!) : undefined,
     route: route as RouteChoice | undefined,
     agents: values.get('--agents')?.split(',').map(item => item.trim()).filter(Boolean),
+    html: values.has('--html') ? resolve(values.get('--html')!) : undefined,
     flags,
   };
 }
@@ -103,14 +107,21 @@ function printInvitation(invitation: Invitation, opened: boolean) {
 async function pairFlow(options: Options, state: DaemonState, wait: boolean) {
   const invitation = await invite(options.directory, state);
   const opened = !options.flags.has('--no-open') && openInBrowser(invitation.desktopUrl);
-  if (options.flags.has('--json')) return { invitation, opened };
+  // Owner-only file: it holds a live one-time code, never a key.
+  if (options.html) {
+    await writeFile(options.html, qrHtml(invitation.link, invitation.expiresAt), { mode: 0o600 });
+    await chmod(options.html, 0o600);
+  }
+  const html = options.html ? { html: options.html } : {};
+  if (options.flags.has('--json')) return { invitation, opened, ...html };
   printInvitation(invitation, opened);
+  if (options.html) console.log(`\n  QR code as an HTML page (show it inline if your client can render HTML):\n  ${options.html}`);
   if (wait) {
     console.log('\nWaiting for your phone... (Ctrl+C to stop waiting; the code stays valid)');
     const result = await waitForPhone(state, invitation);
     console.log(result.state === 'claimed' ? `\nPaired: ${result.name ?? 'your phone'}. You can close this.` : '\nThe code expired before a phone used it. Run keep-safe pair for a new one.');
   }
-  return { invitation, opened };
+  return { invitation, opened, ...html };
 }
 
 function agentLine(result: Registration) {
@@ -129,12 +140,12 @@ async function setup(options: Options) {
   if (agents.length) say(`  Agents          ${agents.map(agentLine).join(' · ')}`);
   const snippet = await mcpSnippet(options.directory);
   const status = await bridgeStatus(options.directory, state.port);
-  const { invitation, opened } = await pairFlow(options, state, false);
-  if (json) { console.log(JSON.stringify({ running: true, started, port: state.port, route: state.route, browser, agents, phones: status?.phones ?? 0, invitation, opened, mcp: JSON.parse(snippet) }, null, 2)); return; }
+  const { invitation, opened, html } = await pairFlow(options, state, false);
+  if (json) { console.log(JSON.stringify({ running: true, started, port: state.port, route: state.route, browser, agents, phones: status?.phones ?? 0, invitation, opened, ...(html ? { html } : {}), mcp: JSON.parse(snippet) }, null, 2)); return; }
   for (const note of state.route.notes) console.log(`\n  Note: ${note}`);
   console.log(`\nOther MCP clients (Cursor, T3 Code, Antigravity and so on) can use this configuration:\n${snippet}`);
   console.log('\nNext: scan the QR code. Then ask an agent to "use Keep Safe to sign in to a website" to try it, or run: keep-safe rehearse');
-  console.log(`\nIf you are an AI agent running this for someone: they cannot see this terminal. Give them this link to click, and tell them to scan the QR code on that page with their phone camera:\n${invitation.desktopUrl}`);
+  console.log(`\nIf you are an AI agent running this for someone: they cannot see this terminal. Give them this link to click, and tell them to scan the QR code on that page with their phone camera. If your client can show HTML inline, run keep-safe pair --no-wait --no-open --html FILE and show them that file instead:\n${invitation.desktopUrl}`);
 }
 
 async function status(options: Options) {
@@ -226,7 +237,7 @@ async function main() {
       if (!json && started) console.log(`Keep Safe is now running in the background. Phone address: ${address(state)} (${routeLabel(state)})`);
       const result = await pairFlow(options, state, !options.flags.has('--no-wait') && !json && process.stdout.isTTY === true);
       if (json) console.log(JSON.stringify({ running: true, started, port: state.port, route: state.route, ...result }, null, 2));
-      else if (!process.stdout.isTTY) console.log(`\nIf you are an AI agent running this for someone: they cannot see this terminal. Give them this link to click, and tell them to scan the QR code on that page with their phone camera:\n${result.invitation.desktopUrl}`);
+      else if (!process.stdout.isTTY) console.log(`\nIf you are an AI agent running this for someone: they cannot see this terminal. Give them this link to click, and tell them to scan the QR code on that page with their phone camera. If your client can show HTML inline, run keep-safe pair --no-wait --no-open --html FILE and show them that file instead:\n${result.invitation.desktopUrl}`);
       return;
     }
     default: throw new CliError(`Unknown command ${command}. Run keep-safe help.`);

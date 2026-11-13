@@ -21,10 +21,12 @@ When an agent runs `setup` for you, you cannot see its terminal. The output ends
 ## pair
 
 ```bash
-keep-safe pair [--no-open] [--no-wait] [--json]
+keep-safe pair [--no-open] [--no-wait] [--html FILE] [--json]
 ```
 
 Starts Keep Safe if it is not running, creates a one-time code, opens the QR code page in a browser, and prints the QR code, the QR code page link and the pairing link. In a terminal it waits until a phone uses the code. `keep-safe` with no command does the same.
+
+`--html FILE` also writes the QR code as a self-contained HTML page (owner-only file mode), and `--json` reports its path as `html`. Agents in clients that show HTML inline, such as T3 Code's `html_preview` and `html_render` tools, can show that page in the conversation instead of handing over a link. The page has no background of its own and uses the host's theme variables, while the code itself stays black on white so it scans. It holds the one-time pairing link and nothing else. `setup` takes the same option.
 
 ## up, down, status
 
