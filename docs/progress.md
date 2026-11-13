@@ -491,3 +491,14 @@ The owner tried the overhaul and reported that the website prompt produced no QR
 - Typecheck and 411 tests in 45 files pass locally, 10 of them new: the tunnel supervisor, re-linking with a proof, the address in notifications, the service worker storing it, the app following it, the short QR page link, a foreign pairing link, and the CLI on the default route with a stand-in tunnel program.
 
 Not verified: a physical phone, a real notification delivering a new address, and the default route on macOS or Windows (the download and process checks there are untested). GitHub Actions is still blocked by the account's billing lock.
+
+## Agent key mismatch on 13 November 2026
+
+The owner asked an agent to sign in to Stripe through Keep Safe. `request_login` failed with "Bridge rejected the agent token. Use the agent token, not the owner pairing token", and the agent told the owner to change their configuration.
+
+- Cause: the project's `.mcp.json` still ran the older checkout entry (`packages/mcp/src/index.ts` with `KEEP_SAFE_CONFIG_DIR=<checkout>/.keep-safe`). The bridge on port 4318 had been started by `npx keep-safe` and uses `~/.keep-safe`, which holds a different agent key. Codex had the same older entry, `keep_safe`, alongside the current `keep-safe` one. The message blamed the owner key, which was never involved.
+- The refusal now explains the mismatch, names the entry to use instead (`npx -y github:Maseeek/keep-safe mcp` with no Keep Safe environment variables) and tells the agent never to ask for a key. A running `keep-safe mcp` server now reads replaced keys again and retries once, instead of needing a restart after `rotate-keys`.
+- On the owner's computer, the project `.mcp.json` now runs `node bin/keep-safe.mjs mcp`, and the older Codex entry was removed. The remaining Codex entry keeps the 150-second tool timeout. A live check against the running bridge was accepted by the new entry. The old entry got the new explanation.
+- Typecheck and 413 tests in 45 files pass locally. Two of the tests are new, and both fail against the previous code. One drives a real stdio MCP server with another setup's key. The other replaces the agent key under a running `keep-safe mcp` server.
+
+Not changed: `keep-safe setup` still reports an existing Keep Safe entry as "already set up" without checking which form it uses. Codex entries added by `setup` get Codex's default tool timeout, which can be shorter than `wait_for_login`'s 120 seconds.

@@ -2,6 +2,12 @@
 
 ## 13 November 2026
 
+### Agent key mismatch
+
+- Explain a refused agent key correctly. The MCP tools used to say "Use the agent token, not the owner pairing token", which was wrong. The usual cause is an older checkout MCP entry, which reads `<checkout>/.keep-safe` while the `keep-safe` command's bridge on the same port uses `~/.keep-safe`. The error now says so, names the MCP entry to use instead and tells the agent never to ask for a key.
+- Let a running `keep-safe mcp` server pick up an agent key replaced by `rotate-keys`. Before, it had to be restarted.
+- Document the checkout launcher (`node bin/keep-safe.mjs mcp`), and warn against mixing the older checkout entry with the `keep-safe` command.
+
 ### One-scan pairing from any phone
 
 - Open a secure public link by default, through a free Cloudflare quick tunnel. A phone pairs with one scan on any network, with nothing installed and nothing typed. `keep-safe up` fetches a pinned `cloudflared` release into `~/.keep-safe/bin` and checks its SHA-256 first. Tailscale is now chosen with `--route tailscale` and is no longer picked just because it is running.

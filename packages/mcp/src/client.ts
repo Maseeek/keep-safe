@@ -9,6 +9,23 @@ export interface AgentRequest extends LoginRequest {
 
 export interface BridgeClientOptions { url: string; token: string; fetch?: typeof fetch }
 
+/**
+ * The bridge refused the agent key. Almost always the MCP entry loads keys from a different
+ * directory than the running bridge (an older checkout-based entry next to the `keep-safe`
+ * command's background bridge), or the keys were replaced after this process read them.
+ * The text goes to the agent, so it says what to tell the owner and never names a key or path.
+ */
+export class BridgeAuthError extends Error {
+  constructor(bridgeUrl: string) {
+    super(`The Keep Safe bridge at ${bridgeUrl} refused this MCP server's agent key: the key it loaded belongs to a different Keep Safe setup than the bridge running there. `
+      + 'This is a configuration problem on this computer, not a sign-in problem, and retrying will not help. '
+      + 'Usually the agent\'s Keep Safe MCP entry is an older one (it runs packages/mcp/src/index.ts, or sets KEEP_SAFE_CONFIG_DIR, KEEP_SAFE_BRIDGE_URL or KEEP_SAFE_AGENT_TOKEN) while the bridge was started by the keep-safe command. '
+      + 'Tell the owner to replace that entry with the command "npx -y github:Maseeek/keep-safe mcp" and no Keep Safe environment variables (check project files such as .mcp.json as well as user settings), then restart the agent. '
+      + 'If they recently replaced keys, restarting the agent is enough. Never ask the owner for a key or token.');
+    this.name = 'BridgeAuthError';
+  }
+}
+
 /** Keep local authority off global fetch/proxy dispatchers, including Node's environment proxy support. */
 async function directLoopbackRequest(url: URL, init: RequestInit): Promise<Response> {
   const agent = new Agent({ keepAlive: false });
@@ -66,7 +83,7 @@ export class BridgeClient {
       throw new Error('Cannot reach the Keep Safe bridge. Check it is running and the configured URL is reachable.');
     }
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new Error('Bridge rejected the agent token. Use the agent token, not the owner pairing token.');
+      if (response.status === 401 || response.status === 403) throw new BridgeAuthError(this.url.origin);
       if (response.status === 404) throw new Error('Login request was not found.');
       throw new Error(`Bridge request failed (${response.status}). Check the URL, request fields, and bridge status.`);
     }

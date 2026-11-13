@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http, { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { connect } from 'node:net';
-import { BridgeClient } from './client.js';
+import { BridgeAuthError, BridgeClient } from './client.js';
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -82,7 +82,7 @@ describe('agent bridge client', () => {
     const input = { agent: 'Test', title: 'Sign in', url: 'https://example.com/login' };
     expect((await client.create(input)).id).toBe('created');
     expect(JSON.parse(body)).toEqual(input);
-    await expect(client.get('test')).rejects.toThrow('Bridge rejected the agent token');
+    await expect(client.get('test')).rejects.toThrow(BridgeAuthError);
     expect(calls).toBe(2);
   });
 
@@ -106,7 +106,7 @@ describe('agent bridge client', () => {
 
   it('does not echo server errors or secrets', async () => {
     const client = new BridgeClient({ url: 'https://bridge.example.com', token: 'secret', fetch: async () => new Response('secret internal body', { status: 403 }) });
-    await expect(client.get('test')).rejects.toThrow('Bridge rejected the agent token');
+    await expect(client.get('test')).rejects.toThrow(BridgeAuthError);
     await expect(client.get('test')).rejects.not.toThrow('secret internal body');
   });
 
