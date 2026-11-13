@@ -5,7 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { browserAvailable } from '../../bridge/src/browser';
 import { ConfigError } from '../../bridge/src/config';
 import { connectionPort } from '../../bridge/src/connection-options';
-import { BridgeClient } from '../../mcp/src/client';
+import { BridgeAuthError, BridgeClient } from '../../mcp/src/client';
 import { createMcpServer, type LoginClient } from '../../mcp/src/server';
 import { mcpSnippet, registerAgents, type Registration } from './agents';
 import { bridgeStatus, CliError, down, ownerConfig, readState, running, up, type DaemonState } from './daemon';
@@ -162,10 +162,12 @@ async function mcp(options: Options) {
     client = await starting;
     return client;
   };
+  // A stopped bridge is started again, and keys replaced since this process read them are
+  // read again. Either way the call is retried once; a refused key creates no request.
   const attempt = async <T>(call: (bridge: BridgeClient) => Promise<T>): Promise<T> => {
     try { return await call(await ready()); }
     catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith('Cannot reach')) throw error;
+      if (!(error instanceof BridgeAuthError) && !(error instanceof Error && error.message.startsWith('Cannot reach'))) throw error;
       return call(await ready(true));
     }
   };

@@ -29,7 +29,17 @@ The server reads the agent key from `~/.keep-safe` and never receives the owner 
 
 ### From a checkout
 
-A checkout can launch the server straight from source:
+To run the `keep-safe` command from a checkout, point the agent at its launcher. It behaves like the `npx` form above: it uses `~/.keep-safe` and starts the background bridge when needed.
+
+```json
+{
+  "mcpServers": {
+    "keep-safe": { "command": "node", "args": ["/absolute/path/to/keep-safe/bin/keep-safe.mjs", "mcp"] }
+  }
+}
+```
+
+The older form below runs the MCP adapter on its own with a foreground `npm run bridge` that keeps its keys in the checkout's `.keep-safe`:
 
 ```json
 {
@@ -50,7 +60,7 @@ A checkout can launch the server straight from source:
 }
 ```
 
-This form does not start the bridge. Run `npm run bridge` first.
+This form does not start the bridge. Run `npm run bridge` first. Do not use it with the `keep-safe` command: that bridge keeps its keys in `~/.keep-safe` and also listens on port 4318, so it refuses the checkout's agent key. `request_login` then fails with "refused this MCP server's agent key". Replace the entry with one of the `keep-safe mcp` forms above and restart the agent. Check every place the agent reads MCP servers from. A project `.mcp.json` overrides a user-level `claude mcp add` entry with the same name.
 
 ## Generate the configuration for your checkout
 
@@ -76,7 +86,7 @@ The output includes an explicit loopback `KEEP_SAFE_BRIDGE_URL` and an absolute 
 
 Choose your actual running bridge's settings rather than starting another bridge. After changing the MCP configuration, restart the client's MCP server process so it loads the generated URL and key-directory settings. `npm run --silent agent:config -- --help` shows the options. Generation does not read keys, create directories, or change client configuration.
 
-After replacing an agent key with the offline `rotate-keys --agent` or `--all` command, restart the bridge and connected MCP server processes. Existing MCP processes cache the old agent token. See [key replacement and lock recovery](../README.md#replace-owner-or-agent-keys).
+After replacing an agent key with the offline `rotate-keys --agent` or `--all` command, restart the bridge. A `keep-safe mcp` server reads the new key on its next call. Restart MCP servers started from `packages/mcp/src/index.ts`, which keep the old one. See [key replacement and lock recovery](../README.md#replace-owner-or-agent-keys).
 
 ### Codex
 

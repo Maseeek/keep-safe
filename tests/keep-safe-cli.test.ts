@@ -177,4 +177,22 @@ setInterval(() => {}, 1000);
     expect(data.setup).toContain('keep-safe pair');
     expect(JSON.parse((await run(['status', '--json', '--config-dir', directory])).stdout)).toMatchObject({ running: true, port, phones: 0 });
   }, 90_000);
+
+  it('keeps a running MCP server working after the agent key is replaced', async () => {
+    const { directory, port, common } = await workspace();
+    const transport = new StdioClientTransport({ command: process.execPath, args: [bin, 'mcp', ...common, '--port', String(port)], env: { ...process.env as Record<string, string>, KEEP_SAFE_ROUTE: 'local' }, stderr: 'pipe' });
+    const client = new Client({ name: 'keep-safe-cli-test', version: '1.0.0' });
+    cleanup.push(() => client.close());
+    await client.connect(transport);
+    const login = { agent: 'CLI test', title: 'Sign in', url: 'https://example.com/login', ttl_seconds: 60 };
+    expect((await client.callTool({ name: 'request_login', arguments: login })).isError).not.toBe(true);
+    const before = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')).agentToken;
+    expect((await run(['down', ...common])).code).toBe(0);
+    expect((await run(['rotate-keys', '--agent', ...common])).code).toBe(0);
+    expect(JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')).agentToken).not.toBe(before);
+    expect((await run(['up', '--route', 'local', '--port', String(port), ...common])).code).toBe(0);
+    const after = await client.callTool({ name: 'request_login', arguments: login });
+    expect(after.isError).not.toBe(true);
+    expect((after.structuredContent as { request: { status: string } }).request.status).toBe('pending');
+  }, 120_000);
 });
