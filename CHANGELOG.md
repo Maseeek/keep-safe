@@ -2,6 +2,18 @@
 
 ## 16 November 2026
 
+### Sign in through your installed Google Chrome (0.5.0)
+
+Second of three stages of the interaction overhaul.
+
+- Open the owner's installed Google Chrome as an ordinary window for managed sign-ins, with a fresh temporary profile. Websites see a normal browser instead of `HeadlessChrome` with no plugins, which is what made Stripe ask for a captcha. `keep-safe up` chooses it on Linux with a display and Chrome installed, and falls back to the hidden browser otherwise or if Chrome does not start. `KEEP_SAFE_BROWSER` chooses explicitly and `keep-safe status` shows which is in use.
+- Keep the Chrome window painting while it is hidden. A minimised window was held to one frame a second by the display server.
+- Delete the temporary Chrome profile, cookies included, when the session's browser closes, and clean up after a bridge that was killed.
+- Leave `navigator.webdriver` true. Chrome is being remote-controlled and Keep Safe does not hide it.
+- Take timed captures straight from Chromium, and retry one that stalls while a page is replaced instead of ending the view.
+
+Not yet verified: a locked screen or a display that is off, macOS, Windows, and whether Stripe now skips its captcha.
+
 ### Raw gestures and a live stream (0.4.0)
 
 First of three stages of the interaction overhaul the owner asked for after a Stripe sign-in showed a drag captcha that Keep Safe could not operate.

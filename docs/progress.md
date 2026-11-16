@@ -530,3 +530,26 @@ The owner tried to sign in to Stripe through Keep Safe and got a drag captcha th
 - The suite still has intermittent failures under load. Eight of the last ten full runs passed, including the run on the final code. One failed in `bridge-cli` key rotation, which this change does not touch. The other failed in `notifications-ui`, which also failed in two of three runs on the untouched `main`, together with the `login-handoff` wait for a frame after sign-in. That last one was seen twice in about fifteen runs, always beside the notifications failure, and passed every time it ran alone. Its cause is not established.
 
 Not verified: a physical phone, and a real captcha.
+
+### Stage 1 release verified on 16 November 2026
+
+- Merged pull request 6 as `a6eeef5`. Vercel's Git integration deployed it within a minute. Production serves `index-gpDPzMu9.js` and `index-C2ABtTJ5.css`, byte-identical to the locally tested build, with `blob:` added to the image policy.
+- Production check in Chromium phone emulation against a temporary local bridge and the synthetic gesture page, 18 of 18 at 320 px and 390 px: binary stream at double density, a drag puzzle solved with a finger, two-finger zoom to 3×, a tap while zoomed, keyboard raise, a flick with momentum, no agent browser before handback, handback, and no page errors, overflow or writes to the hosted site.
+- The owner's background bridge was idle with no requests. It was replaced with 0.4.0 through `keep-safe up`. Health passed and both paired phones stayed paired.
+
+## Interaction overhaul, stage 2 on 16 November 2026: the installed Google Chrome
+
+- The managed browser on the owner's computer is now their installed Chrome 157, started as an ordinary window with a temporary profile. Measured in that browser: user agent `Chrome/157.0.0.0` with no `Headless`, five plugins, `window.chrome` present, the computer's own screen size, and `navigator.webdriver` true. The hidden browser reported `HeadlessChrome`, no plugins and no `window.chrome`.
+- `navigator.webdriver` is left true. Remote debugging sets it, the browser really is remote-controlled, and hiding it would be evasion. The owner was told captchas should become rarer, not that they will stop.
+- A hidden window was the main risk, because the owner is usually away. With the window minimised under XWayland the stream fell to one frame a second and `Page.captureScreenshot` never answered. Occlusion switches did not help. `--ozone-platform=x11 --disable-gpu-vsync` did: 60 frames a second minimised, captures answered, touch scrolling worked. Software rendering also worked but would change the graphics fingerprint, so it was not used.
+- Chrome on Wayland natively was not chosen: it reported a pixel ratio of 3 for a forced factor of 2 on this 1.5× display, and its hidden-window behaviour could not be tested here.
+- Chrome picks its own debugging port and writes it to its profile, which removes the port race on this path.
+- Found and fixed while testing against real Chrome:
+  - A Playwright screenshot taken as the page navigated stalled for five seconds and ended the view. Timed captures now come straight from Chromium, ask a second time after 1.2 seconds, and retry Chromium's "Unable to capture screenshot" answer, which the hidden browser also gave about once in 170 captures taken just after opening.
+  - A Chrome helper process wrote a cache folder back into the profile after it was deleted. Chrome now runs in its own process group, the group is ended before deletion, and deletion repeats until the folder stays gone. No cookies were in the leftover folders.
+- Page controls in Chrome: a sandboxed frame runs in its own process and its fields were never listed, with or without a spoofed `Window.origin`. An ordinary frame with the same address as a sandboxed one is offered in Chrome and omitted in the hidden browser.
+- Verification against the installed Chrome, with windows opening on the desktop: 169 of 180 tests in the 20 real-browser files pass. Seven failures hook `chromium.launch` to inject faults and cannot work on this path. Two wait through Playwright for a field inside a sandboxed frame, which Playwright cannot reach from a second connection to Chrome. One asserts the hidden browser's duplicate-frame behaviour described above. The handback protections those seven tests cover (a popup hidden from Playwright, a failed start) are therefore verified on the hidden browser only, plus one real-Chrome test that a page which cannot be opened ends Chrome and removes its profile.
+- Real Stripe sign-in page through the phone app in Chrome, nothing entered: sharp at 780 by 1250 and scrollable. Whether Stripe now skips its captcha was not tested, because that needs a real sign-in.
+- Typecheck passes. The default suite, which uses the hidden browser and opens no windows, is **430 tests in 48 files**, with two more that run only when Chrome is requested. Four are new: browser choice, the launch arguments and private profile with a stand-in program, a Chrome that never starts, and cleanup after a killed bridge. The last four full runs before the final cleanup change all passed.
+
+Not verified: a locked screen or a display that is off, macOS, Windows, a Wayland session without XWayland, and a physical phone.

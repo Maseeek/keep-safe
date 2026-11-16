@@ -7,6 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
 import type { FrameHeader, BridgeInfo, EditableKind, HistoryCleanupResult, LoginRequest, PairingState, ServerMessage, ViewportRequest } from '../../shared/src/protocol';
 import { BrowserFrameChangedError, BrowserNavigationError, browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
+import { chooseBrowser } from './chrome';
 import { atomicJsonWriter, createDeviceStore, DEVICE_LIFETIME_DAYS } from './devices';
 
 export interface BridgeOptions {
@@ -175,8 +176,10 @@ export async function createBridge(options: BridgeOptions) {
   const subscriptionsWriter = atomicJsonWriter(options.subscriptionsFile);
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
+  /** Which browser a managed sign-in opens here: the owner's Chrome as a window, or the hidden bundled one. */
+  const managedBrowser = options.browserFactory ? undefined : (await chooseBrowser()).kind;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.4.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.5.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -695,7 +698,7 @@ export async function createBridge(options: BridgeOptions) {
       json(response, 200, { ok: true }); return;
     }
     // Counts only: lets an agent tell its user that no phone is paired yet.
-    if (url.pathname === '/api/status' && request.method === 'GET') { json(response, 200, { phones: devices.list().length, notifications: subscriptions.size, browserAvailable: info.browserAvailable, version: info.version, ...(options.link ? { link: options.link.state(), ...(options.link.url() ? { publicUrl: options.link.url() } : {}) } : {}) }); return; }
+    if (url.pathname === '/api/status' && request.method === 'GET') { json(response, 200, { phones: devices.list().length, notifications: subscriptions.size, browserAvailable: info.browserAvailable, ...(managedBrowser ? { browser: managedBrowser } : {}), version: info.version, ...(options.link ? { link: options.link.state(), ...(options.link.url() ? { publicUrl: options.link.url() } : {}) } : {}) }); return; }
     if (url.pathname === '/api/info' && request.method === 'GET') { if (!owner) throw new HttpError(403, 'Owner access is required.'); json(response, 200, info); return; }
     if (url.pathname === '/api/history/clear' && request.method === 'POST') {
       requireOwner();

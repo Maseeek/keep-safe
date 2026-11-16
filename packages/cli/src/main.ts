@@ -153,7 +153,7 @@ async function status(options: Options) {
   const phones = state ? await bridgeStatus(options.directory, state.port) : undefined;
   if (options.flags.has('--json')) { console.log(JSON.stringify({ running: !!state, ...(state ? { port: state.port, route: state.route, startedAt: state.startedAt, ...phones } : {}) }, null, 2)); return; }
   if (!state) { console.log('Keep Safe is not running. Start it with: keep-safe up'); return; }
-  console.log(`Keep Safe is running (since ${new Date(state.startedAt).toLocaleString()}).\n\n  Phone address   ${address(state)}   (${routeLabel(state)})\n  Local address   http://127.0.0.1:${state.port}\n  Paired phones   ${phones?.phones ?? 'unknown'}${phones && !phones.phones ? '   (run keep-safe pair)' : ''}\n  Notifications   ${phones ? `${phones.notifications} phone${phones.notifications === 1 ? '' : 's'}` : 'unknown'}\n  Browser         ${phones?.browserAvailable === false ? 'missing (run keep-safe setup)' : 'ready'}`);
+  console.log(`Keep Safe is running (since ${new Date(state.startedAt).toLocaleString()}).\n\n  Phone address   ${address(state)}   (${routeLabel(state)})\n  Local address   http://127.0.0.1:${state.port}\n  Paired phones   ${phones?.phones ?? 'unknown'}${phones && !phones.phones ? '   (run keep-safe pair)' : ''}\n  Notifications   ${phones ? `${phones.notifications} phone${phones.notifications === 1 ? '' : 's'}` : 'unknown'}\n  Browser         ${phones?.browserAvailable === false ? 'missing (run keep-safe setup)' : phones?.browser === 'chrome' ? 'Google Chrome, as a window on this computer' : phones?.browser === 'bundled' ? 'built-in, hidden' : 'ready'}`);
   for (const note of state.route.notes) console.log(`\n  Note: ${note}`);
 }
 

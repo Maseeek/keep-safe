@@ -40,6 +40,20 @@ The picture is a live stream. The bridge starts Chromium's screencast (`Page.sta
 
 The screencast captures at the window's real pixel density, so a managed browser starts with `--force-device-scale-factor` set to the phone's density instead of emulating it.
 
+### Which browser
+
+`chooseBrowser` decides per session from `KEEP_SAFE_BROWSER`. Unset means the hidden bundled Chromium, so importing the bridge or running its tests never opens a window. The background bridge started by `keep-safe` sets `auto`, which chooses the installed Google Chrome on Linux when `DISPLAY` is set.
+
+Chrome is spawned directly, not through Playwright's launcher, with a fresh `--user-data-dir` and `--remote-debugging-port=0`. Chrome picks its own loopback port and writes it to `DevToolsActivePort` in the profile, so no other program can take the port first. No automation switch is passed and nothing is spoofed. Measured in Chrome 157: an ordinary user agent, five plugins, `window.chrome` present, the computer's real screen size, and `navigator.webdriver` true because remote debugging is on.
+
+A Chrome window cannot be as narrow as a phone, so each page is sized with `Emulation.setDeviceMetricsOverride` (not mobile, native pixel density) and, for a touch phone, `Emulation.setTouchEmulationEnabled`. `Network.setBypassServiceWorker` keeps website service workers out of page loads and `--disable-features=BackForwardCache` makes history navigation load documents again, which the Reload and Back guards rely on. The context route and outbound proxy are the same as for the hidden browser. `Browser.setDownloadBehavior` denies downloads.
+
+A window that is not showing is throttled by the display server. Measured with the window minimised under XWayland: one frame a second and `Page.captureScreenshot` never answering. With `--ozone-platform=x11 --disable-gpu-vsync` the same minimised window streamed at 60 frames a second and took touch input. A locked screen was not tested.
+
+Timed captures use `Page.captureScreenshot` directly in both browsers. A capture requested at the instant a page is replaced may never be answered in Chrome, so after 1.2 seconds the bridge asks a second time and takes whichever answers. No answer within five seconds ends the view.
+
+In Chrome a sandboxed frame runs in its own process. Its controls are never listed, and an ordinary frame with the same address is no longer ambiguous with it, so that frame's controls are offered. The bundled browser keeps both in one process and omits both.
+
 Clients that do not ask for the stream (`watch.stream`), and browser sessions that cannot stream, get the earlier timed captures: up to ten a second, identical frames at most once a second, a third of that rate for still pages, and one capture after each input.
 
 After a tap, Tab, Enter or a page-control focus, the bridge reads the type of the focused element and tells the phone whether it is editable and what kind of field it is. No value, label or address is read. The phone uses this to raise its keyboard. Typed characters go into a password-type field that holds one placeholder character, are forwarded at once, and are removed. Nothing typed is stored, logged or echoed on the phone. A single typed character is delivered with real key events. Longer text is inserted whole.
@@ -61,7 +75,7 @@ Remote access requires the computer to remain awake and a secure route to the br
 - Request metadata is in memory and resets on restart. Eligible finished records are removed automatically 24 hours after original expiry, or earlier by confirmed owner cleanup/capacity pressure. All unexpired outcomes and pending browser opening/finalization/input/closure remain protected. A tracked failed close retains its browser reference for retry. The 100-record cap refuses new requests when no safe record can be removed.
 - Web Push subscriptions may be stored locally. They are not uploaded to Vercel.
 - Browser input is relayed transiently. Passwords and input messages are not logged or written to disk. Screenshots are streamed without recordings or trace files.
-- Managed browser cookies remain in an isolated in-memory context. Existing agent browser cookies remain owned by that browser.
+- Managed browser cookies remain on the computer. The hidden browser keeps them in an isolated in-memory context. The Chrome window keeps them in a temporary profile folder with owner-only permissions, deleted when the browser closes and swept at the next start after a crash. Existing agent browser cookies remain owned by that browser.
 - Handoffs expire after ten minutes by default, with an agent-requested maximum of thirty minutes. Owner control ends on completion, denial, or expiry. A completed managed browser remains available only until the original deadline.
 
 ## Controls and limits
@@ -84,7 +98,7 @@ New worker messages/fragments are ignored by cached older apps, and the new app 
 
 ## Authentication method limits
 
-The phone interacts with the remote Chromium page. This does not move a phone's passkeys, native password manager, biometrics, or hardware security key into that remote browser. Some sites also block automated browsers. These methods need explicit testing and may require a supported cross-device authentication flow.
+The phone interacts with the remote Chromium page. This does not move a phone's passkeys, native password manager, biometrics, or hardware security key into that remote browser. Some sites also block automated browsers. The Chrome window removes the signals of a hidden browser, not the fact of remote control: `navigator.webdriver` is left true. These methods need explicit testing and may require a supported cross-device authentication flow.
 
 Use a separate browser profile, and inspect the current website origin before entering credentials. The app shows the live scheme, hostname, and port without the URL's path, query, fragment, or credentials. A change of origin triggers a warning, including HTTPS to HTTP or a different port. Opaque pages such as `about:blank` are not labeled as HTTPS. Keep Safe does not bypass website authentication or anti-abuse protections.
 
