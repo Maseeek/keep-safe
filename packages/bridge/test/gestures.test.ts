@@ -47,7 +47,7 @@ async function phone(options: { stream?: boolean; attach?: boolean } = {}) {
   send({ type: 'watch', requestId: request.id, viewport: { width: 390, height: 720, scale: 2, touch: true }, ...(options.stream === false ? {} : { stream: true }) });
   await expect.poll(() => binary.length + json.length, { timeout: 15000 }).toBeGreaterThan(0);
   await expect.poll(() => site.count('ready')).toBe(1);
-  const touch = (phase: string, x: number, y: number, tap?: boolean) => send({ type: 'touch', phase, x, y, ...(tap ? { tap } : {}) });
+  const touch = (phase: string, x: number, y: number, tap?: boolean, t?: number) => send({ type: 'touch', phase, x, y, ...(tap ? { tap } : {}), ...(t !== undefined ? { t } : {}) });
   const mouse = (phase: string, x: number, y: number, tap?: boolean) => send({ type: 'mouse', phase, x, y, ...(tap ? { tap } : {}) });
   const complete = async () => {
     expect((await call(`/api/requests/${request.id}/complete`, ownerToken, {})).status).toBe(200);
@@ -74,9 +74,10 @@ describe('raw gestures and the live stream', () => {
     await pause(400); const still = test.binary.length; await pause(1300);
     expect(test.binary.length).toBe(still);
     // A swipe is a real touch: the page scrolls, keeps moving after the finger lifts, and frames follow it.
-    test.touch('start', 200, 600);
-    for (let step = 1; step <= 8; step++) { test.touch('move', 200, 600 - step * 45); await pause(16); }
-    test.touch('end', 200, 240);
+    // With the phone's timestamps, as the app sends them.
+    test.touch('start', 200, 600, false, 1000);
+    for (let step = 1; step <= 8; step++) { test.touch('move', 200, 600 - step * 45, false, 1000 + step * 16); await pause(16); }
+    test.touch('end', 200, 240, false, 1000 + 9 * 16);
     await expect.poll(() => test.binary.length, { timeout: 5000 }).toBeGreaterThan(still + 5);
     const page = await test.complete();
     expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(400); // 360 from the finger, the rest from momentum
@@ -188,6 +189,78 @@ describe('raw gestures and the live stream', () => {
     expect(test.messages.filter(message => message.type === 'error')).toEqual([]);
   }, 40000);
 
+  it('keeps a flick\'s momentum when its moves arrive all at once', async () => {
+    const test = await phone();
+    // A slow link delivers the whole flick in one burst. The phone's own timing goes with it.
+    test.touch('start', 200, 600, false, 5000);
+    for (let step = 1; step <= 8; step++) test.touch('move', 200, 600 - step * 45, false, 5000 + step * 16);
+    test.touch('end', 200, 240, false, 5000 + 9 * 16);
+    await pause(1500);
+    const page = await test.complete();
+    // The finger moved 360 pixels. Momentum carried the page well beyond that.
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(600);
+    expect(test.messages.filter(message => message.type === 'error')).toEqual([]);
+  }, 40000);
+
+  it('lists the windows of a sign-in and lets the owner switch between and close them', async () => {
+    const test = await phone();
+    const tabs = async (count: number) => { let last: Header | undefined; await expect.poll(async () => { for (;;) { const index = test.messages.findIndex(message => message.type === 'tabs'); if (index === -1) break; last = test.messages.splice(index, 1)[0]; } return (last?.tabs as unknown[] | undefined)?.length; }, { timeout: 5000 }).toBe(count); return last!.tabs as Array<{ id: string; title: string; origin: string; active: boolean }>; };
+    expect((test.ready.info as { tabsAvailable?: boolean }).tabsAvailable).toBe(true);
+    const [only] = await tabs(1);
+    // A title and an origin. No path, query or page content.
+    expect(only).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), title: 'Synthetic gesture practice', origin: test.site.origin, active: true });
+    test.touch('start', 120, 410); test.touch('end', 120, 410, true);
+    await expect.poll(() => test.site.count('window-ready'), { timeout: 5000 }).toBe(1);
+    let both = await tabs(2);
+    await expect.poll(async () => { both = (test.messages.filter(message => message.type === 'tabs').at(-1)?.tabs as typeof both | undefined) ?? both; return both.map(tab => `${tab.title}:${tab.active}`); }, { timeout: 5000 }).toEqual(['Synthetic gesture practice:false', 'Synthetic second window:true']);
+    expect(both[0].id).toBe(only.id);
+    // Back to the first window: the picture follows and touches land there.
+    test.send({ type: 'tab', tabId: only.id });
+    await expect.poll(() => test.binary.at(-1)!.header.url, { timeout: 5000 }).toBe(test.site.url);
+    await pause(300);
+    test.touch('start', 300, 410); test.touch('end', 300, 410, true);
+    await expect.poll(() => test.site.count('corner-tapped'), { timeout: 5000 }).toBe(1);
+    expect(test.site.count('window-tapped')).toBe(0);
+    // The second window can be shown again, then closed from the phone.
+    test.send({ type: 'tab', tabId: both[1].id });
+    await expect.poll(() => test.binary.at(-1)!.header.url, { timeout: 5000 }).toBe(test.site.origin + '/window');
+    test.messages.length = 0;
+    test.send({ type: 'close-tab', tabId: both[1].id });
+    await expect.poll(() => test.binary.at(-1)!.header.url, { timeout: 5000 }).toBe(test.site.url);
+    expect((await tabs(1))[0]).toMatchObject({ id: only.id, active: true });
+    // The last window stays, and made-up windows are refused.
+    test.messages.length = 0;
+    for (const bad of [{ type: 'close-tab', tabId: only.id }, { type: 'tab', tabId: '00000000-0000-4000-8000-000000000000' }, { type: 'tab', tabId: 'first' }, { type: 'tab', tabId: only.id, url: 'https://example.com' }]) {
+      test.send(bad); expect((await test.next('error')).message).toBe('The requested action was not accepted. Check that the session is still active.');
+    }
+    const page = await test.complete();
+    expect(page.url()).toBe(test.site.url);
+  }, 40000);
+
+  it('copies selected page text to the phone, and never what is in a field', async () => {
+    const test = await phone();
+    expect((test.ready.info as { selectionAvailable?: boolean }).selectionAvailable).toBe(true);
+    const copy = async () => { const copyId = crypto.randomUUID(); test.send({ type: 'copy-selection', copyId }); const reply = await test.next('selection'); expect(reply).toMatchObject({ requestId: test.request.id, copyId }); return reply.text; };
+    expect(await copy()).toBe('');
+    test.mouse('down', 21, 305); for (let step = 1; step <= 6; step++) test.mouse('move', 21 + step * 22, 305); test.mouse('up', 153, 305);
+    await pause(200);
+    expect(await copy()).toBe('alpha bravo');
+    // Type into the text field and the password field, select everything in each: neither is ever returned.
+    for (const [y, text] of [[48, 'typed-into-a-field'], [494, 'synthetic-typed-secret']] as const) {
+      test.touch('start', 100, y); test.touch('end', 100, y, true); await test.next('editable');
+      test.send({ type: 'text', text }); test.send({ type: 'key', key: 'ControlOrMeta+A' });
+      await pause(200);
+      const copied = await copy();
+      expect(copied).not.toContain(text); expect(copied).toBe('');
+    }
+    // Selecting the whole page still leaves field contents out.
+    test.touch('start', 200, 600); test.touch('end', 200, 600, true); await test.next('editable');
+    test.send({ type: 'key', key: 'ControlOrMeta+A' }); await pause(200);
+    const everything = await copy();
+    expect(everything).toContain('alpha bravo charlie delta'); expect(everything).not.toContain('typed-into-a-field'); expect(everything).not.toContain('synthetic-typed-secret');
+    test.send({ type: 'copy-selection', copyId: 'not-an-id' }); expect((await test.next('error')).message).toContain('not accepted');
+  }, 40000);
+
   it('refuses malformed pointer input and still serves clients that predate the stream', async () => {
     const test = await phone({ stream: false });
     // No stream was asked for: frames are JSON, as older apps expect.
@@ -198,6 +271,7 @@ describe('raw gestures and the live stream', () => {
       { type: 'touch', phase: 'hover', x: 10, y: 10 }, { type: 'touch', phase: 'start', x: 391, y: 10 }, { type: 'touch', phase: 'start', x: 10, y: -1 },
       { type: 'touch', phase: 'start', x: 10, y: 10, tap: 'yes' }, { type: 'touch', phase: 'start', x: 10, y: 10, id: 1 }, { type: 'mouse', phase: 'start', x: 10, y: 10 },
       { type: 'mouse', phase: 'down', x: Number.NaN, y: 10 }, { type: 'mouse', phase: 'down', x: 10, y: 10, button: 'right' },
+      { type: 'mouse', phase: 'down', x: 10, y: 10, t: 5 }, { type: 'touch', phase: 'start', x: 10, y: 10, t: -1 }, { type: 'touch', phase: 'start', x: 10, y: 10, t: '5' },
     ]) { test.send(bad); expect((await test.next('error')).message).toBe('The requested action was not accepted. Check that the session is still active.'); }
     // Classic taps and wheel scrolling keep working beside the new messages.
     test.send({ type: 'click', x: 300, y: 410 });

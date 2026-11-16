@@ -1,5 +1,7 @@
 import { createServer } from 'node:http';
 
+export const gestureFixtureValues = { user: 'manager-fixture@example.invalid', secret: 'synthetic-secret-from-manager', pasted: 'pasted-fixture@example.invalid' } as const;
+
 /** Synthetic local page for gesture checks: a drag puzzle, a long page, a
  * hover target, selectable text and one text field. It holds no credentials.
  * The page reports what happened to it through counters, never typed text. */
@@ -26,10 +28,11 @@ export async function startGestureFixture() {
       #hover{position:absolute;top:200px;left:20px;width:300px;height:56px;background:#e9e2c8}
       #words{position:absolute;top:290px;left:20px;width:340px;margin:0;font:20px/30px monospace}
       #corner{position:absolute;top:380px;left:250px;width:100px;height:60px}
-      #opener{position:absolute;top:380px;left:20px;width:200px;height:60px}</style></head>
+      #opener{position:absolute;top:380px;left:20px;width:200px;height:60px}
+      #secret{position:absolute;top:470px;left:20px;width:300px;height:48px;font:inherit;box-sizing:border-box}</style></head>
       <body><input id="field" type="email" aria-label="Practice email" autocomplete="off">
       <div id="track" aria-label="Drag puzzle"><div id="knob"></div></div><div id="hover">Hover target</div>
-      <p id="words">alpha bravo charlie delta</p><button id="corner" type="button">Corner</button><button id="opener" type="button">Open a window</button>
+      <p id="words">alpha bravo charlie delta</p><button id="corner" type="button">Corner</button><button id="opener" type="button">Open a window</button><input id="secret" type="password" aria-label="Practice secret" autocomplete="off">
       <script>const notify=name=>fetch('/'+name,{method:'POST'});const knob=document.querySelector('#knob');let drag=null;let solved=false;
       window.gesture={events:[],pointerTypes:[]};
       knob.addEventListener('pointerdown',event=>{drag={x:event.clientX,left:knob.offsetLeft};knob.setPointerCapture(event.pointerId);gesture.events.push('down');gesture.pointerTypes.push(event.pointerType);});
@@ -40,6 +43,9 @@ export async function startGestureFixture() {
       document.querySelector('#corner').addEventListener('click',()=>{void notify('corner-tapped');});
       document.querySelector('#opener').addEventListener('click',()=>{window.open('/window','_blank');});
       document.querySelector('#field').addEventListener('focus',()=>{void notify('field-focused');});
+      // Only whether the synthetic values arrived is reported, never what was typed.
+      document.querySelector('#field').addEventListener('input',event=>{if(event.target.value===${JSON.stringify(gestureFixtureValues.user)})void notify('user-arrived');if(event.target.value===${JSON.stringify(gestureFixtureValues.pasted)})void notify('paste-arrived');});
+      document.querySelector('#secret').addEventListener('input',event=>{if(event.target.value===${JSON.stringify(gestureFixtureValues.secret)})void notify('secret-arrived');});
       let far=false;window.addEventListener('scroll',()=>{if(!far&&window.scrollY>500){far=true;void notify('scrolled-far');}});
       void notify('ready');</script></body></html>`);
   });

@@ -14,6 +14,8 @@ export interface SurfaceProps {
   send: Workspace["send"];
   /** Displayed size in CSS pixels, chosen by the stage so the image fills it. */
   display?: { width: number; height: number };
+  /** A finger drags like a mouse, so it selects text instead of scrolling. */
+  selecting?: boolean;
   /** Called for every accepted tap, with viewport coordinates for local feedback. */
   onTap?: (point: { clientX: number; clientY: number }) => void;
 }

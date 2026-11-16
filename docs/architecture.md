@@ -120,6 +120,8 @@ Before departure, navigation binds the current page/document and numeric history
 
 A browser that reports `gestures` in its frames takes the owner's pointer as it is, rather than a guess at what it meant. One finger is forwarded as a real touch (`Input.dispatchTouchEvent`): start, moves, end. Chromium then recognises the gesture exactly as it would on a touch screen, so the website gets touch and pointer events, taps click, swipes scroll with momentum, and an element with `touch-action: none` (a slider, a drag puzzle) receives the drag. A mouse or pen is forwarded as hover, press, drag and release with the main button; presses in one spot count up so a double click selects a word. The wheel still uses the positioned scroll message below.
 
+Each touch message carries `t`, the event's time on the phone. The bridge maps it onto the computer's clock from the start of the gesture and passes it to Chromium as the event `timestamp`, kept in order and never later than now. Chromium reads the finger's speed from these times, so a flick keeps its momentum when the moves arrive bunched over a slow link. Measured in Chromium: eight moves delivered in one burst scrolled 367 px without timestamps (the finger's distance only) and 1862 px with them.
+
 The phone sends at most one move per screen refresh. The bridge numbers moves as they arrive and drops one that waited behind a slow page once a newer position exists, except the last move before a press or release, because a release happens where the finger was. The socket limit is 240 messages a second.
 
 A release the phone saw as a tap (little movement, under 600 ms) carries `tap: true`. Only then does the bridge read the focused element's type for the keyboard, and only a tap confirms a field after a failed focus. Scrolling and dragging never do.
@@ -131,6 +133,18 @@ A held finger or mouse button never outlives the owner's control. The bridge can
 Chromium's own tap suppression applies: a tap that lands while a flick still has momentum stops the momentum and does not click.
 
 Not covered: multi-touch on the website itself, right click and the browser's context menu, and drag-and-drop of files. Physical-device behaviour is unverified.
+
+### Windows, paste, selection and password managers
+
+The bridge lists the session's windows (`tabs`): an identifier, the page title cut to 80 characters with control characters removed, and the scheme and host. No path, query or content. The list is sent when the owner starts watching and again, debounced by 120 ms, when a window opens, closes, navigates or becomes active. The owner can show one (`tab`) or close one (`close-tab`); the last cannot be closed. Showing a window moves it to the top of the stack the stream follows and brings it to the front, since a Chrome window paints only its front tab. A held finger or button is released first.
+
+`copy-selection` returns the document selection of the active window, at most 4096 characters, to the phone that asked, once. It is read with `Range.toString()` over `getSelection()`, which does not reach into `<input>` or `<textarea>` contents, so a field's value, a password included, is never returned. Tests type into a text field and a password field, select all in each and on the whole page, and check that none of it comes back.
+
+Paste and the password boxes are phone-side. **Paste** reads the phone's clipboard and sends it as ordinary `text`. The **Passwords** form has `autocomplete="username"` and `autocomplete="current-password"` inputs inside a form, which password managers recognise. Each value is sent as `text` and the box is emptied at once. Both boxes are emptied on leaving the request, a changed address or connection, navigation, `pagehide` and a hidden page. Nothing is stored or logged. **Select** sends a finger as `mouse` messages, so a drag marks text instead of scrolling.
+
+Notices from these tools float over the live view. Like open tool panels, the window strip borrows space from the view instead of resizing the website: measured before this was fixed, a strip appearing or going away resized the website 250 ms later, re-laying out the page and cancelling a drag in progress.
+
+When a press is dropped because the page size or address changed, the phone now still sends `cancel` for the same request and connection, and the bridge accepts a `cancel` while the page is being resized. A mouse `cancel` lets go where the pointer is. Before, it moved the pointer to (0, 0) first, which would stretch a selection or drag to the corner.
 
 ### Classic taps and swipes
 

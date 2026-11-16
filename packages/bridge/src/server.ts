@@ -179,7 +179,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Which browser a managed sign-in opens here: the owner's Chrome as a window, or the hidden bundled one. */
   const managedBrowser = options.browserFactory ? undefined : (await chooseBrowser()).kind;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.5.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.6.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -351,7 +351,31 @@ export async function createBridge(options: BridgeOptions) {
     if (entry.request.status !== 'active') { entry.request.status = 'active'; entry.request.updatedAt = new Date(now()).toISOString(); broadcast(); }
     if (!client.frames) { void frame(entry, client); client.frames = startFrames(entry, client); }
   }
+  /** Tells the controlling phone which windows the session has, now and whenever that changes. */
+  function followTabs(entry: Entry, client: Client) {
+    const browser = entry.browser;
+    if (!browser?.tabs || !browser.onTabs) return () => {};
+    let stopped = false; let timer: ReturnType<typeof setTimeout> | undefined; let reading = false; let again = false;
+    const report = async () => {
+      if (reading) { again = true; return; }
+      reading = true;
+      try {
+        const tabs = await browser.tabs!();
+        if (!stopped && entry.browser === browser && active(entry, client)) send(client, { type: 'tabs', requestId: entry.request.id, tabs: tabs.slice(0, 12) });
+      } catch { /* The next change reports again. */ }
+      finally { reading = false; if (again && !stopped) { again = false; void report(); } }
+    };
+    // Several changes arrive together when a window opens and loads.
+    const off = browser.onTabs(() => { clearTimeout(timer); timer = setTimeout(() => { void report(); }, 120); });
+    void report();
+    return () => { stopped = true; clearTimeout(timer); off(); };
+  }
   function startFrames(entry: Entry, client: Client): NonNullable<Client['frames']> {
+    const feed = feedFrames(entry, client);
+    const stopTabs = followTabs(entry, client);
+    return { get live() { return feed.live; }, stop() { stopTabs(); feed.stop(); } };
+  }
+  function feedFrames(entry: Entry, client: Client): NonNullable<Client['frames']> {
     client.idle = 0; client.tick = 0;
     const capture = () => {
       // Still pages drop to a third of the cadence. Any input restores it.
@@ -365,7 +389,7 @@ export async function createBridge(options: BridgeOptions) {
     let stopped = false; let end: (() => void) | undefined;
     const feed = { stop() { stopped = true; end?.(); }, live: true };
     browser.stream(async image => {
-      if (stopped || client.frames !== feed || entry.navigating || entry.browser !== browser || !active(entry, client)) return;
+      if (stopped || !client.frames || entry.navigating || entry.browser !== browser || !active(entry, client)) return;
       const epoch = entry.frameEpoch ??= randomUUID();
       entry.size = { width: image.width, height: image.height };
       entry.navigationAvailable = !!browser.navigate && image.navigationAvailable === true;
@@ -471,6 +495,20 @@ export async function createBridge(options: BridgeOptions) {
       operation = entry.browser.inspectControls({ includeFrames: message.includeFrames === true }).then(snapshot => {
         if (active(entry, client)) send(client, { type: 'controls', requestId: entry.request.id, inspectionId: message.inspectionId as string, snapshot });
       });
+    } else if (message.type === 'tab' || message.type === 'close-tab') {
+      if (typeof message.tabId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(message.tabId) || Object.keys(message).some(key => !['type', 'tabId'].includes(key))) throw new Error('Choose a window from the current list.');
+      const browser = entry.browser;
+      if (!browser.selectTab || !browser.closeTab) throw new Error('This browser has a single window.');
+      // The page under the owner's finger is about to change.
+      entry.size = undefined;
+      operation = message.type === 'tab' ? browser.selectTab(message.tabId) : browser.closeTab(message.tabId);
+    } else if (message.type === 'copy-selection') {
+      if (typeof message.copyId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(message.copyId) || Object.keys(message).some(key => !['type', 'copyId'].includes(key))) throw new Error('Invalid copy request.');
+      if (!entry.browser.selection) throw new Error('This browser cannot copy a selection.');
+      // Sent once to the phone that asked, and kept nowhere.
+      operation = entry.browser.selection().then(text => {
+        if (active(entry, client)) send(client, { type: 'selection', requestId: entry.request.id, copyId: message.copyId as string, text: typeof text === 'string' ? text.slice(0, 4096) : '' });
+      });
     } else if (message.type === 'resize') {
       const viewport = viewportOf({ width: message.width, height: message.height });
       const browser = entry.browser;
@@ -486,8 +524,11 @@ export async function createBridge(options: BridgeOptions) {
       } else if (message.type === 'touch' || message.type === 'mouse') {
         if (!(message.type === 'touch' ? ['start', 'move', 'end', 'cancel'] : ['down', 'move', 'up', 'cancel']).includes(message.phase as string) ||
             (message.tap !== undefined && typeof message.tap !== 'boolean') ||
-            Object.keys(message).some(key => !['type', 'phase', 'x', 'y', 'tap'].includes(key))) throw new Error('Invalid pointer input.');
-        if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid pointer coordinates.');
+            (message.t !== undefined && (message.type !== 'touch' || typeof message.t !== 'number' || !Number.isFinite(message.t) || message.t < 0)) ||
+            Object.keys(message).some(key => !['type', 'phase', 'x', 'y', 'tap', 't'].includes(key))) throw new Error('Invalid pointer input.');
+        // A cancel only lets go, so it is accepted while the page is being resized.
+        const finite = typeof message.x === 'number' && typeof message.y === 'number' && Number.isFinite(message.x) && Number.isFinite(message.y);
+        if (!finite || (message.phase !== 'cancel' && (!entry.size || (message.x as number) < 0 || (message.y as number) < 0 || (message.x as number) > entry.size.width || (message.y as number) > entry.size.height))) throw new Error('Invalid pointer coordinates.');
         if (superseded) return;
       } else if (message.type === 'text') {
         if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');

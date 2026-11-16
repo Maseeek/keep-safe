@@ -4,7 +4,8 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
 import { createPageControls } from './page-controls';
 import { chooseBrowser, launchChrome, type ChromeProcess } from './chrome';
-import type { EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
+import { randomUUID } from 'node:crypto';
+import type { BrowserTab, EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
 
 export interface BrowserFrame {
@@ -22,6 +23,16 @@ export interface BrowserSession {
    * only after the listener settles, so a slow phone link drops frames instead
    * of queuing them. Resolves to a function that stops the stream. */
   stream?(listener: (frame: BrowserFrame) => Promise<void> | void): Promise<() => Promise<void>>;
+  /** The windows of this session, oldest first. */
+  tabs?(): Promise<BrowserTab[]>;
+  selectTab?(id: string): Promise<void>;
+  /** Closes one window. The last one cannot be closed. */
+  closeTab?(id: string): Promise<void>;
+  /** Calls back when a window opened, closed, moved to another page or became the active one. */
+  onTabs?(listener: () => void): () => void;
+  /** Text the owner has selected on the active page, at most 4096 characters.
+   * Text inside a form field is never part of it. */
+  selection?(): Promise<string>;
   /** Lifts a finger or mouse button the owner left down on the page. Returns
    * nothing when none is held. */
   releasePointers?(): Promise<void> | void;
@@ -58,6 +69,17 @@ const focusedFrameSource = String.raw`() => {
   let element = document.activeElement;
   for (let depth = 0; element && element.shadowRoot && element.shadowRoot.activeElement && depth < 24; depth++) element = element.shadowRoot.activeElement;
   return element;
+}`;
+/** Reads only what is selected in the document. A range cannot reach into a
+ * form field, so typed text, including a password, is never returned. */
+const selectionSource = String.raw`() => {
+  try {
+    const selection = window.getSelection();
+    if (!selection) return '';
+    let text = '';
+    for (let index = 0; index < selection.rangeCount && index < 16 && text.length < 4096; index++) text += (text ? '\n' : '') + selection.getRangeAt(index).toString();
+    return text.slice(0, 4096);
+  } catch { return ''; }
 }`;
 async function focusState(page: Page): Promise<FocusState | undefined> {
   try {
@@ -306,10 +328,13 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
   const invalidateControls = () => { void pageControls?.clear(); };
   /** The live stream follows whichever page the owner is looking at. */
   let streaming: { retarget(): void } | undefined;
+  const tabIds = new Map<Page, string>([[page, randomUUID()]]);
+  const tabListeners = new Set<() => void>();
+  const tabsChanged = () => { for (const listener of tabListeners) { try { listener(); } catch { /* A listener never breaks the session. */ } } };
   const selectActivePage = () => {
     for (let index = pageStack.length - 1; index >= 0; index--) {
       if (!pageStack[index].isClosed()) {
-        if (page !== pageStack[index]) { invalidateControls(); page = pageStack[index]; streaming?.retarget(); }
+        if (page !== pageStack[index]) { invalidateControls(); page = pageStack[index]; streaming?.retarget(); tabsChanged(); }
         return;
       }
     }
@@ -319,7 +344,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
   const pageScale = new WeakMap<Page, number>();
   // A finger or mouse button held on the page. Released before any handback,
   // so the agent never receives a browser that is mid-drag.
-  const held: { touch?: { page: Page; session: CDPSession }; mouse?: { page: Page; clicks: number }; lastPress?: { at: number; x: number; y: number; clicks: number } } = {};
+  const held: { touch?: { page: Page; session: CDPSession; clock?: { phone: number; bridge: number; last: number } }; mouse?: { page: Page; clicks: number }; lastPress?: { at: number; x: number; y: number; clicks: number } } = {};
   const releasePointers = async () => {
     const touch = held.touch; held.touch = undefined;
     if (touch && !touch.page.isClosed()) await touch.session.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] }).catch(() => {});
@@ -338,6 +363,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
   const instrument = (current: Page) => {
     if (popupMonitors.has(current)) return;
     sessionPages.add(current);
+    if (!tabIds.has(current)) tabIds.set(current, randomUUID());
     const monitor = {
       ready: Promise.resolve(), session: undefined as CDPSession | undefined, pending: 0, failed: false,
       opened: () => { monitor.pending++; popupGeneration++; },
@@ -362,15 +388,16 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       page = popup;
       instrument(popup);
       streaming?.retarget();
+      tabsChanged();
     };
-    const navigated = (frame: import('playwright').Frame) => { documentGeneration++; if (frame === current.mainFrame()) invalidateControls(); };
+    const navigated = (frame: import('playwright').Frame) => { documentGeneration++; if (frame === current.mainFrame()) { invalidateControls(); tabsChanged(); } };
     const frameChanged = () => { documentGeneration++; };
     const navigationRequested = (request: import('playwright').Request) => {
       if (!request.isNavigationRequest()) return;
       try { if (request.frame() === current.mainFrame()) invalidateControls(); }
       catch { invalidateControls(); } // A disappearing frame must not crash a session event listener.
     };
-    const pageClosed = () => { invalidateControls(); selectActivePage(); };
+    const pageClosed = () => { invalidateControls(); selectActivePage(); tabsChanged(); };
     current.on('dialog', dismiss); current.on('popup', popupOpened);
     current.on('framenavigated', navigated); current.on('request', navigationRequested); current.on('close', pageClosed);
     current.on('frameattached', frameChanged); current.on('framedetached', frameChanged);
@@ -648,15 +675,25 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         const target = page; const session = popupMonitors.get(target)!.session!;
         const scale = pageScale.get(target) ?? 1;
         const touchPoints = [{ x: (input.x as number) / scale, y: (input.y as number) / scale, id: 0, radiusX: 8, radiusY: 8, force: 1 }];
+        // The phone's timing, moved onto this computer's clock from the start of
+        // the gesture. Always in order and never later than now.
+        const phoneTime = typeof input.t === 'number' && Number.isFinite(input.t) ? input.t : undefined;
+        const when = (clock: { phone: number; bridge: number; last: number } | undefined) => {
+          if (!clock || phoneTime === undefined) return {};
+          clock.last = Math.min(Date.now() / 1000, Math.max(clock.last, clock.bridge + (phoneTime - clock.phone) / 1000));
+          return { timestamp: clock.last };
+        };
         if (input.phase === 'start') {
           await releasePointers();
-          held.touch = { page: target, session };
-          await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints });
+          const now = Date.now() / 1000;
+          held.touch = { page: target, session, ...(phoneTime !== undefined ? { clock: { phone: phoneTime, bridge: now, last: now } } : {}) };
+          await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints, ...when(held.touch.clock) });
         } else if (held.touch?.page !== target) await releasePointers(); // A gesture never continues on another window.
-        else if (input.phase === 'move') await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints });
+        else if (input.phase === 'move') await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints, ...when(held.touch.clock) });
         else {
+          const clock = held.touch.clock;
           held.touch = undefined;
-          await session.send('Input.dispatchTouchEvent', { type: input.phase === 'end' ? 'touchEnd' : 'touchCancel', touchPoints: [] });
+          await session.send('Input.dispatchTouchEvent', { type: input.phase === 'end' ? 'touchEnd' : 'touchCancel', touchPoints: [], ...when(clock) });
           if (input.phase === 'end' && input.tap === true) { selectActivePage(); return focusState(page); }
         }
       }
@@ -676,7 +713,9 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
           await target.mouse.down({ clickCount: clicks });
         } else if (held.mouse) {
           const clicks = held.mouse.clicks; held.mouse = undefined;
-          await target.mouse.move(x, y);
+          // A cancel lets go where the pointer already is. Moving first would
+          // stretch a selection or drag to wherever the cancel pointed.
+          if (input.phase === 'up') await target.mouse.move(x, y);
           await target.mouse.up({ clickCount: clicks });
           if (input.phase === 'up' && input.tap === true) { selectActivePage(); return focusState(page); }
         }
@@ -706,6 +745,48 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     },
     ...(owned ? { navigate } : {}),
     releasePointers() { if (!closed && (held.touch || held.mouse)) return releasePointers(); },
+    async tabs() {
+      selectActivePage();
+      const open = [...sessionPages].filter(item => !item.isClosed());
+      return Promise.all(open.map(async item => {
+        // A page that does not answer still gets listed, without a title.
+        const title = await Promise.race([item.title().catch(() => ''), new Promise<string>(resolve => { setTimeout(() => resolve(''), 500); })]);
+        let origin = '';
+        try { const address = new URL(item.url()); if (['http:', 'https:'].includes(address.protocol)) origin = address.origin; } catch { /* No web address yet. */ }
+        return { id: tabIds.get(item)!, title: title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80), origin, active: item === page };
+      }));
+    },
+    async selectTab(id) {
+      const target = [...sessionPages].find(item => tabIds.get(item) === id && !item.isClosed());
+      if (closed || !target) throw new Error('That window is no longer open.');
+      if (target === page) return;
+      await releasePointers();
+      const index = pageStack.indexOf(target);
+      if (index >= 0) pageStack.splice(index, 1);
+      pageStack.push(target);
+      selectActivePage();
+      // A Chrome window paints only its front tab.
+      await target.bringToFront().catch(() => {});
+    },
+    async closeTab(id) {
+      const target = [...sessionPages].find(item => tabIds.get(item) === id && !item.isClosed());
+      if (closed || !target) throw new Error('That window is no longer open.');
+      if ([...sessionPages].filter(item => !item.isClosed()).length < 2) throw new Error('The last window stays open.');
+      if (target === page) await releasePointers();
+      await target.close();
+      selectActivePage();
+      if (!page.isClosed()) await page.bringToFront().catch(() => {});
+    },
+    onTabs(listener) { tabListeners.add(listener); return () => { tabListeners.delete(listener); }; },
+    async selection() {
+      selectActivePage();
+      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+      for (const frame of page.frames().slice(0, 24)) {
+        const text = await frame.evaluate(`(${selectionSource})()`).catch(() => '') as string;
+        if (typeof text === 'string' && text) return text.slice(0, 4096);
+      }
+      return '';
+    },
     async prepareHandoff() {
       selectActivePage();
       await releasePointers();

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createScreen, readBinaryFrame, type Screen } from "./screen";
 import type {
+  BrowserTab,
   BridgeInfo,
   ClientMessage,
   DevicePairResult,
@@ -437,13 +438,23 @@ export function useWorkspace(onError: (message: string) => void) {
   const screen = useRef<Screen | null>(null);
   screen.current ??= createScreen();
   /** Shows a new image, or removes the view and its image together. */
+  const [tabs, setTabs] = useState<BrowserTab[]>([]);
+  /** A copy the owner asked for and the bridge has not answered yet. */
+  const copyAttempt = useRef<{ id: string; resolve: (text: string | null) => void; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const endCopy = useCallback((text: string | null) => {
+    const pending = copyAttempt.current;
+    if (!pending) return;
+    copyAttempt.current = null;
+    clearTimeout(pending.timer);
+    pending.resolve(text);
+  }, []);
   const setFrame = useCallback((next: BrowserFrame | null, image?: string | Blob) => {
-    if (!next || image === undefined) { screen.current!.clear(); setFrameState(null); return; }
+    if (!next || image === undefined) { screen.current!.clear(); setFrameState(null); setTabs([]); endCopy(null); return; }
     screen.current!.show(image);
     // Most frames change only the picture, which React does not need to see.
     setFrameState(previous => previous && previous.requestId === next.requestId && previous.width === next.width && previous.height === next.height &&
       previous.url === next.url && previous.frameEpoch === next.frameEpoch && previous.navigationAvailable === next.navigationAvailable && previous.gestures === next.gestures ? previous : next);
-  }, []);
+  }, [endCopy]);
   const [pendingInvite, setPendingInvite] = useState<PairingInvite | null>(initial.invite ?? null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const inviteClaim = useRef<Promise<boolean> | null>(null);
@@ -728,6 +739,12 @@ export function useWorkspace(onError: (message: string) => void) {
         } else if (message.type === "focused" && !navigationAttempt.current && receivingBrowser() && freshFrame.current?.socket === ws && message.requestId === watchId.current && message.snapshotId === focusAttempt.current?.snapshotId && message.controlId === focusAttempt.current?.controlId) {
           focusAttempt.current = null;
           setFocusedControl(message); setFocusBusy(false); setFocusBlocked(false); setControlsError("");
+        }
+        else if (message.type === "tabs" && receivingBrowser() && message.requestId === watchId.current && Array.isArray(message.tabs)) {
+          setTabs(message.tabs.filter(tab => tab && typeof tab.id === "string" && typeof tab.title === "string" && typeof tab.origin === "string").slice(0, 12));
+        }
+        else if (message.type === "selection" && receivingBrowser() && message.requestId === watchId.current && message.copyId === copyAttempt.current?.id) {
+          endCopy(typeof message.text === "string" ? message.text : "");
         }
         else if (message.type === "editable" && receivingBrowser() && message.requestId === watchId.current) {
           setTypingTarget({ requestId: message.requestId, editable: message.editable === true, kind: message.kind, at: Date.now() });
@@ -1022,7 +1039,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const send = useCallback((message: ClientMessage) => {
     // Navigation must use its correlated intent/epoch lifecycle below.
     if (message.type === "navigate") return false;
-    const remoteAction = ["click", "scroll", "touch", "mouse", "text", "key", "inspect-controls", "focus", "resize"].includes(message.type);
+    const remoteAction = ["click", "scroll", "touch", "mouse", "tab", "close-tab", "copy-selection", "text", "key", "inspect-controls", "focus", "resize"].includes(message.type);
     if (remoteAction && (navigationAttempt.current || paused.current || !visible() || !watchId.current ||
       transportWatchId.current !== watchId.current || !activeRequest(watchId.current) ||
       freshFrame.current?.socket !== socket.current || freshFrame.current?.requestId !== watchId.current ||
@@ -1057,6 +1074,14 @@ export function useWorkspace(onError: (message: string) => void) {
     socket.current.send(JSON.stringify(message));
     return true;
   }, [setFocusBlocked, visible, activeRequest]);
+  /** Asks the bridge for the text selected on the page. Resolves to null when
+   * it could not be asked or did not answer. Nothing is kept here. */
+  const copySelection = useCallback(() => new Promise<string | null>(resolve => {
+    endCopy(null);
+    const id = crypto.randomUUID();
+    copyAttempt.current = { id, resolve, timer: setTimeout(() => { if (copyAttempt.current?.id === id) endCopy(null); }, 4000) };
+    if (!send({ type: "copy-selection", copyId: id })) endCopy(null);
+  }), [endCopy, send]);
   const watch = useCallback((requestId: string | null) => {
     if (watchId.current === requestId) return;
     watchId.current = requestId;
@@ -1238,6 +1263,8 @@ export function useWorkspace(onError: (message: string) => void) {
     frame,
     /** The image for `frame`, updated without re-rendering. */
     screen: screen.current,
+    /** The windows of the live session. More than one only after the website opened another. */
+    tabs, copySelection,
     navigationBusy, navigationError, navigationAvailable, navigationUncertain, navigateBrowser,
     browserPaused, browserVisible, resumeBrowser,
     pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,
