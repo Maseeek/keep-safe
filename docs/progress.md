@@ -553,3 +553,9 @@ Not verified: a physical phone, and a real captcha.
 - Typecheck passes. The default suite, which uses the hidden browser and opens no windows, is **430 tests in 48 files**, with two more that run only when Chrome is requested. Four are new: browser choice, the launch arguments and private profile with a stand-in program, a Chrome that never starts, and cleanup after a killed bridge. Four consecutive full runs passed before the final cleanup change, and the run after it passed.
 
 Not verified: a locked screen or a display that is off, macOS, Windows, a Wayland session without XWayland, and a physical phone.
+
+### Stage 2 release verified on 16 November 2026
+
+- Merged pull request 7 as `fbc29c9`. The web app did not change: production still serves the stage 1 bundle.
+- A throwaway background bridge started with `keep-safe up` reported `Google Chrome, as a window on this computer`. Through its socket a finger solved the drag puzzle, the agent received a browser that is not headless (five plugins, `window.chrome`, 390 wide at ratio 2), and `keep-safe down` left no Chrome process or profile.
+- The owner's own bridge was found stopped, for the second time that day, with nobody having stopped it. Cause: it had been started from inside the agent session and lived in that session's systemd scope, so it was killed with the session's processes, tunnel included. It now runs 0.5.0 in its own scope. Both phones are still paired, but the phone address changed, so a phone without notifications needs one new scan.

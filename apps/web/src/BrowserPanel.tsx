@@ -8,7 +8,11 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronRight,
+  ClipboardPaste,
   Clock3,
+  Copy,
+  KeyRound,
+  TextSelect,
   ExternalLink,
   Eye,
   Info,
@@ -109,6 +113,11 @@ export function BrowserPanel({
   const [showOrigin, setShowOrigin] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [showCredentials, setShowCredentials] = useState(false);
+  const [toolNotice, setToolNotice] = useState("");
+  const credentialUser = useRef<HTMLInputElement>(null);
+  const credentialPassword = useRef<HTMLInputElement>(null);
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
   const [typing, setTyping] = useState(false);
   const [taps, setTaps] = useState<{ id: number; x: number; y: number }[]>([]);
@@ -161,7 +170,7 @@ export function BrowserPanel({
       if (immediate) apply();
       // The on-screen keyboard and rotation animate through many sizes.
       // Open tool panels borrow space from the page; that is not a new screen size.
-      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form")) apply(); }, 250);
+      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form")) apply(); }, 250);
     };
     measure(true);
     const observer = new ResizeObserver(() => measure(false));
@@ -219,6 +228,9 @@ export function BrowserPanel({
     setShowOrigin(false);
     setShowText(false);
     setShowDetails(false);
+    setShowCredentials(false);
+    setSelecting(false);
+    setToolNotice("");
     setTaps([]);
     lastTapY.current = null;
   }, [request.id]);
@@ -227,6 +239,9 @@ export function BrowserPanel({
       draftInput.current.value = "";
       draftInput.current.type = "password";
     }
+    // What a password manager filled is held only in these two boxes.
+    if (credentialUser.current) credentialUser.current.value = "";
+    if (credentialPassword.current) credentialPassword.current.value = "";
     setText("");
     setShowText(false);
   }, []);
@@ -236,6 +251,8 @@ export function BrowserPanel({
       clearLocalInput();
       setShowKeyboard(false);
       setShowMoreKeys(false);
+      setShowCredentials(false);
+      setSelecting(false);
     };
     const visibility = () => { if (document.visibilityState === "hidden") clearDraft(); };
     document.addEventListener("visibilitychange", visibility);
@@ -296,6 +313,54 @@ export function BrowserPanel({
     setText("");
     workspace.send({ type: "text", text: value });
   };
+  const tabs = liveFrame ? workspace.tabs : [];
+  const canCopy = !!liveFrame?.gestures && workspace.info?.selectionAvailable === true;
+  /** Sends the clipboard's text to the field the owner tapped. Nothing is kept. */
+  const paste = async () => {
+    if (keyInputBlocked) return;
+    let value = "";
+    try { value = await navigator.clipboard.readText(); }
+    catch {
+      setToolNotice("This browser did not let Keep Safe read the clipboard. Paste into Type text instead.");
+      setShowKeyboard(true);
+      return;
+    }
+    if (!value) { setToolNotice("The clipboard has no text."); return; }
+    if (workspace.send({ type: "text", text: value.slice(0, 4096) })) setToolNotice(value.length > 4096 ? "Pasted the first 4096 characters." : "Pasted into the page.");
+  };
+  /** Copies what the owner selected on the page to this device. The clipboard
+   * write is started inside the tap, because browsers refuse a later one. */
+  const copy = async () => {
+    const text = workspace.copySelection().then(value => {
+      if (value === null) throw new Error("The page did not answer. Try again.");
+      if (!value) throw new Error("Nothing is selected. Choose Select, then drag across the text.");
+      return value;
+    });
+    const copied = (length: number) => { setToolNotice(`Copied ${length} character${length === 1 ? "" : "s"} to this device.`); setSelecting(false); };
+    try {
+      if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) throw new Error("No promised clipboard write here.");
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": text.then(value => new Blob([value], { type: "text/plain" })) })]);
+      copied((await text).length);
+    } catch {
+      const value = await text.catch((error: unknown) => { setToolNotice(error instanceof Error ? error.message : "The selection could not be read."); return null; });
+      if (value === null) return;
+      try { await navigator.clipboard.writeText(value); copied(value.length); }
+      catch { setToolNotice("This browser did not let Keep Safe write to the clipboard."); }
+    }
+  };
+  const sendCredential = (field: React.RefObject<HTMLInputElement | null>, name: string) => {
+    const element = field.current;
+    if (!element || !element.value || keyInputBlocked) return;
+    const value = element.value;
+    element.value = "";
+    if (workspace.send({ type: "text", text: value.slice(0, 4096) })) setToolNotice(`${name} sent to the page.`);
+  };
+  useEffect(() => {
+    if (!toolNotice) return;
+    const timer = setTimeout(() => setToolNotice(""), 6000);
+    return () => clearTimeout(timer);
+  }, [toolNotice]);
+  useEffect(() => { if (!canInput) setSelecting(false); }, [canInput]);
   const navigate = (direction: "back" | "forward" | "reload") => {
     clearLocalInput();
     workspace.navigateBrowser(direction);
@@ -390,6 +455,20 @@ export function BrowserPanel({
           <div className="full-browser-origin" id="full-browser-origin">
             <strong>{address.label}</strong>
             <span>{address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
+          </div>
+        ) : null}
+        {active && !expired && !isDemo && !workspace.browserPaused && tabs.length > 1 ? (
+          <div className="window-tabs" role="group" aria-label="Windows this sign-in opened">
+            {tabs.map((tab, index) => {
+              const name = tab.title || (tab.origin ? domain(tab.origin) : `Window ${index + 1}`);
+              return <span key={tab.id} className={`window-tab${tab.active ? " is-active" : ""}`}>
+                <button className="window-tab-name" aria-pressed={tab.active} disabled={!canInput || tab.active}
+                  aria-label={tab.active ? `${name}, showing now` : `Show ${name}`} onClick={() => workspace.send({ type: "tab", tabId: tab.id })}>
+                  <strong>{name}</strong>{tab.origin ? <small>{domain(tab.origin)}</small> : null}
+                </button>
+                <button className="window-tab-close" disabled={!canInput} aria-label={`Close ${name}`} onClick={() => workspace.send({ type: "close-tab", tabId: tab.id })}><X size={15} aria-hidden="true" /></button>
+              </span>;
+            })}
           </div>
         ) : null}
         {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
@@ -489,7 +568,7 @@ export function BrowserPanel({
         ) : (
           <div className="remote-screen" ref={stage}>
             {liveFrame ? <div className="remote-page" style={lift ? { transform: `translateY(${-lift}px)` } : undefined}>
-              <RemoteSurface frame={liveFrame} screen={workspace.screen} enabled={canInput} controlIdentity={workspace.connection} display={displaySize} onTap={tapped}
+              <RemoteSurface frame={liveFrame} screen={workspace.screen} enabled={canInput} controlIdentity={workspace.connection} display={displaySize} onTap={tapped} selecting={selecting}
                 alt={liveFrame.gestures
                   ? `Live browser on ${domain(liveFrame.url)}. Touch it as you would the website itself. Pinch with two fingers to zoom.`
                   : `Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
@@ -531,6 +610,7 @@ export function BrowserPanel({
           </div>
         ) : null}
       </div>
+      {active && !isDemo && toolNotice ? <p className="website-navigation-hint tool-notice" role="status">{toolNotice}</p> : null}
       {active && !isDemo && workspace.navigationError ? <p className="website-navigation-error" role="alert">{workspace.navigationError}</p> : null}
       {active && !isDemo && workspace.navigationUncertain ? <p className="website-navigation-hint" role="status">Resume and check the website before handing back.</p> : null}
       {active && !isDemo && !expired && !workspace.browserPaused ? (
@@ -554,6 +634,22 @@ export function BrowserPanel({
                   })}
                 </div>
               </div>
+            ) : null}
+            {showCredentials ? (
+              <form className="credential-form" id="credential-form" onSubmit={event => event.preventDefault()} autoComplete="on">
+                <p>Let your password manager fill these boxes. Tap a field on the page, then send it the matching one.</p>
+                <label htmlFor="credential-username">Username or email</label>
+                <div className="input-with-button">
+                  <input ref={credentialUser} id="credential-username" name="username" type="text" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
+                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} onClick={() => sendCredential(credentialUser, "Username")}>Send username <ArrowUp size={14} aria-hidden="true" /></button>
+                </div>
+                <label htmlFor="credential-password">Password</label>
+                <div className="input-with-button">
+                  <input ref={credentialPassword} id="credential-password" name="password" type="password" autoComplete="current-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
+                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} onClick={() => sendCredential(credentialPassword, "Password")}>Send password <ArrowUp size={14} aria-hidden="true" /></button>
+                </div>
+                <small>Each one goes straight to the page and is cleared here. Never saved or shown by Keep Safe.</small>
+              </form>
             ) : null}
             {showKeyboard ? (
               <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
@@ -609,6 +705,24 @@ export function BrowserPanel({
                 <Keyboard size={16} />
                 Type text
               </button>
+              <button className="button button-light button-small" disabled={keyInputBlocked} onClick={() => { void paste(); }}
+                aria-label="Paste this device's clipboard into the page">
+                <ClipboardPaste size={16} aria-hidden="true" /> Paste
+              </button>
+              <button className={`button button-light button-small ${showCredentials ? "selected" : ""}`} aria-expanded={showCredentials}
+                aria-controls={showCredentials ? "credential-form" : undefined}
+                onClick={() => { if (showCredentials) clearLocalInput(); setShowCredentials(!showCredentials); }}>
+                <KeyRound size={16} aria-hidden="true" /> Passwords
+              </button>
+              {canCopy ? <>
+                <button className={`button button-light button-small ${selecting ? "selected" : ""}`} aria-pressed={selecting} disabled={!canInput}
+                  aria-label={selecting ? "Stop selecting text" : "Select text on the page by dragging"} onClick={() => { setSelecting(!selecting); setToolNotice(selecting ? "" : "Drag across text on the page to select it, then choose Copy."); }}>
+                  <TextSelect size={16} aria-hidden="true" /> Select
+                </button>
+                <button className="button button-light button-small" disabled={!canInput} onClick={() => { void copy(); }} aria-label="Copy the selected text to this device">
+                  <Copy size={16} aria-hidden="true" /> Copy
+                </button>
+              </> : null}
               <button
                 className={`button button-light button-small ${showMoreKeys ? "selected" : ""}`}
                 aria-expanded={showMoreKeys}

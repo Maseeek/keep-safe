@@ -39,6 +39,10 @@ export interface BridgeInfo {
   liveViewAvailable?: boolean;
   /** Frames can arrive as binary messages, pushed as the page changes. */
   streamAvailable?: boolean;
+  /** The owner can see and switch between the windows a sign-in opened. */
+  tabsAvailable?: boolean;
+  /** The owner can copy text they selected on the page to their own device. */
+  selectionAvailable?: boolean;
   /** Shown to the owner so several computers are easy to tell apart. */
   computerName?: string;
   deviceLifetimeDays?: number;
@@ -113,6 +117,16 @@ export type TouchMessage = { type: 'touch'; phase: 'start' | 'move' | 'end' | 'c
 /** A mouse or pen: hover, press, drag and release with the main button. */
 export type MouseMessage = { type: 'mouse'; phase: 'down' | 'move' | 'up' | 'cancel'; x: number; y: number; tap?: boolean };
 
+/** One window of the browser session. No path, query or page content. */
+export interface BrowserTab {
+  id: string;
+  /** The page's own title, shortened. */
+  title: string;
+  /** Scheme and host only. Empty for a page that has no web address yet. */
+  origin: string;
+  active: boolean;
+}
+
 /** What every frame says about itself. Binary frames carry it as a header. */
 export interface FrameHeader {
   type: 'frame';
@@ -131,6 +145,9 @@ export type ClientMessage =
   | { type: 'watch'; requestId: string; viewport?: ViewportRequest; stream?: boolean }
   | TouchMessage
   | MouseMessage
+  | { type: 'tab'; tabId: string }
+  | { type: 'close-tab'; tabId: string }
+  | { type: 'copy-selection'; copyId: string }
   | { type: 'resize'; width: number; height: number }
   | { type: 'unwatch' }
   | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
@@ -149,6 +166,9 @@ export type ServerMessage =
   | { type: 'controls'; requestId: string; inspectionId: string; snapshot: PageControlsSnapshot }
   | { type: 'focused'; requestId: string; snapshotId: string; controlId: string }
   | { type: 'editable'; requestId: string; editable: boolean; kind?: EditableKind }
+  | { type: 'tabs'; requestId: string; tabs: BrowserTab[] }
+  /** Text the owner selected on the page and asked for. Never a field's value. */
+  | { type: 'selection'; requestId: string; copyId: string; text: string }
   | { type: 'error'; message: string };
 
 /** A binary frame is a four-byte big-endian header length, the JSON

@@ -9,6 +9,8 @@ interface Scope {
   height: number;
   enabled: boolean;
   identity: unknown;
+  /** Switching between touching and selecting ends whatever was held. */
+  selecting: boolean;
 }
 /** A finger or pressed mouse button that the remote page currently sees. */
 interface Press {
@@ -33,7 +35,7 @@ const clampDelta = (value: number) => Math.max(-3000, Math.min(3000, value));
  * with momentum, sliders, drag puzzles and long presses itself. Two fingers
  * zoom and move the view on this device. A mouse hovers, presses and drags.
  * Only coordinates are kept here, never what the page shows. */
-export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, send, display, onTap }: SurfaceProps) {
+export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, send, display, onTap, selecting = false }: SurfaceProps) {
   const image = useRef<HTMLImageElement>(null);
   useScreenImage(image, screen);
   const tapped = useRef(onTap);
@@ -42,8 +44,8 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
   sender.current = send;
   const scope = useMemo<Scope>(() => ({
     requestId: frame.requestId, source: frame.url, width: frame.width,
-    height: frame.height, enabled, identity: controlIdentity,
-  }), [frame.requestId, frame.url, frame.width, frame.height, enabled, controlIdentity]);
+    height: frame.height, enabled, identity: controlIdentity, selecting,
+  }), [frame.requestId, frame.url, frame.width, frame.height, enabled, controlIdentity, selecting]);
   const current = useRef(scope);
   current.current = scope;
 
@@ -216,8 +218,9 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
     }
     if (blocked.current || press.current) return;
     const location = point(scope, event.clientX, event.clientY, true);
-    const kind = touch ? "touch" : "mouse";
-    if (!valid(scope) || !location || !sender.current({ type: kind, phase: touch ? "start" : "down", x: location.x, y: location.y } as Parameters<typeof send>[0])) {
+    // While selecting, a finger is sent as a mouse: dragging then marks text.
+    const kind = touch && !selecting ? "touch" : "mouse";
+    if (!valid(scope) || !location || !sender.current({ type: kind, phase: kind === "touch" ? "start" : "down", x: location.x, y: location.y } as Parameters<typeof send>[0])) {
       if (touch) blocked.current = true;
       return;
     }

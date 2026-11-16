@@ -50,7 +50,7 @@
 - [ ] Show the pairing QR code on the website before setup runs. Depends on the directory above.
 - [ ] Verify on physical phones: camera scanner, keyboard raise and fit on iOS and Android, Home Screen pairing on iOS, notification delivery.
 - [ ] Verify the Tailscale HTTPS route end to end on a tailnet with certificates enabled.
-- [ ] Start the bridge at login (systemd user unit, launchd agent) from `keep-safe setup`.
+- [ ] Start the bridge at login (systemd user unit, launchd agent) from `keep-safe setup`. Until then, a bridge started on demand by an agent's MCP server can live in that agent's process scope and stop with it, which also changes the phone address. Seen on the owner's computer on 16 November 2026.
 - [ ] Publish to npm so `npx keep-safe` works without the GitHub prefix.
 - [x] Raw gestures and a live stream: real touch forwarding with momentum, drags for sliders and captcha puzzles, long press, mouse hover and drag, two-finger zoom of the view on the phone, and pushed binary frames at up to about thirty a second. Pinch zoom of the website itself was tried and rejected as unstable. Physical-device behaviour is unverified.
 - [x] Open the owner's installed Google Chrome as a visible window for managed sessions, so websites see an ordinary browser. Linux with a display only; other systems opt in with `KEEP_SAFE_BROWSER=chrome`.
