@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
+import { serverMessage } from './helpers/socket-frames';
 
 const ownerToken = 'synthetic-controls-owner';
 const agentToken = 'synthetic-controls-agent';
@@ -21,7 +22,7 @@ describe('page controls in the mobile app', () => {
     const page = await context.newPage();
     const controls: string[] = []; const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    page.on('websocket', socket => socket.on('framereceived', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'controls') controls.push(JSON.stringify(message)); }));
+    page.on('websocket', socket => socket.on('framereceived', frame => { const message = serverMessage(frame.payload); if (message.type === 'controls') controls.push(JSON.stringify(message)); }));
     try {
       const item = await client.create({ agent: 'Control navigation test', title: 'Sign in using page controls', url: site.origin + '/login', ttlSeconds: 120 });
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: ownerToken })}`);

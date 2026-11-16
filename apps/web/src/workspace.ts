@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createScreen, readBinaryFrame, type Screen } from "./screen";
 import type {
   BridgeInfo,
   ClientMessage,
@@ -20,14 +21,16 @@ export interface Connection {
    * address update in a notification came from. */
   source?: string;
 }
+/** What the live view is showing. The image itself is in `Workspace.screen`. */
 export interface BrowserFrame {
   requestId: string;
-  data: string;
   width: number;
   height: number;
   url: string;
   frameEpoch?: string;
   navigationAvailable?: boolean;
+  /** The browser takes raw touch and mouse input. */
+  gestures?: boolean;
 }
 type NavigationDirection = "back" | "forward" | "reload";
 interface NavigationAttempt {
@@ -430,7 +433,17 @@ export function useWorkspace(onError: (message: string) => void) {
   const [status, setStatus] = useState<ConnectionStatus>(
     initial.connection ? "connecting" : "demo",
   );
-  const [frame, setFrame] = useState<BrowserFrame | null>(null);
+  const [frame, setFrameState] = useState<BrowserFrame | null>(null);
+  const screen = useRef<Screen | null>(null);
+  screen.current ??= createScreen();
+  /** Shows a new image, or removes the view and its image together. */
+  const setFrame = useCallback((next: BrowserFrame | null, image?: string | Blob) => {
+    if (!next || image === undefined) { screen.current!.clear(); setFrameState(null); return; }
+    screen.current!.show(image);
+    // Most frames change only the picture, which React does not need to see.
+    setFrameState(previous => previous && previous.requestId === next.requestId && previous.width === next.width && previous.height === next.height &&
+      previous.url === next.url && previous.frameEpoch === next.frameEpoch && previous.navigationAvailable === next.navigationAvailable && previous.gestures === next.gestures ? previous : next);
+  }, []);
   const [pendingInvite, setPendingInvite] = useState<PairingInvite | null>(initial.invite ?? null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const inviteClaim = useRef<Promise<boolean> | null>(null);
@@ -653,6 +666,7 @@ export function useWorkspace(onError: (message: string) => void) {
       expectedFrameEpoch.current = null;
       setStatus(attempts ? "reconnecting" : "connecting");
       current = new WebSocket(connection.url.replace(/^http/, "ws") + "/ws");
+      current.binaryType = "arraybuffer";
       socket.current = current;
       socketSource.current = connection;
       const ws = current;
@@ -665,10 +679,18 @@ export function useWorkspace(onError: (message: string) => void) {
       ws.onmessage = (event) => {
         if (!currentSocket()) return;
         let message: ServerMessage;
-        try {
-          message = JSON.parse(String(event.data)) as ServerMessage;
-        } catch {
-          return;
+        let image: string | Blob | undefined;
+        if (typeof event.data !== "string") {
+          const binary = readBinaryFrame(event.data);
+          if (!binary) return;
+          message = { ...binary.header, data: "" }; image = binary.image;
+        } else {
+          try {
+            message = JSON.parse(event.data) as ServerMessage;
+          } catch {
+            return;
+          }
+          if (message.type === "frame" && typeof message.data === "string") image = `data:image/jpeg;base64,${message.data}`;
         }
         if (message.type === "ready") {
           attempts = 0;
@@ -688,7 +710,7 @@ export function useWorkspace(onError: (message: string) => void) {
           if (watchId.current && !paused.current && visible() && activeRequest(watchId.current, message.requests)) {
             transportWatchId.current = watchId.current;
             ws.send(
-              JSON.stringify({ type: "watch", requestId: watchId.current, ...(viewport.current && message.info.liveViewAvailable ? { viewport: viewport.current } : {}) }),
+              JSON.stringify({ type: "watch", requestId: watchId.current, ...(viewport.current && message.info.liveViewAvailable ? { viewport: viewport.current } : {}), ...(message.info.streamAvailable ? { stream: true } : {}) }),
             );
           }
         } else if (message.type === "requests") {
@@ -721,7 +743,7 @@ export function useWorkspace(onError: (message: string) => void) {
           expectedFrameEpoch.current = message.frameEpoch;
         }
         else if (
-          message.type === "frame" &&
+          message.type === "frame" && image !== undefined &&
           receivingBrowser() &&
           message.requestId === watchId.current
         ) {
@@ -740,7 +762,7 @@ export function useWorkspace(onError: (message: string) => void) {
             setNavigationUncertain(false);
           }
           setNavigationAvailable(message.navigationAvailable === true);
-          setFrame(message);
+          setFrame({ requestId: message.requestId, width: message.width, height: message.height, url: message.url, frameEpoch: message.frameEpoch, navigationAvailable: message.navigationAvailable, gestures: message.gestures === true }, image);
         }
         else if (message.type === "error" && !paused.current && visible()) {
           if (navigationAttempt.current) {
@@ -1000,7 +1022,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const send = useCallback((message: ClientMessage) => {
     // Navigation must use its correlated intent/epoch lifecycle below.
     if (message.type === "navigate") return false;
-    const remoteAction = ["click", "scroll", "text", "key", "inspect-controls", "focus", "resize"].includes(message.type);
+    const remoteAction = ["click", "scroll", "touch", "mouse", "text", "key", "inspect-controls", "focus", "resize"].includes(message.type);
     if (remoteAction && (navigationAttempt.current || paused.current || !visible() || !watchId.current ||
       transportWatchId.current !== watchId.current || !activeRequest(watchId.current) ||
       freshFrame.current?.socket !== socket.current || freshFrame.current?.requestId !== watchId.current ||
@@ -1016,7 +1038,9 @@ export function useWorkspace(onError: (message: string) => void) {
       );
       return false;
     }
-    const recoversFocus = message.type === "click" ||
+    // A tap shows the owner where typing will land, however it was sent.
+    const tap = message.type === "click" || ((message.type === "touch" || message.type === "mouse") && message.tap === true);
+    const recoversFocus = tap ||
       (message.type === "key" && (message.key === "Tab" || message.key === "Shift+Tab"));
     if ((focusBlockedRef.current || focusAttempt.current !== null) && !recoversFocus &&
         (message.type === "text" || message.type === "key")) {
@@ -1025,8 +1049,8 @@ export function useWorkspace(onError: (message: string) => void) {
       errorCallback.current(notice);
       return false;
     }
-    if (message.type === "click") setTypingTarget(null);
-    if (message.type === "click" || message.type === "key") {
+    if (tap) setTypingTarget(null);
+    if (tap || message.type === "key") {
       focusAttempt.current = null; setFocusedControl(null); setFocusBusy(false);
       if (recoversFocus) { setFocusBlocked(false); setControlsError(""); }
     }
@@ -1054,7 +1078,7 @@ export function useWorkspace(onError: (message: string) => void) {
       if (canWatch) transportWatchId.current = requestId;
       socket.current.send(
         JSON.stringify(
-          canWatch ? { type: "watch", requestId, ...(viewport.current && currentInfo.current?.liveViewAvailable ? { viewport: viewport.current } : {}) } : { type: "unwatch" },
+          canWatch ? { type: "watch", requestId, ...(viewport.current && currentInfo.current?.liveViewAvailable ? { viewport: viewport.current } : {}), ...(currentInfo.current?.streamAvailable ? { stream: true } : {}) } : { type: "unwatch" },
         ),
       );
     }
@@ -1212,6 +1236,8 @@ export function useWorkspace(onError: (message: string) => void) {
     info,
     status,
     frame,
+    /** The image for `frame`, updated without re-rendering. */
+    screen: screen.current,
     navigationBusy, navigationError, navigationAvailable, navigationUncertain, navigateBrowser,
     browserPaused, browserVisible, resumeBrowser,
     pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,

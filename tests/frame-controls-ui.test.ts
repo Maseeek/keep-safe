@@ -6,6 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import type { PageControlsSnapshot } from '../packages/shared/src/protocol';
 import { startFrameLoginFixture } from './fixtures/frame-login-site';
+import { serverMessage } from './helpers/socket-frames';
 
 const ownerToken = 'synthetic-frame-owner';
 const agentToken = 'synthetic-frame-agent';
@@ -45,7 +46,7 @@ describe('embedded login through the phone interface', () => {
       external.push(new URL(route.request().url()).origin); return route.abort();
     });
     page.on('websocket', socket => socket.on('framereceived', frame => {
-      const message = JSON.parse(String(frame.payload));
+      const message = serverMessage(frame.payload);
       if (message.type === 'controls') snapshots.push(message.snapshot as PageControlsSnapshot);
     }));
     try {

@@ -37,6 +37,8 @@ export interface BridgeInfo {
   pairingCodesAvailable?: boolean;
   /** The browser view can match the phone and report typing targets. */
   liveViewAvailable?: boolean;
+  /** Frames can arrive as binary messages, pushed as the page changes. */
+  streamAvailable?: boolean;
   /** Shown to the owner so several computers are easy to tell apart. */
   computerName?: string;
   deviceLifetimeDays?: number;
@@ -105,9 +107,30 @@ export interface DevicePairResult {
   token: string;
 }
 
+/** One finger on the page. The website decides what a drag means, as it would
+ * in a phone browser. `tap` marks a release the phone saw as a plain tap. */
+export type TouchMessage = { type: 'touch'; phase: 'start' | 'move' | 'end' | 'cancel'; x: number; y: number; tap?: boolean };
+/** A mouse or pen: hover, press, drag and release with the main button. */
+export type MouseMessage = { type: 'mouse'; phase: 'down' | 'move' | 'up' | 'cancel'; x: number; y: number; tap?: boolean };
+
+/** What every frame says about itself. Binary frames carry it as a header. */
+export interface FrameHeader {
+  type: 'frame';
+  requestId: string;
+  width: number;
+  height: number;
+  url: string;
+  frameEpoch?: string;
+  navigationAvailable?: boolean;
+  /** This browser accepts `touch` and `mouse` messages. */
+  gestures?: boolean;
+}
+
 export type ClientMessage =
   | { type: 'auth'; token: string }
-  | { type: 'watch'; requestId: string; viewport?: ViewportRequest }
+  | { type: 'watch'; requestId: string; viewport?: ViewportRequest; stream?: boolean }
+  | TouchMessage
+  | MouseMessage
   | { type: 'resize'; width: number; height: number }
   | { type: 'unwatch' }
   | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
@@ -121,12 +144,17 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'ready'; info: BridgeInfo; requests: LoginRequest[] }
   | { type: 'requests'; requests: LoginRequest[] }
-  | { type: 'frame'; requestId: string; data: string; width: number; height: number; url: string; frameEpoch?: string; navigationAvailable?: boolean }
+  | (FrameHeader & { data: string })
   | { type: 'navigated'; requestId: string; navigationId: string; frameEpoch: string; ok: boolean; message?: string }
   | { type: 'controls'; requestId: string; inspectionId: string; snapshot: PageControlsSnapshot }
   | { type: 'focused'; requestId: string; snapshotId: string; controlId: string }
   | { type: 'editable'; requestId: string; editable: boolean; kind?: EditableKind }
   | { type: 'error'; message: string };
+
+/** A binary frame is a four-byte big-endian header length, the JSON
+ * `FrameHeader`, then the JPEG. Sent only to clients that asked with
+ * `watch.stream`. */
+export const FRAME_HEADER_LIMIT = 4096;
 
 /** REST: Authorization: Bearer <ownerToken> or <agentToken>. Tokens are separate. */
 export const API = {

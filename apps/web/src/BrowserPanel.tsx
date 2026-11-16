@@ -489,8 +489,10 @@ export function BrowserPanel({
         ) : (
           <div className="remote-screen" ref={stage}>
             {liveFrame ? <div className="remote-page" style={lift ? { transform: `translateY(${-lift}px)` } : undefined}>
-              <RemoteSurface frame={liveFrame} enabled={canInput} controlIdentity={workspace.connection} display={displaySize} onTap={tapped}
-                alt={`Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
+              <RemoteSurface frame={liveFrame} screen={workspace.screen} enabled={canInput} controlIdentity={workspace.connection} display={displaySize} onTap={tapped}
+                alt={liveFrame.gestures
+                  ? `Live browser on ${domain(liveFrame.url)}. Touch it as you would the website itself. Pinch with two fingers to zoom.`
+                  : `Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
                 send={workspace.send} />
             </div> : (
               <div className="browser-state">

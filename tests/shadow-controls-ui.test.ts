@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startShadowLoginFixture } from './fixtures/shadow-login-site';
+import { serverMessage } from './helpers/socket-frames';
 
 describe('open-shadow login through the phone interface', () => {
   let browser: Browser;
@@ -18,9 +19,10 @@ describe('open-shadow login through the phone interface', () => {
     const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: true, hasTouch: true });
     const page = await context.newPage(); const controls: string[] = []; const errors: string[] = []; const external: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    page.on('request', request => { if (!request.url().startsWith(bridge.url)) external.push(request.url()); });
+    // Live images are held in memory under this page's own blob: addresses. Nothing else may be fetched.
+    page.on('request', request => { if (!request.url().startsWith(bridge.url) && !request.url().startsWith(`blob:${bridge.url}/`)) external.push(request.url()); });
     page.on('websocket', socket => socket.on('framereceived', frame => {
-      const message = JSON.parse(String(frame.payload));
+      const message = serverMessage(frame.payload);
       if (message.type === 'controls') controls.push(JSON.stringify(message));
     }));
     try {

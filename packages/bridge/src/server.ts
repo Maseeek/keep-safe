@@ -5,7 +5,7 @@ import { readFile, stat, realpath } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
-import type { BridgeInfo, EditableKind, HistoryCleanupResult, LoginRequest, PairingState, ServerMessage, ViewportRequest } from '../../shared/src/protocol';
+import type { FrameHeader, BridgeInfo, EditableKind, HistoryCleanupResult, LoginRequest, PairingState, ServerMessage, ViewportRequest } from '../../shared/src/protocol';
 import { BrowserFrameChangedError, BrowserNavigationError, browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
 import { atomicJsonWriter, createDeviceStore, DEVICE_LIFETIME_DAYS } from './devices';
 
@@ -48,7 +48,18 @@ interface Entry {
   navigating?: boolean;
   navigationAvailable?: boolean;
 }
-interface Client { lastFrame?: { data: string; url: string; epoch: string; at: number }; idle: number; tick: number; ws: WebSocket; authenticated: boolean; master?: boolean; deviceId?: string; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>; frames?: ReturnType<typeof setInterval>; pendingFrame: boolean; operations: Promise<void>; count: number; window: number }
+interface Client {
+  lastFrame?: { data: string; url: string; epoch: string; at: number }; idle: number; tick: number; ws: WebSocket; authenticated: boolean; master?: boolean; deviceId?: string; alive: boolean; watching?: string; timer?: ReturnType<typeof setTimeout>;
+  /** Whatever is feeding this client images: a capture timer or a live stream. */
+  frames?: { stop(): void; live: boolean };
+  /** Asked for binary frames with `watch.stream`. */
+  binary?: boolean;
+  /** When the last live frame left, to pace the stream. */
+  streamedAt: number;
+  /** Pointer moves received so far, and the ones that must not be skipped. */
+  moves: number; keptMoves: Set<number>; lastWasMove: boolean;
+  pendingFrame: boolean; operations: Promise<void>; count: number; window: number;
+}
 interface StoredSubscription extends PushSubscription { deviceId?: string }
 const terminal = new Set(['completed', 'denied', 'expired']);
 const historyRetentionHours = 24;
@@ -58,6 +69,14 @@ const longPollMaxSeconds = 30;
 const longPollMaxWaiters = 32;
 /** Capture cadence while the page is changing. Idle pages are sampled less often. */
 const frameIntervalMs = 100;
+/** A live stream sends at most about thirty frames a second, and fewer when
+ * the images are large: roughly 2.5 MB a second at the very most. A page that
+ * is not changing sends nothing. */
+const streamIntervalMs = 33;
+const streamBytesPerMs = 2500;
+/** Pointer moves arrive up to sixty times a second, beside keys and taps. */
+const messagesPerSecond = 240;
+const sleep = (milliseconds: number) => new Promise<void>(resolve => { setTimeout(resolve, milliseconds); });
 const pairingCodeLifetimeMs = 10 * 60 * 1000;
 const pairingAlphabet = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
 const editableKinds = new Set<EditableKind>(['text', 'password', 'email', 'numeric', 'tel', 'url', 'search']);
@@ -157,7 +176,7 @@ export async function createBridge(options: BridgeOptions) {
   const persistSubscriptions = () => subscriptionsWriter.write([...subscriptions.values()]);
   const available = !!options.browserFactory || await browserAvailable();
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.3.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.4.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -226,11 +245,32 @@ export async function createBridge(options: BridgeOptions) {
     });
   }
   function unwatch(client: Client) {
-    if (client.frames) clearInterval(client.frames);
+    client.frames?.stop();
     client.frames = undefined;
     client.lastFrame = undefined;
-    if (client.watching) { const entry = entries.get(client.watching); if (entry?.controller === client) entry.controller = undefined; }
+    if (client.watching) {
+      const entry = entries.get(client.watching);
+      if (entry?.controller === client) {
+        entry.controller = undefined;
+        // A phone that leaves mid-drag must not leave a finger or mouse button
+        // down on the page. The release joins the barrier a handback waits for.
+        const releasing = entry.closing ? undefined : entry.browser?.releasePointers?.();
+        if (releasing) {
+          const barrier = Promise.allSettled([entry.inputBarrier ?? Promise.resolve(), releasing]).then(() => {});
+          entry.inputBarrier = barrier;
+          void barrier.then(() => { if (entry.inputBarrier === barrier) entry.inputBarrier = undefined; });
+        }
+      }
+    }
     client.watching = undefined;
+  }
+  /** One image for the phone, in the form it asked for. */
+  function sendFrame(client: Client, header: FrameHeader, data: string) {
+    if (!client.binary) { send(client, { ...header, data }); return; }
+    if (!validClient(client) || client.ws.readyState !== WebSocket.OPEN) return;
+    const meta = Buffer.from(JSON.stringify(header));
+    const length = Buffer.alloc(4); length.writeUInt32BE(meta.length);
+    client.ws.send(Buffer.concat([length, meta, Buffer.from(data, 'base64')]), { binary: true });
   }
   function closeEntry(entry: Entry): Promise<void> {
     if (entry.controller) unwatch(entry.controller);
@@ -297,7 +337,7 @@ export async function createBridge(options: BridgeOptions) {
         if (last && last.epoch === epoch && last.url === result.url && last.data === result.data && time - last.at < 1000) { client.idle++; return; }
         if (!last || last.data !== result.data) client.idle = 0; else client.idle++;
         client.lastFrame = { data: result.data, url: result.url, epoch, at: time };
-        send(client, { type: 'frame', requestId: entry.request.id, ...result, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable });
+        sendFrame(client, { type: 'frame', requestId: entry.request.id, width: result.width, height: result.height, url: result.url, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable, ...(result.gestures ? { gestures: true } : {}) }, result.data);
       }
     } catch (error) { if (!(error instanceof BrowserFrameChangedError) && active(entry, client) && !entry.navigating && entry.frameEpoch === epoch) { send(client, { type: 'error', message: 'The browser could not be displayed. Reopen the session to try again.' }); unwatch(client); } }
     finally { client.pendingFrame = false; }
@@ -308,12 +348,37 @@ export async function createBridge(options: BridgeOptions) {
     if (entry.request.status !== 'active') { entry.request.status = 'active'; entry.request.updatedAt = new Date(now()).toISOString(); broadcast(); }
     if (!client.frames) { void frame(entry, client); client.frames = startFrames(entry, client); }
   }
-  function startFrames(entry: Entry, client: Client) {
+  function startFrames(entry: Entry, client: Client): NonNullable<Client['frames']> {
     client.idle = 0; client.tick = 0;
-    // Still pages drop to a third of the cadence. Any input restores it.
-    return setInterval(() => { if (client.idle > 10 && ++client.tick % 3) return; void frame(entry, client); }, frameIntervalMs);
+    const capture = () => {
+      // Still pages drop to a third of the cadence. Any input restores it.
+      const timer = setInterval(() => { if (client.idle > 10 && ++client.tick % 3) return; void frame(entry, client); }, frameIntervalMs);
+      return () => clearInterval(timer);
+    };
+    const browser = entry.browser;
+    if (!client.binary || !browser?.stream) return { stop: capture(), live: false };
+    // The browser pushes a frame whenever the page repaints. Nothing is sent
+    // while the page is still.
+    let stopped = false; let end: (() => void) | undefined;
+    const feed = { stop() { stopped = true; end?.(); }, live: true };
+    browser.stream(async image => {
+      if (stopped || client.frames !== feed || entry.navigating || entry.browser !== browser || !active(entry, client)) return;
+      const epoch = entry.frameEpoch ??= randomUUID();
+      entry.size = { width: image.width, height: image.height };
+      entry.navigationAvailable = !!browser.navigate && image.navigationAvailable === true;
+      sendFrame(client, { type: 'frame', requestId: entry.request.id, width: image.width, height: image.height, url: image.url, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable, ...(image.gestures ? { gestures: true } : {}) }, image.data);
+      // Hold the browser's next frame until this one has left and the pace
+      // allows another. A slow link gets fewer frames, never a backlog.
+      const sent = client.streamedAt = Date.now();
+      await sleep(Math.max(streamIntervalMs, Math.min(250, image.data.length * 0.75 / streamBytesPerMs)));
+      while (!stopped && client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount > 128_000 && Date.now() - sent < 2000) await sleep(15);
+    }).then(stop => { end = () => { void stop().catch(() => {}); }; if (stopped) end(); }, () => {
+      // A browser that cannot stream is still shown with timed captures.
+      if (!stopped) { feed.live = false; end = capture(); }
+    });
+    return feed;
   }
-  async function watch(client: Client, id: unknown, requestedViewport?: unknown) {
+  async function watch(client: Client, id: unknown, requestedViewport?: unknown, stream?: unknown) {
     if (typeof id !== 'string') throw new Error('Choose a valid request.');
     const viewport = viewportOf(requestedViewport);
     const entry = checkEntry(id);
@@ -321,6 +386,7 @@ export async function createBridge(options: BridgeOptions) {
     if (entry.controller && entry.controller !== client) throw new Error('This browser is being controlled on another device.');
     unwatch(client);
     client.watching = id;
+    client.binary = stream === true;
     entry.controller = client;
     try {
       if (!entry.browser) {
@@ -338,13 +404,15 @@ export async function createBridge(options: BridgeOptions) {
       if (active(entry, client)) client.frames = startFrames(entry, client);
     } catch { unwatch(client); entry.opening = undefined; throw new Error('Unable to open this browser. Install Chromium with npx playwright install chromium, or check the agent CDP connection.'); }
   }
-  async function handleMessage(client: Client, raw: Buffer) {
+  async function handleMessage(client: Client, message: Record<string, unknown> | undefined, move?: number) {
     // Receipt can precede a close while an earlier browser operation holds the
     // queue. A retired socket must never reacquire controller ownership later.
+    // The phone sends pointer moves faster than a busy page takes them. Only
+    // the newest position matters, except one that a press or release follows.
+    const superseded = move !== undefined && move !== client.moves && !client.keptMoves.has(move);
+    if (move !== undefined) client.keptMoves.delete(move);
     if (stopping || client.ws.readyState !== WebSocket.OPEN) return;
-    let message: Record<string, unknown>;
-    try { message = JSON.parse(raw.toString()) as Record<string, unknown>; if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error(); }
-    catch { throw new Error('Invalid message.'); }
+    if (!message) throw new Error('Invalid message.');
     if (!client.authenticated) {
       if (message.type !== 'auth' || typeof message.token !== 'string') { client.ws.close(4001, 'Authentication required'); return; }
       const master = equalToken(message.token, options.ownerToken);
@@ -358,7 +426,7 @@ export async function createBridge(options: BridgeOptions) {
       return;
     }
     if (!validClient(client)) return;
-    if (message.type === 'watch') { await watch(client, message.requestId, message.viewport); return; }
+    if (message.type === 'watch') { await watch(client, message.requestId, message.viewport, message.stream); return; }
     if (message.type === 'unwatch') { unwatch(client); return; }
     const entry = client.watching ? entries.get(client.watching) : undefined;
     if (!entry?.browser || !active(entry, client)) throw new Error('Open an approved session before sending input.');
@@ -412,6 +480,12 @@ export async function createBridge(options: BridgeOptions) {
         if (![message.deltaX, message.deltaY].every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 3000)) throw new Error('Invalid scroll distance.');
         if ((Object.hasOwn(message, 'x') || Object.hasOwn(message, 'y')) &&
             (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height)) throw new Error('Invalid scroll coordinates.');
+      } else if (message.type === 'touch' || message.type === 'mouse') {
+        if (!(message.type === 'touch' ? ['start', 'move', 'end', 'cancel'] : ['down', 'move', 'up', 'cancel']).includes(message.phase as string) ||
+            (message.tap !== undefined && typeof message.tap !== 'boolean') ||
+            Object.keys(message).some(key => !['type', 'phase', 'x', 'y', 'tap'].includes(key))) throw new Error('Invalid pointer input.');
+        if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid pointer coordinates.');
+        if (superseded) return;
       } else if (message.type === 'text') {
         if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');
       } else if (message.type === 'key') {
@@ -428,7 +502,8 @@ export async function createBridge(options: BridgeOptions) {
     }
     client.idle = 0;
     // Show the result of this action without waiting for the next capture tick.
-    void operation.then(() => frame(entry, client), () => {});
+    // A live stream already sends every repaint.
+    if (!client.frames?.live) void operation.then(() => frame(entry, client), () => {});
     // Keep the barrier on the request as well as the socket: closing a phone must
     // not orphan a keyboard operation that is still executing in Chromium.
     const barrier = Promise.allSettled([entry.inputBarrier ?? Promise.resolve(), operation]).then(() => {});
@@ -506,7 +581,7 @@ export async function createBridge(options: BridgeOptions) {
       // page names its own socket origin when the Host header is a plain host.
       const host = request.headers.host;
       const ownSocket = host && /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(host) ? ` ws://${host}` : '';
-      response.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*${ownSocket}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`);
+      response.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*${ownSocket}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`);
       response.end(content); return;
     }
     // Pairing by one-time code. The code is the only credential here, so both
@@ -755,15 +830,24 @@ export async function createBridge(options: BridgeOptions) {
   server.on('upgrade', upgrade);
   for (const extra of extraServers) extra.server.on('upgrade', upgrade);
   sockets.on('connection', ws => {
-    const client: Client = { idle: 0, tick: 0, ws, authenticated: false, alive: true, pendingFrame: false, operations: Promise.resolve(), count: 0, window: Date.now() };
+    const client: Client = { idle: 0, tick: 0, ws, authenticated: false, alive: true, pendingFrame: false, operations: Promise.resolve(), count: 0, window: Date.now(), streamedAt: 0, moves: 0, keptMoves: new Set(), lastWasMove: false };
     clients.add(client);
     client.timer = setTimeout(() => ws.close(4001, 'Authentication timeout'), 5000);
     ws.on('pong', () => { client.alive = true; });
     ws.on('message', raw => {
       // Limit at receipt, before queuing slow browser operations, to bound queued input memory.
       if (Date.now() - client.window > 1000) { client.window = Date.now(); client.count = 0; }
-      if (++client.count > 60) { ws.close(4029, 'Input rate exceeded'); return; }
-      client.operations = client.operations.then(() => handleMessage(client, Buffer.from(raw as Buffer))).catch(() => send(client, { type: 'error', message: 'The requested action was not accepted. Check that the session is still active.' }));
+      if (++client.count > messagesPerSecond) { ws.close(4029, 'Input rate exceeded'); return; }
+      let message: Record<string, unknown> | undefined;
+      try { const parsed: unknown = JSON.parse(Buffer.from(raw as Buffer).toString()); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) message = parsed as Record<string, unknown>; } catch { /* Reported in order, below. */ }
+      // Number pointer moves at receipt, so one that waited behind a slow page
+      // can be dropped once a newer position has arrived. The last move before
+      // any other message is kept: a release happens where the finger was.
+      const moving = (message?.type === 'touch' || message?.type === 'mouse') && message.phase === 'move';
+      if (!moving && client.lastWasMove) client.keptMoves.add(client.moves);
+      client.lastWasMove = moving;
+      const move = moving ? ++client.moves : undefined;
+      client.operations = client.operations.then(() => handleMessage(client, message, move)).catch(() => send(client, { type: 'error', message: 'The requested action was not accepted. Check that the session is still active.' }));
     });
     ws.on('close', () => { clearTimeout(client.timer); unwatch(client); clients.delete(client); });
     ws.on('error', () => { /* Socket closes without logging input or credentials. */ });

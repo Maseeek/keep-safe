@@ -44,7 +44,7 @@ Ask what users would replace, what setup/support they expect, and whether they w
 
 ## Economics and release gates
 
-Measure active handoff duration, transmitted bytes and support time using synthetic pages or consented coarse counts. Do not estimate cost from request count alone: the current image stream sends JPEG frames as base64, so page complexity and viewing time affect bandwidth.
+Measure active handoff duration, transmitted bytes and support time using synthetic pages or consented coarse counts. Do not estimate cost from request count alone: the image stream sends a binary JPEG for each repaint of the page, up to about thirty a second and roughly 2.5 MB a second at most, and nothing while the page is still. Page activity and viewing time therefore drive bandwidth.
 
 For a future relay, model `encoded frame bytes × delivered frames + protocol overhead` per session. Add measured hosting, connection coordination, notification, payment and support costs before estimating contribution per customer. Allocate free-user traffic and idle connection capacity too. Define revenue consistently after applicable taxes, refunds and payment fees, without counting a fee twice. Free-tier availability is not a sustainable cost forecast. No measured cost model or margin claim exists yet.
 

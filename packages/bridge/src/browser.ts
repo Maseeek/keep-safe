@@ -6,13 +6,24 @@ import { createPageControls } from './page-controls';
 import type { EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
 
-export interface BrowserFrame { data: string; width: number; height: number; url: string; navigationAvailable?: boolean }
+export interface BrowserFrame {
+  data: string; width: number; height: number; url: string; navigationAvailable?: boolean;
+  /** This browser takes `touch` and `mouse` input, so the phone forwards raw gestures. */
+  gestures?: boolean;
+}
 export interface BrowserSession {
   readonly cdpUrl?: string;
   readonly pageUrl?: string;
   frame(): Promise<BrowserFrame>;
   /** May report what the action left focused, so the phone can raise its keyboard. */
   input(input: { type: string; [key: string]: unknown }): Promise<FocusState | void>;
+  /** Pushes a frame whenever the page repaints. The browser sends the next one
+   * only after the listener settles, so a slow phone link drops frames instead
+   * of queuing them. Resolves to a function that stops the stream. */
+  stream?(listener: (frame: BrowserFrame) => Promise<void> | void): Promise<() => Promise<void>>;
+  /** Lifts a finger or mouse button the owner left down on the page. Returns
+   * nothing when none is held. */
+  releasePointers?(): Promise<void> | void;
   /** Managed browsers only: match the controlling phone's screen. */
   resize?(viewport: ViewportRequest): Promise<void>;
   inspectControls?(options?: { includeFrames?: boolean }): Promise<PageControlsSnapshot>;
@@ -70,6 +81,7 @@ export class BrowserNavigationError extends Error {
   }
 }
 export class BrowserFrameChangedError extends Error {}
+interface ScreencastFrame { data: string; sessionId: number; metadata: { deviceWidth: number; deviceHeight: number; pageScaleFactor: number } }
 
 export function validateCdpUrl(raw: unknown): string | undefined {
   if (raw === undefined) return undefined;
@@ -199,37 +211,60 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     if (!page) { await browser.close(); throw new Error('No open browser page matches this website. Open the login page before requesting a handoff.'); }
     context = page.context();
   } else {
-    const port = await freePort();
     await resolveDestination(new URL(url).hostname, allowLocalUrls);
     proxy = await createOutboundProxy(allowLocalUrls);
-    try {
-      browser = await chromium.launch({
-        headless: true, proxy: { server: proxy.url },
+    const outbound = proxy;
+    // A free port can be taken by another program between choosing it and
+    // Chromium binding it. The agent must never be handed an address that
+    // belongs to something else, so each launch proves the port is its own.
+    const launch = async () => {
+      const port = await freePort();
+      const started = await chromium.launch({
+        headless: true, proxy: { server: outbound.url },
         // The bridge closes its own browsers on shutdown. Playwright's signal
         // handlers would close Chromium underneath that cleanup and leave it
         // waiting on a browser that is already gone.
         handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
         ...(process.env.KEEP_SAFE_CHROMIUM_PATH ? { executablePath: process.env.KEEP_SAFE_CHROMIUM_PATH } : {}),
-        args: [`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', '--proxy-bypass-list=<-loopback>', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+        // The live stream is captured at the window's real pixel density, so
+        // the browser starts at the phone's density rather than emulating it.
+        args: [`--force-device-scale-factor=${viewport?.scale ?? 1}`, `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', '--proxy-bypass-list=<-loopback>', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
       });
-    } catch (error) { await proxy.close(); throw error; }
-    owned = true;
-    cdpUrl = `http://127.0.0.1:${port}`;
+      try {
+        // Sized to the phone that will approve the request, so the website lays
+        // out for that screen. The browser keeps its desktop identity: websites
+        // still see ordinary Chromium, and the agent gets the same browser back.
+        const opened = await started.newContext({
+          viewport: viewport ? { width: viewport.width, height: viewport.height } : { width: 390, height: 720 },
+          deviceScaleFactor: viewport?.scale ?? 1, hasTouch: viewport?.touch === true,
+          acceptDownloads: false, serviceWorkers: 'block',
+        });
+        // Incognito contexts keep website cookies in memory. No tracing/video/storage-state files.
+        await opened.route('**/*', async route => {
+          try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
+        });
+        const first = await opened.newPage();
+        const probe = await opened.newCDPSession(first);
+        const { targetInfo } = await probe.send('Target.getTargetInfo');
+        await probe.detach();
+        let listed: unknown;
+        // A refused connection only means Chromium is still starting its listener.
+        for (let attempt = 0; attempt < 20 && listed === undefined; attempt++) {
+          try { listed = await (await fetch(`http://127.0.0.1:${port}/json/list`, { redirect: 'error', signal: AbortSignal.timeout(3000) })).json().catch(() => null); }
+          catch { await new Promise<void>(resolve => { setTimeout(resolve, 100); }); }
+        }
+        if (!Array.isArray(listed) || !listed.some(item => (item as { id?: unknown } | null)?.id === targetInfo.targetId)) { await started.close(); return undefined; }
+        return { started, opened, first, port };
+      } catch (error) { await started.close().catch(() => {}); throw error; }
+    };
     try {
-      // Sized to the phone that will approve the request, so the website lays
-      // out for that screen. The browser keeps its desktop identity: websites
-      // still see ordinary Chromium, and the agent gets the same browser back.
-      context = await browser.newContext({
-        viewport: viewport ? { width: viewport.width, height: viewport.height } : { width: 390, height: 720 },
-        deviceScaleFactor: viewport?.scale ?? 1, hasTouch: viewport?.touch === true,
-        acceptDownloads: false, serviceWorkers: 'block',
-      });
-      // Incognito contexts keep website cookies in memory. No tracing/video/storage-state files.
-      await context.route('**/*', async route => {
-        try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
-      });
-      page = await context.newPage();
-    } catch (error) { await browser.close(); await proxy.close(); throw error; }
+      let launched: Awaited<ReturnType<typeof launch>>;
+      for (let attempt = 0; attempt < 4 && !launched; attempt++) launched = await launch();
+      if (!launched) throw new Error('The browser could not open its private debugging port.');
+      browser = launched.started; context = launched.opened; page = launched.first;
+      cdpUrl = `http://127.0.0.1:${launched.port}`;
+      owned = true;
+    } catch (error) { await proxy.close(); throw error; }
   }
   const listeners: Array<() => void> = [];
   const pageStack: Page[] = [page];
@@ -244,14 +279,27 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
   const popupMonitors = new Map<Page, { ready: Promise<void>; session?: CDPSession; pending: number; failed: boolean; opened: () => void }>();
   let pageControls: ReturnType<typeof createPageControls> | undefined;
   const invalidateControls = () => { void pageControls?.clear(); };
+  /** The live stream follows whichever page the owner is looking at. */
+  let streaming: { retarget(): void } | undefined;
   const selectActivePage = () => {
     for (let index = pageStack.length - 1; index >= 0; index--) {
       if (!pageStack[index].isClosed()) {
-        if (page !== pageStack[index]) invalidateControls();
-        page = pageStack[index];
+        if (page !== pageStack[index]) { invalidateControls(); page = pageStack[index]; streaming?.retarget(); }
         return;
       }
     }
+  };
+  // Chromium reads input coordinates in unzoomed page pixels. Each streamed
+  // frame reports the zoom, so a point on the image lands where it shows.
+  const pageScale = new WeakMap<Page, number>();
+  // A finger or mouse button held on the page. Released before any handback,
+  // so the agent never receives a browser that is mid-drag.
+  const held: { touch?: { page: Page; session: CDPSession }; mouse?: { page: Page; clicks: number }; lastPress?: { at: number; x: number; y: number; clicks: number } } = {};
+  const releasePointers = async () => {
+    const touch = held.touch; held.touch = undefined;
+    if (touch && !touch.page.isClosed()) await touch.session.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] }).catch(() => {});
+    const mouse = held.mouse; held.mouse = undefined;
+    if (mouse && !mouse.page.isClosed()) await mouse.page.mouse.up({ clickCount: mouse.clicks }).catch(() => {});
   };
   const instrument = (current: Page) => {
     if (popupMonitors.has(current)) return;
@@ -278,6 +326,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       pageStack.push(popup);
       page = popup;
       instrument(popup);
+      streaming?.retarget();
     };
     const navigated = (frame: import('playwright').Frame) => { documentGeneration++; if (frame === current.mainFrame()) invalidateControls(); };
     const frameChanged = () => { documentGeneration++; };
@@ -469,7 +518,51 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       const size = target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
       selectActivePage();
       if (target !== page || target.isClosed() || target.url() !== source || generation !== documentGeneration || popups !== popupGeneration) throw new BrowserFrameChangedError();
-      return { data: image.toString('base64'), ...size, url: source, navigationAvailable: owned };
+      return { data: image.toString('base64'), ...size, url: source, navigationAvailable: owned, gestures: true };
+    },
+    async stream(listener) {
+      if (streaming || closed) throw new Error('This browser cannot be streamed right now.');
+      let stopped = false;
+      let current: { page: Page; session: CDPSession; received: (event: ScreencastFrame) => void } | undefined;
+      const detach = async () => {
+        const previous = current; current = undefined;
+        if (!previous) return;
+        previous.session.off('Page.screencastFrame', previous.received);
+        if (!previous.page.isClosed() && !closed) await previous.session.send('Page.stopScreencast').catch(() => {});
+      };
+      const attach = async () => {
+        await detach();
+        if (stopped || closed) return;
+        selectActivePage();
+        const target = page;
+        if (target.isClosed()) return;
+        const session = (await ensurePopupMonitor(target)).session!;
+        const received = (event: ScreencastFrame) => { void (async () => {
+          try {
+            if (stopped || closed || current?.session !== session || target !== page || target.isClosed()) return;
+            pageScale.set(target, event.metadata.pageScaleFactor > 0 ? event.metadata.pageScaleFactor : 1);
+            await listener({ data: event.data, width: Math.round(event.metadata.deviceWidth), height: Math.round(event.metadata.deviceHeight), url: target.url(), navigationAvailable: owned, gestures: true });
+          } catch { /* A frame the phone could not take is simply skipped. */ }
+          // Chromium holds the next frame until this one is acknowledged.
+          finally { await session.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {}); }
+        })(); };
+        current = { page: target, session, received };
+        session.on('Page.screencastFrame', received);
+        // Caps keep a large desktop view from sending more pixels than a phone link carries well.
+        await session.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1600, maxHeight: 2400, everyNthFrame: 1 });
+      };
+      // Registered first: a window that opens while the stream starts is followed too.
+      let work: Promise<void> = Promise.resolve();
+      streaming = { retarget() { work = work.then(attach).catch(() => {}); } };
+      const first = attach();
+      work = first.catch(() => {});
+      try { await first; } catch (error) { stopped = true; streaming = undefined; await detach().catch(() => {}); throw error; }
+      return async () => {
+        if (stopped) return;
+        stopped = true; streaming = undefined;
+        work = work.then(detach).catch(() => {});
+        await work;
+      };
     },
     async input(input) {
       selectActivePage();
@@ -496,6 +589,43 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         await page.keyboard.press(input.key as string);
         if (['Tab', 'Shift+Tab', 'Enter'].includes(input.key as string)) { selectActivePage(); return focusState(page); }
       }
+      else if (input.type === 'touch') {
+        const target = page; const session = popupMonitors.get(target)!.session!;
+        const scale = pageScale.get(target) ?? 1;
+        const touchPoints = [{ x: (input.x as number) / scale, y: (input.y as number) / scale, id: 0, radiusX: 8, radiusY: 8, force: 1 }];
+        if (input.phase === 'start') {
+          await releasePointers();
+          held.touch = { page: target, session };
+          await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints });
+        } else if (held.touch?.page !== target) await releasePointers(); // A gesture never continues on another window.
+        else if (input.phase === 'move') await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints });
+        else {
+          held.touch = undefined;
+          await session.send('Input.dispatchTouchEvent', { type: input.phase === 'end' ? 'touchEnd' : 'touchCancel', touchPoints: [] });
+          if (input.phase === 'end' && input.tap === true) { selectActivePage(); return focusState(page); }
+        }
+      }
+      else if (input.type === 'mouse') {
+        const target = page; const scale = pageScale.get(target) ?? 1;
+        const x = (input.x as number) / scale; const y = (input.y as number) / scale;
+        if (held.mouse && held.mouse.page !== target) await releasePointers();
+        if (input.phase === 'move') await target.mouse.move(x, y);
+        else if (input.phase === 'down') {
+          await releasePointers();
+          // Quick presses in one spot count up, so a double click selects a word.
+          const last = held.lastPress; const time = Date.now();
+          const clicks = last && time - last.at < 400 && Math.hypot(x - last.x, y - last.y) < 6 && last.clicks < 3 ? last.clicks + 1 : 1;
+          held.lastPress = { at: time, x, y, clicks };
+          await target.mouse.move(x, y);
+          held.mouse = { page: target, clicks };
+          await target.mouse.down({ clickCount: clicks });
+        } else if (held.mouse) {
+          const clicks = held.mouse.clicks; held.mouse = undefined;
+          await target.mouse.move(x, y);
+          await target.mouse.up({ clickCount: clicks });
+          if (input.phase === 'up' && input.tap === true) { selectActivePage(); return focusState(page); }
+        }
+      }
       else if (input.type === 'focus') {
         if (typeof input.snapshotId !== 'string' || typeof input.controlId !== 'string') throw new Error('Choose a control from the current inspection.');
         await pageControls!.focus(input.snapshotId, input.controlId);
@@ -515,8 +645,10 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       return pageControls!.inspect(options);
     },
     ...(owned ? { navigate } : {}),
+    releasePointers() { if (!closed && (held.touch || held.mouse)) return releasePointers(); },
     async prepareHandoff() {
       selectActivePage();
+      await releasePointers();
       await pageControls!.clear();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       // Clear residual password inputs on every still-open session page/frame before exposing a managed CDP endpoint.

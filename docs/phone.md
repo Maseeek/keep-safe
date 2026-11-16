@@ -7,7 +7,7 @@ Keep Safe on the phone has four tabs: **Inbox**, **Activity**, **Connect** and *
 1. An agent asks for a sign-in. The request appears in **Inbox**, with a notification if you turned those on.
 2. Open it. You see which agent is asking, why, the website, and the time left. Choose **Approve & open** or **Decline**.
 3. The live view opens full screen. The browser on your computer is sized to your phone, so the website shows its mobile layout.
-4. Sign in. Tap to click, swipe to scroll, tap a field and type.
+4. Sign in. Touch the page as you would the website itself: tap, swipe, drag. Tap a field and type.
 5. Choose **Done, hand back**. Keep Safe clears any password fields still on the page and gives the browser back to the agent.
 
 **End session** declines the request instead. The agent is told it was denied.
@@ -18,7 +18,15 @@ The top bar shows the website address, the time left, a details button and a ful
 
 The full-screen button fills the screen and, where the browser allows it, hides the browser's own bars. In the installed app the view already fills the screen.
 
-**Tap** clicks. A ring shows where the tap landed. **Swipe** inside the page scrolls it, including nested panels and embedded pages. Pinch zoom belongs to your phone's browser and is not sent to the website.
+The page takes your finger the way a phone browser does. **Tap** clicks, and a ring shows where the tap landed. **Swipe** scrolls with momentum, including nested panels and embedded pages. **Drag** moves sliders, carousels and drag puzzles such as captchas. **Press and hold** is a long press on the page.
+
+**Pinch with two fingers** to zoom the view, and move two fingers to pan it. The zoom is on your phone only: the website is not zoomed, and one finger still touches the page where it shows. **Reset zoom** appears in the corner while zoomed.
+
+As in a phone browser, a tap while the page is still coasting from a flick only stops the coasting. Tap again to click.
+
+On a computer, the mouse hovers, clicks, drags and selects text, and the wheel or trackpad scrolls. A double click selects a word.
+
+A bridge older than 0.4.0 takes taps and swipe scrolling only, without momentum or dragging. Update it with `keep-safe up`.
 
 Managed browsers also have **Back**, **Forward** and **Reload** above the page. Reload never resends a form. Navigation clears unsent text and waits for a fresh image.
 

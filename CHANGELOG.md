@@ -1,5 +1,24 @@
 # Change history
 
+## 16 November 2026
+
+### Raw gestures and a live stream (0.4.0)
+
+First of three stages of the interaction overhaul the owner asked for after a Stripe sign-in showed a drag captcha that Keep Safe could not operate.
+
+- Forward the finger to the website as a real touch. The page now handles taps, swipes with momentum, drags on sliders and drag puzzles, and long presses itself, as it would in a phone browser. Before, the phone guessed between a tap and a wheel scroll, so nothing could be dragged.
+- Forward a mouse or pen as hover, press, drag and release. Dragging selects text and a double click selects a word.
+- Zoom and pan the view with two fingers, on the phone, up to 4×. A **Reset zoom** button shows while zoomed.
+- Stream the picture. Chromium pushes a frame each time the page repaints, up to about thirty a second, and none while it is still. Frames are binary instead of base64 JSON. Before, the bridge took a screenshot ten times a second.
+- Lift a held finger or mouse button when the phone stops watching, disconnects or hands back, before the agent can use the browser.
+- Start the managed browser at the phone's pixel density, which the stream needs to stay sharp.
+- Raise the socket limit from 60 to 240 messages a second for pointer moves. The bridge drops moves that a newer one has replaced.
+- Keep older pairs working. An updated app falls back to taps and swipe scrolling with an older bridge, and an updated bridge still serves JSON frames, `click` and `scroll` to an older app.
+
+Pinch zoom of the website itself was tried and rejected: through Chromium's debugging interface it overshoots or oscillates.
+
+Not yet verified: any of this on a physical phone.
+
 ## 13 November 2026
 
 ### Inline QR code for agent clients

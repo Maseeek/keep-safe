@@ -93,7 +93,7 @@ describe('built live browser controls', () => {
     try {
       const pairing = await page.evaluate(() => sessionStorage.getItem('keep-safe.connection.v1'));
       await page.getByTitle('Press Tab in browser').evaluate(button => {
-        for (let index = 0; index < 80; index++) (button as HTMLButtonElement).click();
+        for (let index = 0; index < 260; index++) (button as HTMLButtonElement).click();
       });
       await expect.poll(() => flow.sockets.length, { timeout: 10000 }).toBe(2);
       await page.locator('.remote-screen img').waitFor({ state: 'visible' });
