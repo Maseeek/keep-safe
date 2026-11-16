@@ -577,3 +577,9 @@ Started by Claude Fable 5.2 and finished by Claude Opus 5.5 from the handover no
 - Checked at 320 px in light and dark: every new button and tab is at least 44 px tall and nothing overflows.
 
 Not verified: a password manager offering to fill the boxes, clipboard prompts on iOS and Android, and any of this on a physical phone.
+
+### Stage 3 release verified on 16 November 2026
+
+- Merged pull request 8 as `0f0f7b1`. Production serves `index-DBrlVdea.js` and `index-qyRb4fy0.css`, byte-identical to the tested build.
+- Production check against a temporary local bridge and the synthetic page, 18 of 18 at 320 px and 390 px: the window strip for a popup, switching back with touches landing on the first window, closing the popup, Select and Copy putting the dragged words on the clipboard, Paste into the tapped field, both password boxes reaching the page and emptying, no agent browser before handback, handback with the page's password cleared, and no page errors, overflow or writes to the hosted site.
+- The owner's bridge was idle (one denied request) and now runs 0.6.0 in its own systemd scope, with Google Chrome as the managed browser. One phone is paired, an Android phone paired that afternoon.
