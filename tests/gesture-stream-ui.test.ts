@@ -3,13 +3,15 @@ import { chromium, type Browser, type CDPSession, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
-import { startGestureFixture } from './fixtures/gesture-site';
+import { gestureFixtureValues, startGestureFixture } from './fixtures/gesture-site';
 
 const ownerToken = 'synthetic-gesture-owner'; const agentToken = 'synthetic-gesture-agent';
 type Point = { x: number; y: number; id?: number };
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
-async function touch(cdp: CDPSession, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', points: Point[] = []) {
-  await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map((point, index) => ({ x: point.x, y: point.y, id: point.id ?? index, radiusX: 1, radiusY: 1, force: 1 })) });
+/** `timestamp` (seconds) gives the simulated finger exact timing, as a real
+ * hand has, however busy the test computer is. */
+async function touch(cdp: CDPSession, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', points: Point[] = [], timestamp?: number) {
+  await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map((point, index) => ({ x: point.x, y: point.y, id: point.id ?? index, radiusX: 1, radiusY: 1, force: 1 })), ...(timestamp !== undefined ? { timestamp } : {}) });
 }
 /** Where a point of the remote page is on this screen right now, through any zoom. */
 async function onScreen(page: Page, x: number, y: number) {
@@ -107,9 +109,10 @@ describe('touching the live page as the website itself', () => {
 
       // A flick scrolls the website and momentum carries it past where the finger stopped.
       const from = await onScreen(page, 195, 470); const to = await onScreen(page, 195, 110);
-      await touch(cdp, 'touchStart', [from]);
-      for (let step = 1; step <= 8; step++) { await touch(cdp, 'touchMove', [{ x: from.x, y: from.y + (to.y - from.y) * step / 8 }]); await pause(16); }
-      await touch(cdp, 'touchEnd');
+      const began = Date.now() / 1000;
+      await touch(cdp, 'touchStart', [from], began);
+      for (let step = 1; step <= 8; step++) { await touch(cdp, 'touchMove', [{ x: from.x, y: from.y + (to.y - from.y) * step / 8 }], began + step * 0.016); await pause(16); }
+      await touch(cdp, 'touchEnd', [], began + 9 * 0.016);
       await expect.poll(() => site.count('scrolled-far'), { timeout: 5000 }).toBe(1);
       expect(test.sent.filter(message => message.type !== 'touch')).toEqual([]);
 
@@ -118,6 +121,107 @@ describe('touching the live page as the website itself', () => {
         expect(await remote.evaluate(() => (window as unknown as { gesture: { events: string[]; pointerTypes: string[] } }).gesture)).toEqual({ events: ['down', 'up'], pointerTypes: ['touch'] });
         // The website was never zoomed: the zoom lived on the phone.
         expect(await remote.evaluate(() => window.visualViewport!.scale)).toBe(1);
+      } finally { await agent.close(); }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+      expect(test.errors).toEqual([]);
+    } finally { await cdp.detach().catch(() => {}); await test.close(); }
+  }, 60000);
+
+  it.each([320, 390])('switches windows, copies a selection, pastes and takes a password manager fill at %ipx', async width => {
+    const context = await browser.newContext({ viewport: { width, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    const test = await open(context); const { page, site } = test; const cdp = await context.newCDPSession(page);
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: test.bridge.url });
+    const tapAt = async (x: number, y: number) => { const point = await onScreen(page, x, y); await touch(cdp, 'touchStart', [point]); await touch(cdp, 'touchEnd'); };
+    const tall = async (name: string) => { const box = (await page.getByRole('button', { name, exact: true }).boundingBox())!; expect(box.height).toBeGreaterThanOrEqual(44); };
+    try {
+      // One window: no strip.
+      expect(await page.locator('.window-tabs').count()).toBe(0);
+      // The page opens a second window. The strip appears with it showing.
+      await tapAt(120, 410);
+      await expect.poll(() => site.count('window-ready'), { timeout: 5000 }).toBe(1);
+      const strip = page.getByRole('group', { name: 'Windows this sign-in opened', exact: true });
+      await strip.waitFor();
+      await page.getByRole('button', { name: 'Synthetic second window, showing now', exact: true }).waitFor();
+      await tall('Show Synthetic gesture practice'); await tall('Close Synthetic second window');
+      // Back to the first window. Touches land on it again.
+      await page.getByRole('button', { name: 'Show Synthetic gesture practice', exact: true }).click();
+      await page.getByRole('button', { name: 'Synthetic gesture practice, showing now', exact: true }).waitFor();
+      await pause(300);
+      await tapAt(275, 410);
+      await expect.poll(() => site.count('corner-tapped'), { timeout: 5000 }).toBe(1);
+      expect(site.count('window-tapped')).toBe(0);
+      await page.getByRole('button', { name: 'Close Synthetic second window', exact: true }).click();
+      await expect.poll(() => page.locator('.window-tabs').count(), { timeout: 5000 }).toBe(0);
+
+      // Select, drag a finger across two words, Copy: they are on this device's clipboard.
+      const select = page.getByRole('button', { name: 'Select text on the page by dragging', exact: true });
+      await tall('Select text on the page by dragging');
+      await select.click();
+      expect(await page.getByRole('button', { name: 'Stop selecting text', exact: true }).getAttribute('aria-pressed')).toBe('true');
+      const from = await onScreen(page, 21, 305); const to = await onScreen(page, 153, 305);
+      await touch(cdp, 'touchStart', [from]);
+      for (let step = 1; step <= 10; step++) { await touch(cdp, 'touchMove', [{ x: from.x + (to.x - from.x) * step / 10, y: from.y }]); await pause(16); }
+      await touch(cdp, 'touchEnd'); await pause(200);
+      // The finger went to the page as a mouse, so it selected instead of scrolling.
+      const drag = test.sent.slice(-3);
+      expect(drag.every(message => message.type === 'mouse')).toBe(true);
+      await page.getByRole('button', { name: 'Copy the selected text to this device', exact: true }).click();
+      // Shows what the notice said instead, if anything went wrong.
+      await expect.poll(() => page.locator('.tool-notice').innerText(), { timeout: 10000 }).toBe('Copied 11 characters to this device.');
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('alpha bravo');
+      // Copying turns Select off again.
+      await page.getByRole('button', { name: 'Select text on the page by dragging', exact: true }).waitFor();
+
+      // Paste: the clipboard's text goes to the field the owner tapped, replacing what was selected there.
+      await page.evaluate(text => navigator.clipboard.writeText(text), gestureFixtureValues.pasted);
+      await tapAt(100, 48);
+      await expect.poll(() => site.count('field-focused')).toBe(1);
+      await page.getByRole('button', { name: "Paste this device's clipboard into the page", exact: true }).click();
+      await expect.poll(() => site.count('paste-arrived'), { timeout: 5000 }).toBe(1);
+      await expect.poll(() => page.locator('.tool-notice').innerText(), { timeout: 10000 }).toBe('Pasted into the page.');
+
+      // Passwords: two boxes a password manager recognises. Filling them is what a manager does.
+      await page.getByRole('button', { name: 'Passwords', exact: true }).click();
+      const user = page.getByLabel('Username or email', { exact: true }); const secret = page.getByLabel('Password', { exact: true });
+      expect(await user.getAttribute('autocomplete')).toBe('username');
+      expect(await secret.getAttribute('autocomplete')).toBe('current-password');
+      expect(await secret.getAttribute('type')).toBe('password');
+      expect(await user.evaluate(element => element.closest('form')?.getAttribute('autocomplete'))).toBe('on');
+      await user.fill(gestureFixtureValues.user); await secret.fill(gestureFixtureValues.secret);
+      // The username replaces the pasted text in the page field.
+      await page.getByRole('button', { name: 'More keys', exact: true }).click();
+      await page.getByRole('button', { name: 'Select all in browser', exact: true }).click();
+      await page.getByRole('button', { name: 'More keys', exact: true }).click();
+      await page.getByRole('button', { name: 'Send username', exact: true }).click();
+      await expect.poll(() => site.count('user-arrived'), { timeout: 5000 }).toBe(1);
+      expect(await user.inputValue()).toBe('');
+      await tapAt(100, 494);
+      await page.getByRole('button', { name: 'Passwords', exact: true }).waitFor();
+      if (!await secret.isVisible()) await page.getByRole('button', { name: 'Passwords', exact: true }).click();
+      if (await secret.inputValue() === '') await secret.fill(gestureFixtureValues.secret);
+      await page.getByRole('button', { name: 'Send password', exact: true }).click();
+      await expect.poll(() => site.count('secret-arrived'), { timeout: 5000 }).toBe(1);
+      expect(await secret.inputValue()).toBe('');
+      // Nothing filled or pasted is left in the phone app's own page.
+      expect(await page.locator('body').innerText()).not.toContain(gestureFixtureValues.secret);
+      expect(await page.locator('body').innerText()).not.toContain(gestureFixtureValues.user);
+
+      // Leaving the app clears a filled box that was never sent.
+      await user.fill(gestureFixtureValues.user);
+      await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+      await expect.poll(() => page.locator('#credential-username').count()).toBe(0);
+      // Coming back to the app, as from the app switcher.
+      await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+      await page.getByRole('button', { name: 'Resume browser', exact: true }).click();
+      await page.locator('.remote-screen img').waitFor();
+      await page.getByRole('button', { name: 'Passwords', exact: true }).click();
+      expect(await page.getByLabel('Username or email', { exact: true }).inputValue()).toBe('');
+
+      const { agent, remote } = await test.handBack();
+      try {
+        // Handback cleared the password field. The username stayed, as it would.
+        expect(await remote.locator('#secret').inputValue()).toBe('');
+        expect(await remote.locator('#field').inputValue()).toBe(gestureFixtureValues.user);
       } finally { await agent.close(); }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       expect(test.errors).toEqual([]);

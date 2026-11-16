@@ -2,6 +2,21 @@
 
 ## 16 November 2026
 
+### Windows, paste, copy and password managers (0.6.0)
+
+Last of three stages of the interaction overhaul.
+
+- Show a strip of the windows a sign-in opens, with each title and site, to switch between them or close one. Before, Keep Safe followed the newest window and the owner could not go back.
+- Add **Paste**, which sends the phone's clipboard to the field the owner tapped.
+- Add **Passwords**: a username and a password box that a phone's password manager can fill. Each is sent to the page and emptied, and both are emptied when the owner leaves the app.
+- Add **Select** and **Copy** to bring selected page text, such as a recovery code, to the phone's clipboard. Text inside form fields is never copied.
+- Stop a notice or the window strip from resizing the website. Either one used to re-lay out the page a quarter of a second later and cancel a drag in progress.
+- Release the remote mouse when a press is dropped, and let a mouse cancel go in place instead of at the corner of the page.
+- Fit both bottom actions on 320 and 360 pixel phones. **Done, hand back** ran off the edge.
+- Send each touch's time from the phone, so a flick keeps its momentum when a slow link delivers the moves in a burst. Without it, the page stopped where the finger did.
+
+Not yet verified: a password manager filling the boxes, and clipboard permission prompts, on a physical phone.
+
 ### Sign in through your installed Google Chrome (0.5.0)
 
 Second of three stages of the interaction overhaul.

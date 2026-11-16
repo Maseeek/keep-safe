@@ -47,10 +47,17 @@ With a hardware keyboard, click a field and type. Tab, Shift+Tab, Enter, Escape,
 Swipe the row sideways to see everything.
 
 - **Keyboard**: live typing, described above.
-- **Type text**: a box for pasted or longer text, sent in one go with **Send**. Use it to paste from a password manager. **Show text** reveals what you entered before sending.
+- **Type text**: a box for pasted or longer text, sent in one go with **Send**. **Show text** reveals what you entered before sending.
+- **Paste**: sends the text on your phone's clipboard to the field you tapped on the page. Your browser may ask once for permission to read the clipboard. If it refuses, **Type text** opens so you can paste there.
+- **Passwords**: a username box and a password box that your phone's password manager can fill, as it would on any sign-in form. Tap a field on the page, then **Send** the matching one. Each box is emptied as it is sent, and both are emptied when you leave the app.
+- **Select** and **Copy**: with **Select** on, dragging a finger marks text on the page instead of scrolling it. **Copy** puts the marked text on your phone's clipboard, for example a recovery code. Text inside the page's form fields is never copied, so a password on the page cannot be read this way. **Select** turns itself off after a copy.
 - **More keys**: Space, Escape, Shift+Tab, arrow keys, Home, End, Page Up, Page Down, Delete and Select all.
 - **Page controls**: a list of the page's labelled fields and buttons. Choose one to focus it. This helps when a control is hard to tap. Field values and link addresses are never read. The list covers the main page, open web components and supported embedded pages, each with its origin.
 - **Tab**, **Enter**, **Backspace**, and scroll up and down.
+
+## Windows
+
+When the website opens another window, such as a Google or single sign-on popup, a strip of windows appears above the page with each window's title and site. Tap one to show it, or **×** to close it. The newest window shows by itself when it opens. The last window cannot be closed. The strip borrows space from the view without resizing the website.
 
 If focus could not be confirmed, typing is held back until you tap the page, press Tab, or pick a control again. This stops text landing in the wrong field.
 
@@ -76,4 +83,4 @@ Turn notifications on or off, check that this phone is enrolled with the current
 
 ## What does not transfer
 
-Your phone's passkeys, biometrics, hardware security keys and saved passwords do not move into the remote browser by themselves. You can paste a saved password with **Type text**. Websites that require a passkey on the signing-in device need their own cross-device flow.
+Your phone's passkeys, biometrics and hardware security keys do not move into the remote browser. Saved passwords come across through **Passwords** or **Paste**. Whether your password manager offers to fill the **Passwords** boxes depends on the manager and the phone, and has not been checked on a physical phone. Websites that require a passkey on the signing-in device need their own cross-device flow.

@@ -47,7 +47,7 @@ async function phone(options: { stream?: boolean; attach?: boolean } = {}) {
   send({ type: 'watch', requestId: request.id, viewport: { width: 390, height: 720, scale: 2, touch: true }, ...(options.stream === false ? {} : { stream: true }) });
   await expect.poll(() => binary.length + json.length, { timeout: 15000 }).toBeGreaterThan(0);
   await expect.poll(() => site.count('ready')).toBe(1);
-  const touch = (phase: string, x: number, y: number, tap?: boolean) => send({ type: 'touch', phase, x, y, ...(tap ? { tap } : {}) });
+  const touch = (phase: string, x: number, y: number, tap?: boolean, t?: number) => send({ type: 'touch', phase, x, y, ...(tap ? { tap } : {}), ...(t !== undefined ? { t } : {}) });
   const mouse = (phase: string, x: number, y: number, tap?: boolean) => send({ type: 'mouse', phase, x, y, ...(tap ? { tap } : {}) });
   const complete = async () => {
     expect((await call(`/api/requests/${request.id}/complete`, ownerToken, {})).status).toBe(200);
@@ -74,9 +74,10 @@ describe('raw gestures and the live stream', () => {
     await pause(400); const still = test.binary.length; await pause(1300);
     expect(test.binary.length).toBe(still);
     // A swipe is a real touch: the page scrolls, keeps moving after the finger lifts, and frames follow it.
-    test.touch('start', 200, 600);
-    for (let step = 1; step <= 8; step++) { test.touch('move', 200, 600 - step * 45); await pause(16); }
-    test.touch('end', 200, 240);
+    // With the phone's timestamps, as the app sends them.
+    test.touch('start', 200, 600, false, 1000);
+    for (let step = 1; step <= 8; step++) { test.touch('move', 200, 600 - step * 45, false, 1000 + step * 16); await pause(16); }
+    test.touch('end', 200, 240, false, 1000 + 9 * 16);
     await expect.poll(() => test.binary.length, { timeout: 5000 }).toBeGreaterThan(still + 5);
     const page = await test.complete();
     expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(400); // 360 from the finger, the rest from momentum
@@ -188,6 +189,19 @@ describe('raw gestures and the live stream', () => {
     expect(test.messages.filter(message => message.type === 'error')).toEqual([]);
   }, 40000);
 
+  it('keeps a flick\'s momentum when its moves arrive all at once', async () => {
+    const test = await phone();
+    // A slow link delivers the whole flick in one burst. The phone's own timing goes with it.
+    test.touch('start', 200, 600, false, 5000);
+    for (let step = 1; step <= 8; step++) test.touch('move', 200, 600 - step * 45, false, 5000 + step * 16);
+    test.touch('end', 200, 240, false, 5000 + 9 * 16);
+    await pause(1500);
+    const page = await test.complete();
+    // The finger moved 360 pixels. Momentum carried the page well beyond that.
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(600);
+    expect(test.messages.filter(message => message.type === 'error')).toEqual([]);
+  }, 40000);
+
   it('lists the windows of a sign-in and lets the owner switch between and close them', async () => {
     const test = await phone();
     const tabs = async (count: number) => { let last: Header | undefined; await expect.poll(async () => { for (;;) { const index = test.messages.findIndex(message => message.type === 'tabs'); if (index === -1) break; last = test.messages.splice(index, 1)[0]; } return (last?.tabs as unknown[] | undefined)?.length; }, { timeout: 5000 }).toBe(count); return last!.tabs as Array<{ id: string; title: string; origin: string; active: boolean }>; };
@@ -257,6 +271,7 @@ describe('raw gestures and the live stream', () => {
       { type: 'touch', phase: 'hover', x: 10, y: 10 }, { type: 'touch', phase: 'start', x: 391, y: 10 }, { type: 'touch', phase: 'start', x: 10, y: -1 },
       { type: 'touch', phase: 'start', x: 10, y: 10, tap: 'yes' }, { type: 'touch', phase: 'start', x: 10, y: 10, id: 1 }, { type: 'mouse', phase: 'start', x: 10, y: 10 },
       { type: 'mouse', phase: 'down', x: Number.NaN, y: 10 }, { type: 'mouse', phase: 'down', x: 10, y: 10, button: 'right' },
+      { type: 'mouse', phase: 'down', x: 10, y: 10, t: 5 }, { type: 'touch', phase: 'start', x: 10, y: 10, t: -1 }, { type: 'touch', phase: 'start', x: 10, y: 10, t: '5' },
     ]) { test.send(bad); expect((await test.next('error')).message).toBe('The requested action was not accepted. Check that the session is still active.'); }
     // Classic taps and wheel scrolling keep working beside the new messages.
     test.send({ type: 'click', x: 300, y: 410 });

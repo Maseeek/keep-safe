@@ -179,7 +179,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Which browser a managed sign-in opens here: the owner's Chrome as a window, or the hidden bundled one. */
   const managedBrowser = options.browserFactory ? undefined : (await chooseBrowser()).kind;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.5.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.6.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -524,8 +524,11 @@ export async function createBridge(options: BridgeOptions) {
       } else if (message.type === 'touch' || message.type === 'mouse') {
         if (!(message.type === 'touch' ? ['start', 'move', 'end', 'cancel'] : ['down', 'move', 'up', 'cancel']).includes(message.phase as string) ||
             (message.tap !== undefined && typeof message.tap !== 'boolean') ||
-            Object.keys(message).some(key => !['type', 'phase', 'x', 'y', 'tap'].includes(key))) throw new Error('Invalid pointer input.');
-        if (typeof message.x !== 'number' || typeof message.y !== 'number' || !Number.isFinite(message.x) || !Number.isFinite(message.y) || !entry.size || message.x < 0 || message.y < 0 || message.x > entry.size.width || message.y > entry.size.height) throw new Error('Invalid pointer coordinates.');
+            (message.t !== undefined && (message.type !== 'touch' || typeof message.t !== 'number' || !Number.isFinite(message.t) || message.t < 0)) ||
+            Object.keys(message).some(key => !['type', 'phase', 'x', 'y', 'tap', 't'].includes(key))) throw new Error('Invalid pointer input.');
+        // A cancel only lets go, so it is accepted while the page is being resized.
+        const finite = typeof message.x === 'number' && typeof message.y === 'number' && Number.isFinite(message.x) && Number.isFinite(message.y);
+        if (!finite || (message.phase !== 'cancel' && (!entry.size || (message.x as number) < 0 || (message.y as number) < 0 || (message.x as number) > entry.size.width || (message.y as number) > entry.size.height))) throw new Error('Invalid pointer coordinates.');
         if (superseded) return;
       } else if (message.type === 'text') {
         if (typeof message.text !== 'string' || !message.text.length || message.text.length > 4096) throw new Error('Text must contain 1–4096 characters.');

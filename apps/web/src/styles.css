@@ -406,7 +406,8 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .window-tab-close { display: inline-grid; place-items: center; min-width: 44px; flex: none; color: var(--muted); }
 .window-tab button:active:not(:disabled) { background: var(--surface-2); }
 .credential-form label { font-size: 0.875rem; font-weight: 600; }
-.tool-notice { margin: 0; }
+.tool-notice { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3; margin: 0; padding: 10px 14px; border-radius: 12px; background: rgb(11 12 13 / 86%); color: #fff; font-size: 0.875rem; line-height: 1.35; text-align: center; pointer-events: none; }
+.tool-notice:empty { display: none; }
 /* The website gets every touch on a live page, as it would in a phone browser. Two fingers zoom the view here. */
 .remote-screen img.takes-gestures { touch-action: none; transform-origin: 0 0; will-change: transform; cursor: default; }
 .remote-page { position: relative; }
@@ -453,7 +454,12 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .input-hint { font-size: 0.8125rem; text-align: center; }
 .session-actions { display: flex; gap: 10px; }
 .session-actions .button-light { flex: 0 1 auto; }
-.session-actions .button-dark { flex: 1; }
+.session-actions .button-dark { flex: 1; min-width: 0; }
+/* Both actions fit a 320-pixel phone: the icons go, the words stay. */
+@media (max-width: 389px) {
+  .session-actions .button { padding: 0 10px; gap: 0; }
+  .session-actions .button svg { display: none; }
+}
 .closed-back { width: 100%; }
 .redirect-note { display: flex; gap: 8px; padding: 12px 14px; border-radius: var(--r-m); background: var(--warn-soft); color: var(--warn); font-size: 0.875rem; }
 .redirect-note svg { flex: none; margin-top: 2px; }

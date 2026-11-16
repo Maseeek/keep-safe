@@ -139,6 +139,8 @@ On Linux with Google Chrome installed, the managed browser is your Chrome, opene
 - Touch the page as you would the website: tap, swipe with momentum, drag sliders and captcha puzzles, press and hold. Pinch with two fingers to zoom the view. On a computer the mouse hovers, drags and selects.
 - A live picture that follows the page as it repaints, up to about thirty frames a second, and sends nothing while the page is still.
 - Tap a text field and type with your phone's keyboard. Characters go straight to the page and are not kept on the phone.
+- **Passwords** boxes your phone's password manager can fill, **Paste** from your clipboard, and **Select** and **Copy** to bring text such as a recovery code back to your phone. Form field contents are never copied.
+- A strip of the windows a sign-in opens, such as a single sign-on popup, to switch between or close them.
 - A tool row for Tab, Enter, Backspace, more keys, pasted text, and a list of the page's fields and buttons.
 - Website Back, Forward and Reload in managed browsers.
 - The live website address, with a warning when it changes.

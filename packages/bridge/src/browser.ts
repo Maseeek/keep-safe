@@ -77,8 +77,7 @@ const selectionSource = String.raw`() => {
     const selection = window.getSelection();
     if (!selection) return '';
     let text = '';
-    for (let index = 0; index < selection.rangeCount && index < 16 && text.length < 4096; index++) text += (text ? '
-' : '') + selection.getRangeAt(index).toString();
+    for (let index = 0; index < selection.rangeCount && index < 16 && text.length < 4096; index++) text += (text ? '\n' : '') + selection.getRangeAt(index).toString();
     return text.slice(0, 4096);
   } catch { return ''; }
 }`;
@@ -345,7 +344,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
   const pageScale = new WeakMap<Page, number>();
   // A finger or mouse button held on the page. Released before any handback,
   // so the agent never receives a browser that is mid-drag.
-  const held: { touch?: { page: Page; session: CDPSession }; mouse?: { page: Page; clicks: number }; lastPress?: { at: number; x: number; y: number; clicks: number } } = {};
+  const held: { touch?: { page: Page; session: CDPSession; clock?: { phone: number; bridge: number; last: number } }; mouse?: { page: Page; clicks: number }; lastPress?: { at: number; x: number; y: number; clicks: number } } = {};
   const releasePointers = async () => {
     const touch = held.touch; held.touch = undefined;
     if (touch && !touch.page.isClosed()) await touch.session.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] }).catch(() => {});
@@ -676,15 +675,25 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         const target = page; const session = popupMonitors.get(target)!.session!;
         const scale = pageScale.get(target) ?? 1;
         const touchPoints = [{ x: (input.x as number) / scale, y: (input.y as number) / scale, id: 0, radiusX: 8, radiusY: 8, force: 1 }];
+        // The phone's timing, moved onto this computer's clock from the start of
+        // the gesture. Always in order and never later than now.
+        const phoneTime = typeof input.t === 'number' && Number.isFinite(input.t) ? input.t : undefined;
+        const when = (clock: { phone: number; bridge: number; last: number } | undefined) => {
+          if (!clock || phoneTime === undefined) return {};
+          clock.last = Math.min(Date.now() / 1000, Math.max(clock.last, clock.bridge + (phoneTime - clock.phone) / 1000));
+          return { timestamp: clock.last };
+        };
         if (input.phase === 'start') {
           await releasePointers();
-          held.touch = { page: target, session };
-          await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints });
+          const now = Date.now() / 1000;
+          held.touch = { page: target, session, ...(phoneTime !== undefined ? { clock: { phone: phoneTime, bridge: now, last: now } } : {}) };
+          await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints, ...when(held.touch.clock) });
         } else if (held.touch?.page !== target) await releasePointers(); // A gesture never continues on another window.
-        else if (input.phase === 'move') await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints });
+        else if (input.phase === 'move') await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints, ...when(held.touch.clock) });
         else {
+          const clock = held.touch.clock;
           held.touch = undefined;
-          await session.send('Input.dispatchTouchEvent', { type: input.phase === 'end' ? 'touchEnd' : 'touchCancel', touchPoints: [] });
+          await session.send('Input.dispatchTouchEvent', { type: input.phase === 'end' ? 'touchEnd' : 'touchCancel', touchPoints: [], ...when(clock) });
           if (input.phase === 'end' && input.tap === true) { selectActivePage(); return focusState(page); }
         }
       }
@@ -704,7 +713,9 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
           await target.mouse.down({ clickCount: clicks });
         } else if (held.mouse) {
           const clicks = held.mouse.clicks; held.mouse = undefined;
-          await target.mouse.move(x, y);
+          // A cancel lets go where the pointer already is. Moving first would
+          // stretch a selection or drag to wherever the cancel pointed.
+          if (input.phase === 'up') await target.mouse.move(x, y);
           await target.mouse.up({ clickCount: clicks });
           if (input.phase === 'up' && input.tap === true) { selectActivePage(); return focusState(page); }
         }
@@ -742,7 +753,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         const title = await Promise.race([item.title().catch(() => ''), new Promise<string>(resolve => { setTimeout(() => resolve(''), 500); })]);
         let origin = '';
         try { const address = new URL(item.url()); if (['http:', 'https:'].includes(address.protocol)) origin = address.origin; } catch { /* No web address yet. */ }
-        return { id: tabIds.get(item)!, title: title.replace(/[ -]/g, ' ').trim().slice(0, 80), origin, active: item === page };
+        return { id: tabIds.get(item)!, title: title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80), origin, active: item === page };
       }));
     },
     async selectTab(id) {

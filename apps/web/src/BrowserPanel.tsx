@@ -169,8 +169,9 @@ export function BrowserPanel({
       clearTimeout(timer);
       if (immediate) apply();
       // The on-screen keyboard and rotation animate through many sizes.
-      // Open tool panels borrow space from the page; that is not a new screen size.
-      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form")) apply(); }, 250);
+      // Open tool panels and the window strip borrow space from the page; that
+      // is not a new screen size, and resizing would re-lay out the website.
+      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form, .window-tabs")) apply(); }, 250);
     };
     measure(true);
     const observer = new ResizeObserver(() => measure(false));
@@ -589,6 +590,8 @@ export function BrowserPanel({
               </div>
             )}
             {taps.map(tap => <span key={tap.id} className="tap-ripple" style={{ left: tap.x, top: tap.y }} aria-hidden="true" />)}
+            {/* Floats over the page: a notice must never resize the website. */}
+            <p className="tool-notice" role="status" aria-live="polite">{toolNotice}</p>
             {liveFrame && workspace.status !== "connected" ? (
               <div className="reconnect-cover">
                 <LoaderCircle className="spin" size={24} />
@@ -610,7 +613,6 @@ export function BrowserPanel({
           </div>
         ) : null}
       </div>
-      {active && !isDemo && toolNotice ? <p className="website-navigation-hint tool-notice" role="status">{toolNotice}</p> : null}
       {active && !isDemo && workspace.navigationError ? <p className="website-navigation-error" role="alert">{workspace.navigationError}</p> : null}
       {active && !isDemo && workspace.navigationUncertain ? <p className="website-navigation-hint" role="status">Resume and check the website before handing back.</p> : null}
       {active && !isDemo && !expired && !workspace.browserPaused ? (
@@ -637,16 +639,16 @@ export function BrowserPanel({
             ) : null}
             {showCredentials ? (
               <form className="credential-form" id="credential-form" onSubmit={event => event.preventDefault()} autoComplete="on">
-                <p>Let your password manager fill these boxes. Tap a field on the page, then send it the matching one.</p>
+                <p>Fill these with your password manager. Tap a field on the page, then send the matching one.</p>
                 <label htmlFor="credential-username">Username or email</label>
                 <div className="input-with-button">
                   <input ref={credentialUser} id="credential-username" name="username" type="text" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
-                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} onClick={() => sendCredential(credentialUser, "Username")}>Send username <ArrowUp size={14} aria-hidden="true" /></button>
+                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} aria-label="Send username" onClick={() => sendCredential(credentialUser, "Username")}>Send <ArrowUp size={14} aria-hidden="true" /></button>
                 </div>
                 <label htmlFor="credential-password">Password</label>
                 <div className="input-with-button">
                   <input ref={credentialPassword} id="credential-password" name="password" type="password" autoComplete="current-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
-                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} onClick={() => sendCredential(credentialPassword, "Password")}>Send password <ArrowUp size={14} aria-hidden="true" /></button>
+                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} aria-label="Send password" onClick={() => sendCredential(credentialPassword, "Password")}>Send <ArrowUp size={14} aria-hidden="true" /></button>
                 </div>
                 <small>Each one goes straight to the page and is cleared here. Never saved or shown by Keep Safe.</small>
               </form>

@@ -22,7 +22,9 @@ interface Press {
   started: number;
   moved: boolean;
 }
-interface Pending { kind: "touch" | "mouse"; clientX: number; clientY: number }
+interface Pending { kind: "touch" | "mouse"; clientX: number; clientY: number; t: number }
+/** When the event happened on this device, so the page sees the finger's real speed. */
+const at = (kind: "touch" | "mouse", time: number) => kind === "touch" && Number.isFinite(time) && time >= 0 ? { t: Math.round(time * 10) / 10 } : {};
 
 const maxZoom = 4;
 /** Movement below this still counts as a tap. Close to Chromium's own slop. */
@@ -100,7 +102,7 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
     const location = valid(owner) ? point(owner, move.clientX, move.clientY, !press.current) : undefined;
     if (!location) return;
     lastMove.current = performance.now();
-    sender.current({ type: move.kind, phase: "move", x: location.x, y: location.y });
+    sender.current({ type: move.kind, phase: "move", x: location.x, y: location.y, ...at(move.kind, move.t) } as Parameters<typeof send>[0]);
   }, [point, valid]);
   /** At most one move per screen refresh. Only the newest position is sent. */
   const queueMove = useCallback((move: Pending) => {
@@ -126,7 +128,10 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
     if (!active) return;
     // The page may already be gone. The bridge also lifts a held pointer when
     // this view stops, so a refused message here leaves nothing pressed.
-    if (current.current === active.scope && active.scope.enabled) sender.current({ type: active.kind, phase: "cancel", x: 0, y: 0 });
+    // Still the same request on the same connection, even if the page size or
+    // address changed: the remote page must not keep the button held.
+    const now = current.current;
+    if (now.requestId === active.scope.requestId && now.identity === active.scope.identity && now.enabled) sender.current({ type: active.kind, phase: "cancel", x: 0, y: 0 });
     if (image.current?.hasPointerCapture(active.pointerId)) {
       try { image.current.releasePointerCapture(active.pointerId); } catch { /* Pointer already ended. */ }
     }
@@ -220,7 +225,7 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
     const location = point(scope, event.clientX, event.clientY, true);
     // While selecting, a finger is sent as a mouse: dragging then marks text.
     const kind = touch && !selecting ? "touch" : "mouse";
-    if (!valid(scope) || !location || !sender.current({ type: kind, phase: kind === "touch" ? "start" : "down", x: location.x, y: location.y } as Parameters<typeof send>[0])) {
+    if (!valid(scope) || !location || !sender.current({ type: kind, phase: kind === "touch" ? "start" : "down", x: location.x, y: location.y, ...at(kind, event.timeStamp) } as Parameters<typeof send>[0])) {
       if (touch) blocked.current = true;
       return;
     }
@@ -246,8 +251,8 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
       if (active.pointerId !== event.pointerId) return;
       if (!valid(active.scope)) { cancel(); return; }
       if (!active.moved && Math.hypot(event.clientX - active.startX, event.clientY - active.startY) >= tapSlop) active.moved = true;
-      queueMove({ kind: active.kind, clientX: event.clientX, clientY: event.clientY });
-    } else if (!touch && valid(scope)) queueMove({ kind: "mouse", clientX: event.clientX, clientY: event.clientY }); // Hover.
+      queueMove({ kind: active.kind, clientX: event.clientX, clientY: event.clientY, t: event.timeStamp });
+    } else if (!touch && valid(scope)) queueMove({ kind: "mouse", clientX: event.clientX, clientY: event.clientY, t: event.timeStamp }); // Hover.
   };
 
   const up = (event: ReactPointerEvent<HTMLImageElement>) => {
@@ -261,14 +266,14 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
     if (!valid(active.scope)) { cancel(); return; }
     if (!active.moved && Math.hypot(event.clientX - active.startX, event.clientY - active.startY) >= tapSlop) active.moved = true;
     // The release lands exactly where the finger was: send that position first.
-    pending.current = { kind: active.kind, clientX: event.clientX, clientY: event.clientY };
+    pending.current = { kind: active.kind, clientX: event.clientX, clientY: event.clientY, t: event.timeStamp };
     if (moveTimer.current !== undefined) { cancelAnimationFrame(moveTimer.current); moveTimer.current = undefined; }
     if (active.moved) flushMove(); else pending.current = null;
     press.current = null;
     const location = point(active.scope, event.clientX, event.clientY);
     const tap = !active.moved && performance.now() - active.started < 600;
     if (!location) { sender.current({ type: active.kind, phase: "cancel", x: 0, y: 0 }); return; }
-    if (sender.current({ type: active.kind, phase: active.kind === "touch" ? "end" : "up", x: location.x, y: location.y, ...(tap ? { tap: true } : {}) } as Parameters<typeof send>[0]) && tap) {
+    if (sender.current({ type: active.kind, phase: active.kind === "touch" ? "end" : "up", x: location.x, y: location.y, ...(tap ? { tap: true } : {}), ...at(active.kind, event.timeStamp) } as Parameters<typeof send>[0]) && tap) {
       tapped.current?.({ clientX: event.clientX, clientY: event.clientY });
     }
     try { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Capture already ended. */ }

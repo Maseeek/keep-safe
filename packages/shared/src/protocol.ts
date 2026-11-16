@@ -113,7 +113,13 @@ export interface DevicePairResult {
 
 /** One finger on the page. The website decides what a drag means, as it would
  * in a phone browser. `tap` marks a release the phone saw as a plain tap. */
-export type TouchMessage = { type: 'touch'; phase: 'start' | 'move' | 'end' | 'cancel'; x: number; y: number; tap?: boolean };
+export type TouchMessage = {
+  type: 'touch'; phase: 'start' | 'move' | 'end' | 'cancel'; x: number; y: number; tap?: boolean;
+  /** When the finger was there, in milliseconds on the phone's own clock. The
+   * browser reads the finger's speed from these, so a flick keeps its
+   * momentum even when the moves arrive bunched over a slow link. */
+  t?: number;
+};
 /** A mouse or pen: hover, press, drag and release with the main button. */
 export type MouseMessage = { type: 'mouse'; phase: 'down' | 'move' | 'up' | 'cancel'; x: number; y: number; tap?: boolean };
 
