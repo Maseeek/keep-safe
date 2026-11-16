@@ -122,9 +122,9 @@ If an agent's built-in browser does not expose a supported endpoint, it cannot b
 
 ## Managed browser
 
-Without `cdp_url`, Keep Safe opens an isolated Chromium browser when the owner opens an approved request. Agent-authenticated request details include `browser.cdpUrl` once the owner completes the handoff. The agent can connect to that local endpoint after completion and use the authenticated context.
+Without `cdp_url`, Keep Safe opens an isolated browser when the owner opens an approved request: the owner's installed Google Chrome as a window with a temporary profile where that is supported, and a hidden Chromium otherwise. [The browser](cli.md#the-browser) explains the choice. Agent-authenticated request details include `browser.cdpUrl` once the owner completes the handoff. The agent can connect to that local endpoint after completion and use the authenticated context.
 
-Cookies remain in memory on the developer's computer. The managed browser is closed at the request's original expiry time, including after completion. Agents must resume before that deadline. Existing externally owned browsers are disconnected rather than terminated by Keep Safe cleanup.
+Cookies remain on the developer's computer: in memory in the hidden browser, and in a temporary owner-only profile folder for Chrome, deleted when that browser closes. The managed browser is closed at the request's original expiry time, including after completion. Agents must resume before that deadline. Existing externally owned browsers are disconnected rather than terminated by Keep Safe cleanup.
 
 ## HTTP API
 

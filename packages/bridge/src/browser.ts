@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page, type Route } from 'playwright';
 import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
 import { createPageControls } from './page-controls';
+import { chooseBrowser, launchChrome, type ChromeProcess } from './chrome';
 import type { EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
 
@@ -96,6 +97,7 @@ export function validateCdpUrl(raw: unknown): string | undefined {
 }
 
 export async function browserAvailable(): Promise<boolean> {
+  if ((await chooseBrowser()).kind === 'chrome') return true;
   try { await access(process.env.KEEP_SAFE_CHROMIUM_PATH || chromium.executablePath()); return true; } catch { return false; }
 }
 
@@ -184,11 +186,14 @@ async function clearPagePasswords(current: Page, deadline: number, clear = true)
 }
 
 export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls, viewport }) => {
-  let browser: Browser;
-  let context: BrowserContext;
-  let page: Page;
+  let browser!: Browser;
+  let context!: BrowserContext;
+  let page!: Page;
   let owned = false;
   let proxy: Awaited<ReturnType<typeof createOutboundProxy>> | undefined;
+  /** Set when the session runs the owner's installed Chrome as a window. */
+  let chrome: ChromeProcess | undefined;
+  const size = { width: viewport?.width ?? 390, height: viewport?.height ?? 720 };
   if (cdpUrl) {
     // Resolve HTTP discovery ourselves, rejecting redirects and non-loopback returned endpoints.
     let endpoint = cdpUrl;
@@ -214,6 +219,28 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     await resolveDestination(new URL(url).hostname, allowLocalUrls);
     proxy = await createOutboundProxy(allowLocalUrls);
     const outbound = proxy;
+    const guard = async (route: Route) => {
+      try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
+    };
+    const choice = await chooseBrowser();
+    if (choice.kind === 'chrome') {
+      // Any failure here falls back to the bundled browser below.
+      try {
+        const started = await launchChrome({ executable: choice.executable, proxyUrl: outbound.url, scale: viewport?.scale ?? 1, ...size });
+        try {
+          const connected = await chromium.connectOverCDP(started.endpoint, { timeout: 10_000 });
+          const opened = connected.contexts()[0];
+          if (!opened) throw new Error('Google Chrome has no window.');
+          await opened.route('**/*', guard);
+          const control = await connected.newBrowserCDPSession();
+          await control.send('Browser.setDownloadBehavior', { behavior: 'deny' });
+          await control.detach();
+          browser = connected; context = opened; page = opened.pages()[0] ?? await opened.newPage();
+          cdpUrl = `http://127.0.0.1:${started.port}`;
+          chrome = started; owned = true;
+        } catch (error) { await started.close(); throw error; }
+      } catch { /* Chrome is missing a display or did not start. */ }
+    }
     // A free port can be taken by another program between choosing it and
     // Chromium binding it. The agent must never be handed an address that
     // belongs to something else, so each launch proves the port is its own.
@@ -240,9 +267,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
           acceptDownloads: false, serviceWorkers: 'block',
         });
         // Incognito contexts keep website cookies in memory. No tracing/video/storage-state files.
-        await opened.route('**/*', async route => {
-          try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
-        });
+        await opened.route('**/*', guard);
         const first = await opened.newPage();
         const probe = await opened.newCDPSession(first);
         const { targetInfo } = await probe.send('Target.getTargetInfo');
@@ -257,7 +282,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         return { started, opened, first, port };
       } catch (error) { await started.close().catch(() => {}); throw error; }
     };
-    try {
+    if (!owned) try {
       let launched: Awaited<ReturnType<typeof launch>>;
       for (let attempt = 0; attempt < 4 && !launched; attempt++) launched = await launch();
       if (!launched) throw new Error('The browser could not open its private debugging port.');
@@ -301,6 +326,15 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     const mouse = held.mouse; held.mouse = undefined;
     if (mouse && !mouse.page.isClosed()) await mouse.page.mouse.up({ clickCount: mouse.clicks }).catch(() => {});
   };
+  /** Chrome as a window is sized page by page: its window cannot be as narrow
+   * as a phone. The screen it reports stays the computer's own. */
+  const fit = async (session: CDPSession) => {
+    if (!chrome) return;
+    await session.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false });
+    if (viewport?.touch) await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    // Website service workers stay out of page loads, so the Reload guard sees every document request.
+    await session.send('Network.setBypassServiceWorker', { bypass: true });
+  };
   const instrument = (current: Page) => {
     if (popupMonitors.has(current)) return;
     sessionPages.add(current);
@@ -317,6 +351,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         // No event parameters (including URLs) are collected.
         session.on('Page.windowOpen', monitor.opened);
         await session.send('Page.enable');
+        await fit(session);
       } catch { monitor.failed = true; }
     })();
     const dismiss = (dialog: import('playwright').Dialog) => { void dialog.dismiss().catch(() => {}); };
@@ -383,8 +418,10 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       // detached must not hold up shutdown.
       await Promise.race([pageControls?.clear(), new Promise<void>(resolve => { setTimeout(resolve, 2000).unref(); })]);
       // Closing a connected Playwright browser disconnects; it does not terminate the agent's browser.
-      if (owned) await context.close().catch(() => {});
+      if (owned && !chrome) await context.close().catch(() => {});
       await browser.close().catch(() => {});
+      // Ends the Chrome window and deletes its temporary profile and cookies.
+      await chrome?.close();
       // Disconnect first so a busy renderer cannot leave monitor setup queued
       // forever while cleanup is waiting for that same renderer to respond.
       for (const monitor of popupMonitors.values()) {
@@ -511,14 +548,32 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       selectActivePage();
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       const target = page; const source = target.url(); const generation = documentGeneration; const popups = popupGeneration;
-      await ensurePopupMonitor(target);
-      // The text caret stays visible and page animations keep running: this is a
-      // live view, and freezing either makes typing feel unresponsive.
-      const image = await target.screenshot({ type: 'jpeg', quality: 62, timeout: 5000, caret: 'initial' });
-      const size = target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      const monitor = await ensurePopupMonitor(target);
+      // Captured as the page is: the text caret stays visible and animations
+      // keep running. Chromium's own capture is used directly because a
+      // Playwright screenshot of a Chrome window can stall while the page navigates.
+      // A capture asked for at the instant a page is replaced may never be
+      // answered. Ask once more after a moment and take whichever answers,
+      // so a busy computer is not mistaken for a broken view.
+      const session = monitor.session!;
+      const image = await new Promise<{ data: string }>((resolve, reject) => {
+        let settled = false;
+        const finish = (work: () => void) => { if (settled) return; settled = true; clearTimeout(again); clearTimeout(limit); work(); };
+        const ask = () => {
+          session.send('Page.captureScreenshot', { format: 'jpeg', quality: 62, optimizeForSpeed: true }).then(result => finish(() => resolve(result)), error => {
+            // Chromium says this when the page has nothing painted yet, such as just after opening.
+            if (!settled && /Unable to capture screenshot/.test(String((error as Error | null)?.message))) setTimeout(() => { if (!settled) ask(); }, 100);
+            else finish(() => reject(error));
+          });
+        };
+        const again = setTimeout(ask, 1200);
+        const limit = setTimeout(() => finish(() => reject(new Error('The browser did not produce an image.'))), 5000);
+        ask();
+      });
+      const shown = chrome ? { ...size } : target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
       selectActivePage();
       if (target !== page || target.isClosed() || target.url() !== source || generation !== documentGeneration || popups !== popupGeneration) throw new BrowserFrameChangedError();
-      return { data: image.toString('base64'), ...size, url: source, navigationAvailable: owned, gestures: true };
+      return { data: image.data, ...shown, url: source, navigationAvailable: owned, gestures: true };
     },
     async stream(listener) {
       if (streaming || closed) throw new Error('This browser cannot be streamed right now.');
@@ -635,7 +690,12 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     ...(owned ? {
       async resize(next: ViewportRequest) {
         if (closed) return;
-        for (const current of context.pages()) if (!current.isClosed()) await current.setViewportSize({ width: next.width, height: next.height });
+        size.width = next.width; size.height = next.height;
+        for (const current of context.pages()) {
+          if (current.isClosed()) continue;
+          if (!chrome) await current.setViewportSize({ width: next.width, height: next.height });
+          else { const session = popupMonitors.get(current)?.session; if (session) await fit(session); }
+        }
       },
     } : {}),
     async inspectControls(options) {

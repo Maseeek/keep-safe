@@ -128,7 +128,9 @@ For other MCP clients, use this configuration:
 
 The server offers three tools: `request_login`, `wait_for_login` and `get_login_request`. It starts the background bridge on demand, so it keeps working after a reboot. If no phone is paired, `request_login` tells the agent to ask you to run `keep-safe pair`.
 
-Agents with their own Chromium browser pass its loopback debugging address as `cdp_url`. Otherwise Keep Safe opens a separate managed browser and gives the agent its address only after you hand it back. The [integration guide](docs/integrations.md) has the HTTP API and per-client notes.
+Agents with their own Chromium browser pass its loopback debugging address as `cdp_url`. Otherwise Keep Safe opens a separate managed browser and gives the agent its address only after you hand it back.
+
+On Linux with Google Chrome installed, the managed browser is your Chrome, opened as an ordinary window with a fresh temporary profile. Websites see a normal browser, so they ask for a captcha less often than they do of a hidden one. The window is visible on the computer while you sign in from the phone. Elsewhere, or with `KEEP_SAFE_BROWSER=bundled`, Keep Safe uses its own hidden Chromium. See [the browser](docs/cli.md#the-browser). The [integration guide](docs/integrations.md) has the HTTP API and per-client notes.
 
 ## On the phone
 
@@ -146,7 +148,7 @@ Details are in the [phone app guide](docs/phone.md).
 
 ## Security at a glance
 
-- Keep Safe does not store passwords, log input, record the screen or export cookies.
+- Keep Safe does not store passwords, log input, record the screen or export cookies. Cookies stay on your computer: in memory in the hidden browser, or in a temporary Chrome profile that only you can read and that is deleted when the session's browser closes.
 - Phones pair with single-use codes and hold their own revocable keys. Agents use a separate key and cannot approve requests or pair phones.
 - The agent gets the browser back only after you choose **Done, hand back**. Before that, in-flight input is drained and remaining password fields are cleared.
 - The managed browser reaches public websites only. Private and local network addresses are blocked.
@@ -160,7 +162,8 @@ Details are in the [phone app guide](docs/phone.md).
 - A handoff lasts ten minutes by default and thirty at most. A managed browser closes at that deadline even after handback, so the agent must resume before then.
 - Requests and activity are kept in memory and reset when Keep Safe restarts.
 - Agents must pause while you are in control. Keep Safe cannot stop another program that already holds the browser's debugging address.
-- Phone passkeys, biometrics and hardware security keys do not transfer into the remote browser. Some websites block automated browsers.
+- Phone passkeys, biometrics and hardware security keys do not transfer into the remote browser. Some websites block automated browsers. Chrome still tells a website that it is being remote-controlled (`navigator.webdriver`), and Keep Safe does not hide that.
+- The Chrome window route is verified on Linux only, with the window minimised. A locked screen, macOS and Windows are not verified.
 - On the default route the phone's address changes when the computer restarts. A phone without notifications needs one new scan after that.
 - Notification delivery on a physical phone and the Tailscale HTTPS route have not been verified end to end by the maintainers yet. The secure public link, Tailscale without HTTPS, local use and Chromium phone emulation are tested.
 - The page controls list is a helper, not a complete accessibility tree.

@@ -110,6 +110,27 @@ A running bridge holds `bridge.lock` in its configuration directory. If a bridge
 | `bridge.log`, `tunnel.log` | Startup and tunnel output. No keys, typed input or page content. |
 | `bridge.lock` | Held while a bridge or key operation uses this directory. |
 
+## The browser
+
+A managed sign-in opens one of two browsers.
+
+- **Google Chrome, as a window.** Your installed Chrome, started the way you would start it, with a fresh temporary profile. Websites see an ordinary browser with a normal name, plugins and graphics, so they ask for a captcha less often. The window appears on the computer's screen and shows the page while you sign in from the phone. Closing it ends the session.
+- **Built-in, hidden.** The Chromium that Keep Safe installs. Nothing appears on the computer. It reports itself as `HeadlessChrome`, and some websites answer that with a captcha.
+
+`keep-safe up` picks Chrome when the computer runs Linux, has a display (`DISPLAY` is set, as it is in a desktop session with X11 or XWayland) and has `google-chrome` or `google-chrome-stable` installed. Otherwise it uses the hidden browser. `keep-safe status` shows which one is in use.
+
+Set `KEEP_SAFE_BROWSER` before `keep-safe up --restart` to choose: `bundled` always uses the hidden browser, `chrome` uses Chrome on any system where it is found, and `auto` is the default described above. If Chrome fails to start, that session falls back to the hidden browser.
+
+What the Chrome window route changes:
+
+- Cookies are written to a temporary profile folder that only your user can read. The folder is deleted when the session's browser closes, which is at the request's deadline at the latest. If Keep Safe is killed, the next start closes the leftover Chrome and deletes its folder. The hidden browser keeps cookies in memory only.
+- Chrome is told not to offer to save passwords, cards or addresses in that profile.
+- Chrome is started with rendering switches (`--ozone-platform=x11 --disable-gpu-vsync`) so the page keeps painting while the window is hidden. Without them a minimised window updated once a second.
+- All traffic still leaves through Keep Safe's checked proxy, so private and local addresses stay blocked, and downloads are refused.
+- No switch hides that Chrome is being controlled. `navigator.webdriver` stays true, because it is. A website can still decide to show a captcha, and you can now solve it from the phone.
+
+Verified on Linux (COSMIC on Wayland with XWayland) with Chrome 157, with the window showing and minimised. Not verified: a locked screen or a display that is off, macOS, Windows, and a Wayland session without XWayland.
+
 ## Environment
 
 | Variable | Meaning |
@@ -117,4 +138,6 @@ A running bridge holds `bridge.lock` in its configuration directory. If a bridge
 | `KEEP_SAFE_CONFIG_DIR` | Configuration directory |
 | `KEEP_SAFE_PORT` | Local port, default 4318 |
 | `KEEP_SAFE_BRIDGE_URL`, `KEEP_SAFE_AGENT_TOKEN` | Point an MCP client at a specific bridge |
-| `KEEP_SAFE_CHROMIUM_PATH` | Use a specific Chromium binary |
+| `KEEP_SAFE_BROWSER` | `auto`, `chrome` or `bundled`. See [the browser](#the-browser) |
+| `KEEP_SAFE_CHROME_PATH` | Use a specific Google Chrome program |
+| `KEEP_SAFE_CHROMIUM_PATH` | Use a specific Chromium binary for the hidden browser |

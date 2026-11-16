@@ -93,7 +93,9 @@ export async function up(options: UpOptions): Promise<{ state: DaemonState; star
   const log = openSync(logFile, 'w', 0o600);
   let pid: number | undefined;
   try {
-    const child = spawn(process.execPath, args, { cwd: packageRoot, detached: true, stdio: ['ignore', log, log], windowsHide: true });
+    // The background bridge opens the owner's installed Chrome where that is
+    // known to work, unless they chose otherwise.
+    const child = spawn(process.execPath, args, { cwd: packageRoot, detached: true, stdio: ['ignore', log, log], windowsHide: true, env: { ...process.env, KEEP_SAFE_BROWSER: process.env.KEEP_SAFE_BROWSER ?? 'auto' } });
     child.unref();
     pid = child.pid;
   } finally { closeSync(log); }
@@ -127,7 +129,7 @@ export async function ownerConfig(directory: string): Promise<BridgeConfig> {
   return readExistingConfig(directory);
 }
 
-export interface BridgeStatus { phones: number; notifications: number; browserAvailable: boolean; version?: string; link?: string; publicUrl?: string }
+export interface BridgeStatus { phones: number; notifications: number; browserAvailable: boolean; browser?: 'chrome' | 'bundled'; version?: string; link?: string; publicUrl?: string }
 export async function bridgeStatus(directory: string, port: number): Promise<BridgeStatus | undefined> {
   try {
     const config = await ownerConfig(directory);
