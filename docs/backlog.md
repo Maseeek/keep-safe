@@ -52,6 +52,8 @@
 - [ ] Verify the Tailscale HTTPS route end to end on a tailnet with certificates enabled.
 - [ ] Start the bridge at login (systemd user unit, launchd agent) from `keep-safe setup`.
 - [ ] Publish to npm so `npx keep-safe` works without the GitHub prefix.
-- [ ] Momentum scrolling and pinch zoom forwarded to the remote page.
+- [x] Raw gestures and a live stream: real touch forwarding with momentum, drags for sliders and captcha puzzles, long press, mouse hover and drag, two-finger zoom of the view on the phone, and pushed binary frames at up to about thirty a second. Pinch zoom of the website itself was tried and rejected as unstable. Physical-device behaviour is unverified.
+- [ ] Open the owner's installed Google Chrome as a visible window for managed sessions, so websites see an ordinary browser. Agreed with the owner on 16 November 2026.
+- [ ] Tab switcher, paste from the phone, text selection with copy back, and phone password manager autofill. Agreed with the owner on 16 November 2026; no address bar.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

@@ -134,7 +134,9 @@ Agents with their own Chromium browser pass its loopback debugging address as `c
 
 - An inbox of requests with the agent, the website and the time left.
 - A full-screen live view. The managed browser is sized to your phone's screen, so websites show their mobile layout.
-- Tap to click, swipe to scroll. Tap a text field and type with your phone's keyboard. Characters go straight to the page and are not kept on the phone.
+- Touch the page as you would the website: tap, swipe with momentum, drag sliders and captcha puzzles, press and hold. Pinch with two fingers to zoom the view. On a computer the mouse hovers, drags and selects.
+- A live picture that follows the page as it repaints, up to about thirty frames a second, and sends nothing while the page is still.
+- Tap a text field and type with your phone's keyboard. Characters go straight to the page and are not kept on the phone.
 - A tool row for Tab, Enter, Backspace, more keys, pasted text, and a list of the page's fields and buttons.
 - Website Back, Forward and Reload in managed browsers.
 - The live website address, with a warning when it changes.

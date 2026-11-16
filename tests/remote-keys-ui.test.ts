@@ -9,6 +9,7 @@ import { BridgeClient } from '../packages/mcp/src/client';
 import type { PageControlsSnapshot } from '../packages/shared/src/protocol';
 import type { Workspace } from '../apps/web/src/workspace';
 import { keyboardFixtureCredentials, startKeyboardLoginFixture } from './fixtures/keyboard-login-site';
+import { serverMessage } from './helpers/socket-frames';
 
 const ownerToken = 'synthetic-keys-owner';
 const agentToken = 'synthetic-keys-agent';
@@ -69,7 +70,7 @@ describe('native remote browser keys through the phone interface', () => {
     page.on('pageerror', error => errors.push(error.message));
     await context.route('**/*', route => { if (new URL(route.request().url()).origin === bridge.url) return route.continue(); external.push(new URL(route.request().url()).origin); return route.abort(); });
     page.on('websocket', socket => {
-      socket.on('framereceived', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'controls') snapshots.push(message.snapshot); });
+      socket.on('framereceived', frame => { const message = serverMessage(frame.payload); if (message.type === 'controls') snapshots.push(message.snapshot); });
       // Record key names only, never the text messages or browser input values.
       socket.on('framesent', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'key') keys.push(message.key); if (message.type === 'scroll') scrolls++; });
     });
@@ -220,7 +221,7 @@ describe('native remote browser keys through the phone interface', () => {
     }) });
     const client = new BridgeClient({ url: bridge.url, token: agentToken });
     const context = await browser.newContext(); const page = await context.newPage();
-    page.on('websocket', socket => socket.on('framereceived', frame => { if (JSON.parse(String(frame.payload)).type === 'focused') acknowledgements++; }));
+    page.on('websocket', socket => socket.on('framereceived', frame => { if (serverMessage(frame.payload).type === 'focused') acknowledgements++; }));
     const blockedKeys = ['Enter', 'Backspace', 'Space', 'Escape', 'ControlOrMeta+A'];
     const tryBlocked = () => page.evaluate(names => {
       const workspace = (window as unknown as HarnessWindow).workspaceKeysHarness;

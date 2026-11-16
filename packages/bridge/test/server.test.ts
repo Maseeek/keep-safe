@@ -346,7 +346,7 @@ describe('live browser lifecycle', () => {
   it('uses a temporary rate-limit close code without invalidating owner credentials', async () => {
     const bridge = await start(); const phone = await socket(bridge.url); await phone.auth();
     const closed = new Promise<number>(resolve => phone.ws.once('close', code => resolve(code)));
-    for (let index = 0; index < 65; index++) phone.send({ type: 'unwatch' });
+    for (let index = 0; index < 245; index++) phone.send({ type: 'unwatch' });
     expect(await closed).toBe(4029);
     const reconnected = await socket(bridge.url); await reconnected.auth();
     expect((await bridge.request('/api/info')).status).toBe(200);

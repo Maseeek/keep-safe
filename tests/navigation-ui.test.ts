@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { navigationFixtureCredentials, startNavigationLoginFixture } from './fixtures/navigation-login-site';
+import { serverMessage } from './helpers/socket-frames';
 
 async function usableTarget(button: Locator) {
   await button.scrollIntoViewIfNeeded();
@@ -31,7 +32,7 @@ describe('website navigation through the phone interface', () => {
     await context.route('**/*', route => { if (new URL(route.request().url()).origin === bridge.url) return route.continue(); external.push(new URL(route.request().url()).origin); return route.abort(); });
     page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/complete')) completes++; });
     page.on('websocket', socket => {
-      socket.on('framereceived', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'frame') { framePath = new URL(message.url).pathname; frameEpoch = message.frameEpoch; } });
+      socket.on('framereceived', frame => { const message = serverMessage(frame.payload); if (message.type === 'frame') { framePath = new URL(message.url).pathname; frameEpoch = message.frameEpoch; } });
       // Store action names only. Do not log browser text, images or form values.
       socket.on('framesent', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'navigate') directions.push(message.direction); });
     });

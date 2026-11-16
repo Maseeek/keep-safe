@@ -392,6 +392,10 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .remote-screen > .browser-state p { color: #a3a8ad; }
 .remote-page { margin: auto; flex: none; transition: transform 200ms var(--ease); line-height: 0; }
 .remote-screen img { display: block; max-width: none; touch-action: pinch-zoom; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; background: #fff; }
+/* The website gets every touch on a live page, as it would in a phone browser. Two fingers zoom the view here. */
+.remote-screen img.takes-gestures { touch-action: none; transform-origin: 0 0; will-change: transform; cursor: default; }
+.remote-page { position: relative; }
+.zoom-reset { position: absolute; top: 10px; right: 10px; z-index: 2; min-height: 44px; padding: 0 14px; border: 0; border-radius: 22px; background: rgb(11 12 13 / 78%); color: #fff; font: inherit; font-size: 0.875rem; font-weight: 600; line-height: 1; }
 .tap-ripple { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: rgb(12 107 77 / 28%); border: 2px solid rgb(12 107 77 / 55%); pointer-events: none; animation: ripple 420ms var(--ease) forwards; }
 @keyframes ripple { from { transform: scale(0.35); opacity: 1; } to { transform: scale(1.25); opacity: 0; } }
 .reconnect-cover { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: rgb(11 12 13 / 72%); color: #fff; font-weight: 600; }
