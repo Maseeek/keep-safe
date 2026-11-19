@@ -129,7 +129,7 @@ export async function ownerConfig(directory: string): Promise<BridgeConfig> {
   return readExistingConfig(directory);
 }
 
-export interface BridgeStatus { phones: number; notifications: number; browserAvailable: boolean; browser?: 'chrome' | 'bundled'; version?: string; link?: string; publicUrl?: string }
+export interface BridgeStatus { phones: number; notifications: number; browserAvailable: boolean; browser?: 'chrome' | 'bundled'; /** Present when the owner signs in on a private display without remote debugging. */ signIn?: 'xvfb' | 'xephyr'; version?: string; link?: string; publicUrl?: string }
 export async function bridgeStatus(directory: string, port: number): Promise<BridgeStatus | undefined> {
   try {
     const config = await ownerConfig(directory);

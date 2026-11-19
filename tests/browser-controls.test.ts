@@ -16,14 +16,14 @@ describe('built live browser controls', () => {
   });
   afterAll(async () => { await browser?.close(); });
 
-  async function setup() {
+  async function setup(addressInView = false) {
     let url = 'https://example.com:8443/login?code=synthetic-private-code';
     const inputs: Array<{ type: string; [key: string]: unknown }> = [];
     const bridge = await createBridge({
       ownerToken: 'controls-owner', agentToken: 'controls-agent', port: 0,
       staticDir: resolve('apps/web/dist'),
       browserFactory: async () => ({
-        frame: async () => ({ data: image, width: 390, height: 720, url }),
+        frame: async () => ({ data: image, width: 390, height: 720, url, ...(addressInView ? { addressInView: true } : {}) }),
         input: async input => { inputs.push(input); },
         close: async () => {},
       }),
@@ -58,6 +58,24 @@ describe('built live browser controls', () => {
       flow.setUrl('about:blank');
       await expect.poll(() => page.locator('.address').innerText()).toBe('about:blank');
       expect(await page.locator('.address [aria-label="HTTPS connection"]').count()).toBe(0);
+      expect(flow.errors).toEqual([]);
+    } finally { await flow.context.close(); await flow.bridge.close(); }
+  });
+
+  it('sends the owner to Chrome\'s own address bar when the picture includes it', async () => {
+    const flow = await setup(true);
+    const { page } = flow;
+    try {
+      // The session's starting address is not shown as if it were current.
+      await expect.poll(() => page.locator('.address').innerText()).toBe('Address shown in page');
+      expect(await page.locator('.address [aria-label="HTTPS connection"]').count()).toBe(0);
+      flow.setUrl('http://example.com:8443/redirect?code=another-secret');
+      await page.waitForTimeout(600);
+      expect(await page.locator('.address').innerText()).toBe('Address shown in page');
+      expect(await page.locator('.redirect-note').count()).toBe(0);
+      await page.locator('.address').click();
+      expect(await page.locator('#full-browser-origin').innerText()).toContain("Chrome's own address bar");
+      expect(await page.locator('.remote-screen img').getAttribute('alt')).toContain('address bar');
       expect(flow.errors).toEqual([]);
     } finally { await flow.context.close(); await flow.bridge.close(); }
   });

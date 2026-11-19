@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -131,6 +131,9 @@ describe('starting Chrome', () => {
 
 // Opens real windows, so it runs only on request: KEEP_SAFE_BROWSER=chrome npx vitest run packages/bridge/test/chrome.test.ts
 describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome')('the installed Google Chrome', () => {
+  // The Chrome that the agent drives, with debugging on. desktop.test.ts covers the owner's sign-in without it.
+  beforeAll(() => { process.env.KEEP_SAFE_SIGN_IN = 'debugging'; });
+  afterAll(() => { delete process.env.KEEP_SAFE_SIGN_IN; });
   it('looks like an ordinary browser, stays live and leaves nothing behind', async () => {
     const site = await startGestureFixture(); cleanup.push(site.close);
     const session = await openBrowser({ url: site.url, allowLocalUrls: true, viewport: { width: 390, height: 720, scale: 2, touch: true } }); cleanup.push(() => session.close());

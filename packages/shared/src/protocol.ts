@@ -144,6 +144,9 @@ export interface FrameHeader {
   navigationAvailable?: boolean;
   /** This browser accepts `touch` and `mouse` messages. */
   gestures?: boolean;
+  /** The image shows the browser's own address bar, which is the place to
+   * check the address. `url` then stays the address the session started on. */
+  addressInView?: boolean;
 }
 
 export type ClientMessage =

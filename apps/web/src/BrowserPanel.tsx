@@ -20,6 +20,7 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  AppWindow,
   LockKeyhole,
   MousePointer2,
   Pause,
@@ -148,8 +149,12 @@ export function BrowserPanel({
     !workspace.browserPaused && workspace.browserVisible && !workspace.navigationBusy;
   const keyInputBlocked = !canInput || workspace.focusBusy || workspace.focusBlocked;
   const moreKeysId = `remote-more-keys-${request.id}`;
-  const address = browserAddress(liveFrame?.url ?? request.url);
+  // A Chrome window streamed whole shows its own address bar, which is the
+  // only reliable place to read the address. Nothing here would be current.
+  const addressInView = !!liveFrame?.addressInView && !isDemo;
+  const address = addressInView ? { label: "Address shown in page", secure: false } : browserAddress(liveFrame?.url ?? request.url);
   const requestedAddress = browserAddress(request.url);
+  const moved = !addressInView && address.label !== requestedAddress.label;
 
   const live = active && !isDemo;
   // Measure the space the website gets, before the browser is opened, so it
@@ -371,14 +376,16 @@ export function BrowserPanel({
   const toolsOpen = showKeyboard || showMoreKeys;
   const addressButton = (
           <button
-      className={`address${active && liveFrame && !isDemo && address.label !== requestedAddress.label ? " is-moved" : ""}`}
+      className={`address${active && liveFrame && !isDemo && moved ? " is-moved" : ""}`}
       title={address.label}
       aria-label={`Website origin: ${address.label}`}
       aria-expanded={showOrigin}
       aria-controls={showOrigin ? "full-browser-origin" : undefined}
       onClick={() => setShowOrigin(!showOrigin)}
     >
-      {address.secure ? (
+      {addressInView ? (
+        <AppWindow size={11} aria-hidden="true" />
+      ) : address.secure ? (
         <LockKeyhole size={11} aria-label="HTTPS connection" />
       ) : (
         <TriangleAlert size={11} aria-label="Page is not using HTTPS" />
@@ -455,7 +462,7 @@ export function BrowserPanel({
         {showOrigin ? (
           <div className="full-browser-origin" id="full-browser-origin">
             <strong>{address.label}</strong>
-            <span>{address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
+            <span>{addressInView ? "Chrome's own address bar, at the top of the live picture, shows the real address. Check it before entering credentials." : address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
           </div>
         ) : null}
         {active && !expired && !isDemo && !workspace.browserPaused && tabs.length > 1 ? (
@@ -570,7 +577,9 @@ export function BrowserPanel({
           <div className="remote-screen" ref={stage}>
             {liveFrame ? <div className="remote-page" style={lift ? { transform: `translateY(${-lift}px)` } : undefined}>
               <RemoteSurface frame={liveFrame} screen={workspace.screen} enabled={canInput} controlIdentity={workspace.connection} display={displaySize} onTap={tapped} selecting={selecting}
-                alt={liveFrame.gestures
+                alt={liveFrame.addressInView
+                  ? "Live Chrome window, with its address bar at the top. Tap to click, or swipe inside the image to scroll the website."
+                  : liveFrame.gestures
                   ? `Live browser on ${domain(liveFrame.url)}. Touch it as you would the website itself. Pinch with two fingers to zoom.`
                   : `Live browser on ${domain(liveFrame.url)}. Tap to click, or swipe inside the image to scroll the website.`}
                 send={workspace.send} />
@@ -603,7 +612,7 @@ export function BrowserPanel({
         {active &&
         liveFrame &&
         !isDemo &&
-        address.label !== requestedAddress.label ? (
+        moved ? (
           <div className="redirect-note">
             <ExternalLink size={14} />
             <span>

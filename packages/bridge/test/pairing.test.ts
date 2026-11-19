@@ -142,7 +142,7 @@ describe('scanning again and a changing public address', () => {
     // No address yet: a code would be useless, so none is created.
     const early = await bridge.call('/api/pairing', {}, ownerToken);
     expect(early.status).toBe(503);
-    expect((await bridge.call('/api/status', undefined, agentToken)).data).toMatchObject({ link: 'starting', version: '0.6.0' });
+    expect((await bridge.call('/api/status', undefined, agentToken)).data).toMatchObject({ link: 'starting', version: '0.7.0' });
     expect((await bridge.call('/api/status', undefined, agentToken)).data.publicUrl).toBeUndefined();
 
     address = 'https://first-words.trycloudflare.com'; state = 'ready';
