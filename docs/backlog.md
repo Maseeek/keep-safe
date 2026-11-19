@@ -57,5 +57,8 @@
 - [ ] Verify the Chrome window route with the screen locked and the display off, on macOS and Windows, and against a website that showed a captcha to the hidden browser.
 - [x] Tab switcher, paste from the phone, text selection with copy back, and boxes a phone password manager can fill. No address bar, as agreed with the owner on 16 November 2026.
 - [ ] Verify on a physical phone that password managers offer to fill the **Passwords** boxes, and how iOS and Android prompt for clipboard access.
+- [x] Sign in to Google (YouTube, Gmail) without remote debugging: Chrome on a private X display with screen capture and real input, reopened with debugging for the agent at handback. Linux with `ffmpeg` and `Xvfb` or `Xephyr`. Owner verified YouTube on 19 November 2026.
+- [ ] Complete a real Google sign-in through it and confirm YouTube keeps the agent signed in after the handback. Needs the owner.
+- [ ] Drags, long press and keyboard rise for the desktop sign-in. XTEST has no touch; a drag could be sent as a mouse drag.
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

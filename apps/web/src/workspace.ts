@@ -32,6 +32,8 @@ export interface BrowserFrame {
   navigationAvailable?: boolean;
   /** The browser takes raw touch and mouse input. */
   gestures?: boolean;
+  /** The image shows Chrome's own address bar, the place to check the address. */
+  addressInView?: boolean;
 }
 type NavigationDirection = "back" | "forward" | "reload";
 interface NavigationAttempt {
@@ -453,7 +455,7 @@ export function useWorkspace(onError: (message: string) => void) {
     screen.current!.show(image);
     // Most frames change only the picture, which React does not need to see.
     setFrameState(previous => previous && previous.requestId === next.requestId && previous.width === next.width && previous.height === next.height &&
-      previous.url === next.url && previous.frameEpoch === next.frameEpoch && previous.navigationAvailable === next.navigationAvailable && previous.gestures === next.gestures ? previous : next);
+      previous.url === next.url && previous.frameEpoch === next.frameEpoch && previous.navigationAvailable === next.navigationAvailable && previous.gestures === next.gestures && previous.addressInView === next.addressInView ? previous : next);
   }, [endCopy]);
   const [pendingInvite, setPendingInvite] = useState<PairingInvite | null>(initial.invite ?? null);
   const [pairingBusy, setPairingBusy] = useState(false);
@@ -779,7 +781,7 @@ export function useWorkspace(onError: (message: string) => void) {
             setNavigationUncertain(false);
           }
           setNavigationAvailable(message.navigationAvailable === true);
-          setFrame({ requestId: message.requestId, width: message.width, height: message.height, url: message.url, frameEpoch: message.frameEpoch, navigationAvailable: message.navigationAvailable, gestures: message.gestures === true }, image);
+          setFrame({ requestId: message.requestId, width: message.width, height: message.height, url: message.url, frameEpoch: message.frameEpoch, navigationAvailable: message.navigationAvailable, gestures: message.gestures === true, addressInView: message.addressInView === true }, image);
         }
         else if (message.type === "error" && !paused.current && visible()) {
           if (navigationAttempt.current) {

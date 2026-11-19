@@ -4,6 +4,7 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
 import { createPageControls } from './page-controls';
 import { chooseBrowser, launchChrome, type ChromeProcess } from './chrome';
+import { findDesktopTools, openDesktopSession } from './desktop';
 import { randomUUID } from 'node:crypto';
 import type { BrowserTab, EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
@@ -12,6 +13,9 @@ export interface BrowserFrame {
   data: string; width: number; height: number; url: string; navigationAvailable?: boolean;
   /** This browser takes `touch` and `mouse` input, so the phone forwards raw gestures. */
   gestures?: boolean;
+  /** The image includes the browser's own address bar, which shows the real
+   * address. `url` is then only the address the session started on. */
+  addressInView?: boolean;
 }
 export interface BrowserSession {
   readonly cdpUrl?: string;
@@ -207,7 +211,38 @@ async function clearPagePasswords(current: Page, deadline: number, clear = true)
   }
 }
 
-export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls, viewport }) => {
+/** Chrome's own interface, such as the address bar's suggestion popup, which
+ * the debugging protocol lists beside the website's pages. */
+const browserInterface = (url: string) => /^(chrome|chrome-untrusted|devtools):/.test(url);
+
+export const openBrowser: BrowserFactory = async request => {
+  if (!request.cdpUrl) {
+    const choice = await chooseBrowser();
+    const tools = choice.kind === 'chrome' ? await findDesktopTools() : undefined;
+    if (choice.kind === 'chrome' && tools) {
+      await resolveDestination(new URL(request.url).hostname, request.allowLocalUrls);
+      const proxy = await createOutboundProxy(request.allowLocalUrls);
+      try {
+        const session = await openDesktopSession({
+          url: request.url, viewport: request.viewport, executable: choice.executable, proxyUrl: proxy.url, tools,
+          handoff: async ({ env, profile, size }) => {
+            const chrome = await launchChrome({ executable: choice.executable, proxyUrl: proxy.url, ...size, profile, env, restore: true });
+            return openManaged(request, { proxy, chrome });
+          },
+        });
+        const close = session.close;
+        // The proxy outlives the sign-in Chrome: the agent's Chrome uses it too.
+        return Object.assign(session, { close: async () => { await close(); await proxy.close(); } });
+      } catch { await proxy.close(); /* The tools are there but did not start: use Chrome with debugging. */ }
+    }
+  }
+  return openManaged(request);
+};
+
+/** A browser this bridge controls through Chromium's debugging protocol. With
+ * `handed`, it takes over a Chrome the owner signed in with and the pages that
+ * Chrome reopened, instead of starting one. */
+async function openManaged({ url, cdpUrl, allowLocalUrls, viewport }: Parameters<BrowserFactory>[0], handed?: { proxy: Awaited<ReturnType<typeof createOutboundProxy>>; chrome: ChromeProcess }): Promise<BrowserSession> {
   let browser!: Browser;
   let context!: BrowserContext;
   let page!: Page;
@@ -215,6 +250,8 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
   let proxy: Awaited<ReturnType<typeof createOutboundProxy>> | undefined;
   /** Set when the session runs the owner's installed Chrome as a window. */
   let chrome: ChromeProcess | undefined;
+  /** The page is already where the owner left it, so it is not loaded again. */
+  let restored = false;
   const size = { width: viewport?.width ?? 390, height: viewport?.height ?? 720 };
   if (cdpUrl) {
     // Resolve HTTP discovery ourselves, rejecting redirects and non-loopback returned endpoints.
@@ -238,17 +275,18 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
     if (!page) { await browser.close(); throw new Error('No open browser page matches this website. Open the login page before requesting a handoff.'); }
     context = page.context();
   } else {
-    await resolveDestination(new URL(url).hostname, allowLocalUrls);
-    proxy = await createOutboundProxy(allowLocalUrls);
+    if (!handed) await resolveDestination(new URL(url).hostname, allowLocalUrls);
+    proxy = handed?.proxy ?? await createOutboundProxy(allowLocalUrls);
     const outbound = proxy;
     const guard = async (route: Route) => {
       try { const target = new URL(validateTargetUrl(route.request().url(), allowLocalUrls)); await resolveDestination(target.hostname, allowLocalUrls); await route.continue(); } catch { await route.abort('blockedbyclient'); }
     };
-    const choice = await chooseBrowser();
-    if (choice.kind === 'chrome') {
-      // Any failure here falls back to the bundled browser below.
+    const choice = handed ? undefined : await chooseBrowser();
+    if (handed || choice?.kind === 'chrome') {
+      // Any failure here falls back to the bundled browser below, except for a
+      // handed-over Chrome: its cookies are the owner's sign-in.
       try {
-        const started = await launchChrome({ executable: choice.executable, proxyUrl: outbound.url, scale: viewport?.scale ?? 1, ...size });
+        const started = handed?.chrome ?? await launchChrome({ executable: (choice as { executable: string }).executable, proxyUrl: outbound.url, scale: viewport?.scale ?? 1, ...size });
         try {
           const connected = await chromium.connectOverCDP(started.endpoint, { timeout: 10_000 });
           const opened = connected.contexts()[0];
@@ -257,11 +295,12 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
           const control = await connected.newBrowserCDPSession();
           await control.send('Browser.setDownloadBehavior', { behavior: 'deny' });
           await control.detach();
-          browser = connected; context = opened; page = opened.pages()[0] ?? await opened.newPage();
+          // The page the owner was last on is the newest one Chrome reopened.
+          browser = connected; context = opened; page = (handed ? opened.pages().filter(item => item.url() !== 'about:blank' && !browserInterface(item.url())).at(-1) : undefined) ?? opened.pages().find(item => !browserInterface(item.url())) ?? await opened.newPage();
           cdpUrl = `http://127.0.0.1:${started.port}`;
-          chrome = started; owned = true;
+          chrome = started; owned = true; restored = !!handed && page.url() !== 'about:blank';
         } catch (error) { await started.close(); throw error; }
-      } catch { /* Chrome is missing a display or did not start. */ }
+      } catch (error) { if (handed) throw error; /* Chrome is missing a display or did not start. */ }
     }
     // A free port can be taken by another program between choosing it and
     // Chromium binding it. The agent must never be handed an address that
@@ -456,7 +495,8 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
         await monitor.session?.detach().catch(() => {});
       }
       popupMonitors.clear();
-      await proxy?.close();
+      // A handed-over Chrome's proxy belongs to the desktop session.
+      if (!handed) await proxy?.close();
     })();
     return closingSession;
   };
@@ -468,7 +508,7 @@ export const openBrowser: BrowserFactory = async ({ url, cdpUrl, allowLocalUrls,
       // Arm the about:blank page before any destination script can open a
       // window whose first navigation Playwright has not surfaced yet.
       await ensurePopupMonitor(initialPage);
-      await initialPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      if (!restored) await initialPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     } catch (error) { await closeSession(); throw error; }
   }
   const navigate = async (direction: NavigationDirection) => {

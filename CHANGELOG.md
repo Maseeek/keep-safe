@@ -1,5 +1,24 @@
 # Change history
 
+## 18 November 2026
+
+### Sign in to Google and YouTube (0.7.0)
+
+The owner could not sign in to YouTube. Google answered "This browser or app may not be secure" because Chrome's remote debugging was on, which Google treats as automation.
+
+- On Linux with `ffmpeg` and `Xvfb` or `Xephyr`, sign in to a Chrome that has no remote debugging, on a private display. The phone sees it through screen capture and controls it with real keyboard and mouse input. Google now asks for the password instead of refusing.
+- At handback, close that Chrome normally so it writes its cookies, then reopen the same profile with remote debugging for the agent, on the same pages, with password fields cleared. Session cookies are kept.
+- Show Chrome's own address bar in the picture during that sign-in, and point the owner to it instead of showing an origin Keep Safe cannot read.
+- Block local files and other programs in that Chrome, whose address bar the phone can reach: no `file://` or `chrome://` pages, file picker, downloads, printing, extensions, `xdg-open` or desktop message bus.
+- Back, Forward and Reload work during that sign-in. They press Chrome's own shortcuts (Alt+Left, Alt+Right, F5) on the private display. The owner asked for them after a tap on Google's passkey option left no way back.
+- Allow Chrome's own interface pages (`chrome://…top-chrome`, such as the address bar's suggestion popup) and never give the agent one of them as its page. Blocking them left error pages that the agent was sometimes handed instead of the website.
+- Report the sign-in mode in `keep-safe status`. `KEEP_SAFE_SIGN_IN=debugging` keeps the previous behaviour.
+- Stop Chrome without losing recent cookies: SIGTERM made Chrome skip writing them, and signalling its process group killed the services that write them.
+
+Nothing is hidden or spoofed: the sign-in Chrome has no debugging, and the agent's Chrome reports automation.
+
+Verified on 19 November 2026: the owner signed in to Google from their phone, handed back, and the agent's Chrome was signed in to YouTube, including after a reload. Not yet verified: drags or puzzle captchas, which this mode cannot do. Xvfb was tested from an unpacked copy of Ubuntu's package, not an installed one.
+
 ## 16 November 2026
 
 ### Windows, paste, copy and password managers (0.6.0)
