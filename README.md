@@ -139,6 +139,7 @@ On Linux with Google Chrome installed, the managed browser is your Chrome, opene
 - Touch the page as you would the website: tap, swipe with momentum, drag sliders and captcha puzzles, press and hold. Pinch with two fingers to zoom the view. On a computer the mouse hovers, drags and selects.
 - A live picture that follows the page as it repaints, up to about thirty frames a second, and sends nothing while the page is still.
 - Tap a text field and type with your phone's keyboard. Characters go straight to the page and are not kept on the phone.
+- **Saved logins** on the phone, encrypted and opened with your passkey. Tap a field on the page and fill it; you approve each use, and your agent never receives the password.
 - **Passwords** boxes your phone's password manager can fill, **Paste** from your clipboard, and **Select** and **Copy** to bring text such as a recovery code back to your phone. Form field contents are never copied.
 - A strip of the windows a sign-in opens, such as a single sign-on popup, to switch between or close them.
 - A tool row for Tab, Enter, Backspace, more keys, pasted text, and a list of the page's fields and buttons.
@@ -150,7 +151,7 @@ Details are in the [phone app guide](docs/phone.md).
 
 ## Security at a glance
 
-- Keep Safe does not store passwords, log input, record the screen or export cookies. Cookies stay on your computer: in memory in the hidden browser, or in a temporary Chrome profile that only you can read and that is deleted when the session's browser closes.
+- Keep Safe does not store passwords on your computer or its website, log input, record the screen or export cookies. Logins you choose to save stay on your phone, encrypted under your passkey. Cookies stay on your computer: in memory in the hidden browser, or in a temporary Chrome profile that only you can read and that is deleted when the session's browser closes.
 - Phones pair with single-use codes and hold their own revocable keys. Agents use a separate key and cannot approve requests or pair phones.
 - The agent gets the browser back only after you choose **Done, hand back**. Before that, in-flight input is drained and remaining password fields are cleared.
 - The managed browser reaches public websites only. Private and local network addresses are blocked.

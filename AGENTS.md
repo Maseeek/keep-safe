@@ -9,7 +9,7 @@ Read `docs/alignment.md`, `docs/backlog.md`, and `docs/progress.md` before choos
 
 ## Boundaries to preserve
 
-- No password storage, browser input logs, cookie exports to the hosted app, recordings, or traces containing login data.
+- No password storage on the computer, bridge or hosted app, and no browser input logs, cookie exports to the hosted app, recordings, or traces containing login data. The one exception, agreed on 23 November 2026, is the phone's saved logins: encrypted on the phone under a passkey-derived key, approved per use, filled only into a matching field on the saved site, never sent to the agent.
 - The phone controls a live browser. Label demo interactions clearly and never request real credentials in the demo.
 - Owner and agent credentials have separate roles. Persistent phone pairing uses separate expiring, revocable keys; never persist the master owner token in localStorage.
 - Phones pair with single-use codes that only the owner key can create. Never let the agent key or a paired phone create one, and never put a key in a pairing link, QR code or log.

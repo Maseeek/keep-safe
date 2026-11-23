@@ -54,6 +54,19 @@ async function socket(url: string) {
 }
 
 describe('bridge authorization and validation', () => {
+  it('shows the owner the field names an agent gave, and refuses anything that looks like a value', async () => {
+    const bridge = await start();
+    const base = { agent: 'Codex', title: 'Sign into Example', url: 'https://example.com/login' };
+    const created = await bridge.create({ ...base, fields: ['Email', ' Password ', 'Password', '2FA code'] });
+    expect((created as unknown as { fields: string[] }).fields).toEqual(['Email', 'Password', '2FA code']);
+    expect(((await (await bridge.request('/api/requests')).json()) as { requests: Array<{ fields?: string[] }> }).requests[0].fields).toEqual(['Email', 'Password', '2FA code']);
+    expect((await bridge.create(base) as unknown as { fields?: string[] }).fields).toBeUndefined();
+    for (const fields of [['owner@example.com'], ['Code 123456'], ['password=hunter2'], 'Email', Array(7).fill('Name'), ['x'.repeat(41)], [3]]) {
+      const response = await bridge.request('/api/requests', agentToken, 'POST', { ...base, fields });
+      expect(response.status, JSON.stringify(fields)).toBe(400);
+    }
+  });
+
   it('keeps all metadata behind separate owner and agent roles', async () => {
     const bridge = await start();
     const health = await bridge.request('/api/health', undefined);

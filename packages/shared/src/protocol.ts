@@ -8,6 +8,9 @@ export interface LoginRequest {
   url: string;
   origin: string;
   reason: string;
+  /** What the sign-in will ask for, as the agent described it: names such as
+   * "Email", "Password" or "2FA code". Never values. */
+  fields?: string[];
   status: RequestStatus;
   createdAt: string;
   expiresAt: string;
@@ -19,6 +22,8 @@ export interface CreateRequestInput {
   title: string;
   url: string;
   reason?: string;
+  /** Up to six field names, 40 characters each. Names only, never values. */
+  fields?: string[];
   cdpUrl?: string;
   ttlSeconds?: number;
 }

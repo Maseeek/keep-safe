@@ -73,9 +73,21 @@ If the app shows **Looking for your computer**, the computer is asleep, Keep Saf
 
 **Update pairing** connects with an owner token. It is for advanced setups and for older bridges that have no pairing codes.
 
+## Saved logins
+
+Open **Passwords** during a sign-in. Fill the two boxes, by hand or with your password manager, and choose **Save to this phone**. The first time, your phone asks you to make a passkey called "Keep Safe saved logins".
+
+The next time you sign in to that site, open **Passwords** and choose **Unlock with passkey**. Tap the email field on the page, choose **Fill**, then tap the password field and choose **Fill** again. Each opening of **Passwords** asks for your face, fingerprint or screen lock once. Closing the panel, leaving the request, switching apps or two minutes passing locks it again.
+
+- A login fills only on the exact site it was saved for: scheme, host and port. A password goes only into a field the page reports as a password field. Anything else gets the username.
+- The values are encrypted on the phone with a key that only your passkey can unlock (WebAuthn PRF). Keep Safe's computer and website never store them. The computer sees a value only as typing into the page, the same as when you type it, and your agent never receives it. Password fields are cleared before the handback as usual.
+- In the Google sign-in, Keep Safe cannot read the address, so a login matches the site the agent asked for. Check Chrome's address bar in the picture before filling.
+- Saved logins belong to this phone and the address the app was opened at. Clearing the browser's site data removes them, and Safari may clear the data of a site you have not opened for seven days unless the app is on your Home Screen. **Settings → Saved logins** lists the sites and can delete one or forget them all.
+- The phone's browser needs passkeys with the PRF extension: recent Chrome on Android, Safari on iOS 18 or later. Elsewhere **Passwords** works as before, without saving. Not yet checked on a physical phone.
+
 ## Settings
 
-Turn notifications on or off, check that this phone is enrolled with the current computer, and install the app where the browser offers it.
+Turn notifications on or off, check that this phone is enrolled with the current computer, install the app where the browser offers it, and manage saved logins.
 
 ## Demo
 
@@ -83,4 +95,4 @@ Turn notifications on or off, check that this phone is enrolled with the current
 
 ## What does not transfer
 
-Your phone's passkeys, biometrics and hardware security keys do not move into the remote browser. Saved passwords come across through **Passwords** or **Paste**. Whether your password manager offers to fill the **Passwords** boxes depends on the manager and the phone, and has not been checked on a physical phone. Websites that require a passkey on the signing-in device need their own cross-device flow.
+Your phone's passkeys, biometrics and hardware security keys do not move into the remote browser. Saved passwords come across through **Passwords**, **Saved logins** or **Paste**. Whether your password manager offers to fill the **Passwords** boxes depends on the manager and the phone, and has not been checked on a physical phone. Websites that require a passkey on the signing-in device need their own cross-device flow.

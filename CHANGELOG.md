@@ -1,5 +1,17 @@
 # Change history
 
+## 23 November 2026
+
+### Saved logins on the phone (0.8.0)
+
+The owner asked for a way to keep login secrets, the way the Instinct assistant uses 1Password: the secret stays with the person, every use is approved, and the agent never sees it.
+
+- Save a login from **Passwords** during a sign-in. It is encrypted on the phone with a key that only a passkey made for Keep Safe can unlock, using the WebAuthn PRF extension. Storage holds the site and ciphertext only.
+- Fill a saved login into the next sign-in: unlock with your face, fingerprint or screen lock, tap a field on the page, choose **Fill**. A password goes only into a password field, and only on the exact site it was saved for. Each opening of **Passwords** needs a new approval.
+- **Settings → Saved logins** lists the sites and deletes one or all.
+- Agents can pass `fields` to `request_login`, such as `["Email", "Password"]`, and the phone shows them as "Have ready". The bridge refuses anything that looks like a value.
+- The rule "never store passwords" now covers the computer, the bridge and the website; the phone's encrypted saved logins are the agreed exception.
+
 ## 19 November 2026
 
 ### Keyboard and scrolling in the Google sign-in (0.7.1)

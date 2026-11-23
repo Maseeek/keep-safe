@@ -12,7 +12,8 @@ A link alone is insufficient. The first version must include a request queue, ap
 
 - Choose architecture and visual design.
 - Choose sensible security and expiry defaults.
-- Never store passwords or log browser input. Cookies may remain in the agent's browser session.
+- Never store passwords or log browser input on the computer, the bridge or the hosted app. Cookies may remain in the agent's browser session.
+- Changed with the owner on 23 November 2026: the owner may save logins on their phone, encrypted and unlocked with a passkey, modelled on how Instinct uses 1Password. Every use is approved on the phone, a saved password is typed only into a password field on the site it was saved for, and the agent never receives the value. See [phone.md](phone.md#saved-logins).
 - Build a free initial product with a path to a profitable service.
 
 ## Budget and constraints
