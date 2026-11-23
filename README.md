@@ -171,6 +171,15 @@ Details are in the [phone app guide](docs/phone.md).
 - Notification delivery on a physical phone and the Tailscale HTTPS route have not been verified end to end by the maintainers yet. The secure public link, Tailscale without HTTPS, local use and Chromium phone emulation are tested.
 - The page controls list is a helper, not a complete accessibility tree.
 
+## How it's built
+
+Keep Safe is a TypeScript monorepo in four parts:
+
+- `packages/bridge` is a local Node.js server. It drives Chromium through Playwright, streams the page to the phone with the Chrome DevTools screencast over WebSockets, and relays taps and keystrokes back.
+- `packages/mcp` is a Model Context Protocol server that gives agents the `request_login` and `wait_for_login` tools.
+- `packages/cli` is the `keep-safe` command: setup, pairing, the background daemon and the Cloudflare or Tailscale route.
+- `apps/web` is the phone app, a React and Vite PWA with Web Push notifications.
+
 ## Development
 
 ```bash
