@@ -143,7 +143,10 @@ describe('per-bridge notification management', () => {
     await bridge.push('subscribe');
     const response = await bridge.request('/api/devices', ownerToken, { name: 'Remembered phone', notificationSubscription: subscription });
     expect(response.status).toBe(201); const paired = await response.json() as DevicePairResult;
-    expect(Object.keys(paired).sort()).toEqual(['device', 'token']);
+    expect(Object.keys(paired).sort()).toEqual(['device', 'info', 'token']);
+    // The bridge's public info, as on /api/info: never the phone's subscription.
+    expect(JSON.stringify(paired)).not.toContain(subscription.endpoint);
+    expect(JSON.stringify(paired)).not.toContain(subscription.keys.auth);
     expect((await bridge.push('status')).body).toEqual({ enabled: false });
     expect((await bridge.push('status', paired.token)).body).toEqual({ enabled: true });
     await bridge.close();

@@ -6,12 +6,17 @@ import { delimiter, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { createProfile, launchSignInChrome, recordOwner, removeProfile } from './chrome';
 import { connectX11, keysyms, xauthority, type X11Input } from './x11';
-import type { BrowserFrame, BrowserSession } from './browser';
+import { findAccessibilityTools, startFocusWatch, type AccessibilityTools, type FocusWatch } from './atspi';
+import type { BrowserFrame, BrowserSession, FocusState } from './browser';
 import type { NavigationDirection, ViewportRequest } from '../../shared/src/protocol';
 
 /** The programs a desktop sign-in needs. Xvfb keeps the display hidden;
  * Xephyr shows it as a window on the computer's own screen. */
-export interface DesktopTools { server: { kind: 'xvfb' | 'xephyr'; path: string }; ffmpeg: string }
+export interface DesktopTools {
+  server: { kind: 'xvfb' | 'xephyr'; path: string }; ffmpeg: string;
+  /** Lets the phone raise its keyboard when a text field takes focus. Optional. */
+  accessibility?: AccessibilityTools;
+}
 
 const runnable = async (path: string) => { try { await access(path, constants.X_OK); return true; } catch { return false; } };
 async function which(name: string, env: NodeJS.ProcessEnv) {
@@ -26,10 +31,12 @@ export async function findDesktopTools(env: NodeJS.ProcessEnv = process.env, pla
   if (platform !== 'linux' || env.KEEP_SAFE_SIGN_IN === 'debugging') return undefined;
   const ffmpeg = await which('ffmpeg', env);
   if (!ffmpeg) return undefined;
+  const accessibility = await findAccessibilityTools(env);
+  const extra = accessibility ? { accessibility } : {};
   const xvfb = await which('Xvfb', env);
-  if (xvfb) return { server: { kind: 'xvfb', path: xvfb }, ffmpeg };
+  if (xvfb) return { server: { kind: 'xvfb', path: xvfb }, ffmpeg, ...extra };
   const xephyr = env.DISPLAY ? await which('Xephyr', env) : undefined;
-  return xephyr ? { server: { kind: 'xephyr', path: xephyr }, ffmpeg } : undefined;
+  return xephyr ? { server: { kind: 'xephyr', path: xephyr }, ffmpeg, ...extra } : undefined;
 }
 
 /** Chrome's tabbed window is never narrower than this many pixels. */
@@ -115,6 +122,7 @@ export async function openDesktopSession(input: {
   let chrome: Awaited<ReturnType<typeof launchSignInChrome>> | undefined;
   let x11: X11Input | undefined;
   let capture: ChildProcess | undefined;
+  let focus: FocusWatch | undefined;
   /** Set once the browser has been handed back. */
   let managed: BrowserSession | undefined;
   let closing: Promise<void> | undefined;
@@ -136,13 +144,14 @@ export async function openDesktopSession(input: {
   };
   const close = () => closing ??= (async () => {
     await stopSignIn();
+    await focus?.close(); focus = undefined;
     await managed?.close();
     await display?.stop();
     await removeProfile(profile);
   })();
   const startSignIn = async (restore: boolean) => {
     const screen = display!;
-    chrome = await launchSignInChrome({ executable: input.executable, proxyUrl: input.proxyUrl, scale, width, height, profile, env: screen.env, url: input.url, restore });
+    chrome = await launchSignInChrome({ executable: input.executable, proxyUrl: input.proxyUrl, scale, width, height, profile, env: screen.env, url: input.url, restore, accessibilityBus: focus?.address });
     x11 = await connectX11(screen.number, screen.cookie);
     capture = spawn(input.tools.ffmpeg, [
       '-loglevel', 'error', '-nostdin', '-f', 'x11grab', '-draw_mouse', '0', '-framerate', '20', '-video_size', `${pixels.width}x${pixels.height}`, '-i', screen.env.DISPLAY!,
@@ -157,6 +166,11 @@ export async function openDesktopSession(input: {
   };
   try {
     display = await startDisplay(input.tools, profile, pixels.width, pixels.height);
+    // Without it the sign-in still works; the phone shows its Keyboard button instead.
+    if (input.tools.accessibility) {
+      focus = await startFocusWatch(input.tools.accessibility, join(profile, 'keep-safe-a11y'), display.env);
+      if (focus) await recordOwner(profile, { bus: focus.pid });
+    }
     await startSignIn(false);
   } catch (error) { await close(); throw error; }
 
@@ -169,8 +183,18 @@ export async function openDesktopSession(input: {
   const signIn = () => { if (closing || managed || !x11) throw new Error('This browser page is closed.'); return x11; };
   let held = false;
   const release = async () => { if (held && x11) { held = false; await x11.button(1, false); await x11.sync(); } };
-  // Chrome on X scrolls about this far for one wheel step.
-  const wheelStep = 53;
+  // One wheel step scrolls Chrome 157 on X by 120 CSS pixels, at any window
+  // size or density. Measured on the private display.
+  const wheelStep = 120;
+  /** Scrolling the phone asked for that has not yet made a whole wheel step.
+   * Kept between messages, so a slow swipe scrolls as far as the finger
+   * moved instead of a full step for every few pixels. */
+  const carry = { x: 0, y: 0, at: 0, direction: { x: 0, y: 0 } };
+  /** Clicks and keys that can move focus report it, so the phone raises its keyboard for a text field. */
+  const focusAfter = async (action: () => Promise<void>): Promise<FocusState | undefined> => {
+    if (!focus) { await action(); return undefined; }
+    return focus.after(action);
+  };
 
   const session: BrowserSession = {
     get cdpUrl() { return managed?.cdpUrl; },
@@ -204,18 +228,33 @@ export async function openDesktopSession(input: {
       const display = signIn();
       const point = () => [Math.max(0, Math.min(pixels.width - 1, (message.x as number) * scale)), Math.max(0, Math.min(pixels.height - 1, (message.y as number) * scale))] as const;
       if (message.type === 'click') {
-        await release();
-        await display.move(...point());
-        await display.button(1, true); await display.button(1, false);
-        await display.sync();
+        carry.x = carry.y = 0;
+        return focusAfter(async () => {
+          await release();
+          await display.move(...point());
+          await display.button(1, true); await display.button(1, false);
+          await display.sync();
+        });
       } else if (message.type === 'scroll') {
         if (typeof message.x === 'number' && typeof message.y === 'number') await display.move(...point());
-        // Wheel buttons: 4 up, 5 down, 6 left, 7 right.
-        const steps = (delta: number, less: number, more: number) => {
-          const count = Math.min(40, Math.round(Math.abs(delta) / wheelStep) || (delta ? 1 : 0));
-          return Array.from({ length: count }, () => delta < 0 ? less : more);
+        // A pause between swipes, or a change of direction, starts afresh.
+        const now = Date.now();
+        if (now - carry.at > 400) carry.x = carry.y = 0;
+        carry.at = now;
+        // Wheel buttons: 4 up, 5 down, 6 left, 7 right. Half a step or more
+        // rounds to a whole one, so a short swipe still moves the page.
+        const steps = (axis: 'x' | 'y', delta: number, less: number, more: number) => {
+          const direction = Math.sign(delta);
+          if (direction && direction !== carry.direction[axis]) { carry[axis] = 0; carry.direction[axis] = direction; }
+          carry[axis] += delta;
+          const count = Math.min(40, Math.round(Math.abs(carry[axis]) / wheelStep));
+          const button = carry[axis] < 0 ? less : more;
+          carry[axis] -= Math.sign(carry[axis]) * count * wheelStep;
+          // Past the cap, the rest is dropped: a fling never keeps scrolling after the finger stops.
+          if (Math.abs(carry[axis]) > wheelStep) carry[axis] = Math.sign(carry[axis]) * wheelStep;
+          return Array.from({ length: count }, () => button);
         };
-        for (const button of [...steps(message.deltaY as number, 4, 5), ...steps(message.deltaX as number, 6, 7)]) { await display.button(button, true); await display.button(button, false); }
+        for (const button of [...steps('y', message.deltaY as number, 4, 5), ...steps('x', message.deltaX as number, 6, 7)]) { await display.button(button, true); await display.button(button, false); }
         await display.sync();
       } else if (message.type === 'text') {
         await display.type(message.text as string);
@@ -228,6 +267,7 @@ export async function openDesktopSession(input: {
         };
         const key = named[message.key as string];
         if (!key) throw new Error('Unsupported key.');
+        if (['Tab', 'Shift+Tab', 'Enter'].includes(message.key as string)) return focusAfter(() => display.key(key[0], key[1]));
         await display.key(key[0], key[1]);
       } else if (message.type === 'mouse') {
         await display.move(...point());
@@ -265,6 +305,8 @@ export async function openDesktopSession(input: {
         managed = await input.handoff({ env: display!.env, profile, size: { width, height, scale } });
         if (closing) throw new Error('This browser page is closed.');
         await managed.prepareHandoff?.();
+        // The sign-in is over: nothing reports focus any more.
+        await focus?.close(); focus = undefined;
       } catch (error) {
         // The owner gets the sign-in browser back, on the pages it had, to try again.
         const failed = managed; managed = undefined;

@@ -45,10 +45,10 @@ export async function sweepStaleProfiles(directory = tmpdir()): Promise<void> {
     for (const name of names.filter(item => item.startsWith(profilePrefix))) {
       const path = join(directory, name);
       try {
-        const owner = JSON.parse(await readFile(join(path, 'keep-safe-owner.json'), 'utf8')) as { bridge?: unknown; chrome?: unknown; display?: unknown };
+        const owner = JSON.parse(await readFile(join(path, 'keep-safe-owner.json'), 'utf8')) as { bridge?: unknown; chrome?: unknown; display?: unknown; bus?: unknown };
         if (alive(owner.bridge)) continue;
-        // Chrome, then the private display it was shown on.
-        for (const pid of [owner.chrome, owner.display]) {
+        // Chrome, then the private display it was shown on and its accessibility bus.
+        for (const pid of [owner.chrome, owner.display, owner.bus]) {
           if (!alive(pid)) continue;
           // Only a process that is still that Chrome or display: a reused process number is left alone.
           const command = await readFile(`/proc/${pid as number}/cmdline`, 'utf8').catch(() => '');
@@ -122,7 +122,7 @@ export async function removeProfile(profile: string): Promise<void> {
 
 /** Records which processes belong to a profile, so a later bridge can end
  * them if this one is killed. */
-export async function recordOwner(profile: string, processes: { chrome?: number; display?: number }): Promise<void> {
+export async function recordOwner(profile: string, processes: { chrome?: number; display?: number; bus?: number }): Promise<void> {
   const path = join(profile, 'keep-safe-owner.json');
   const previous = await readFile(path, 'utf8').then(text => JSON.parse(text) as Record<string, unknown>, () => ({}));
   await writeFile(path, JSON.stringify({ ...previous, bridge: process.pid, ...processes }), { mode: 0o600 });
@@ -213,13 +213,18 @@ export async function launchChrome(options: ChromeOptions & { restore?: boolean 
  * ordinary browser in every respect, shown on a private display. It keeps the
  * profile when it stops, for `launchChrome` to reopen with debugging on after
  * the owner hands the browser back. */
-export async function launchSignInChrome(options: ChromeOptions & { profile: string; url: string; env: NodeJS.ProcessEnv; restore?: boolean }): Promise<Pick<Started, 'stop' | 'exited' | 'waitForExit'>> {
+export async function launchSignInChrome(options: ChromeOptions & { profile: string; url: string; env: NodeJS.ProcessEnv; restore?: boolean; accessibilityBus?: string }): Promise<Pick<Started, 'stop' | 'exited' | 'waitForExit'>> {
   const platform = options.platform ?? process.platform;
   // No other program starts from this Chrome: not through xdg-open, and not
   // through the desktop's message bus, which file managers and portals use.
-  const env = { ...options.env, PATH: [join(options.profile, 'bin'), options.env.PATH].filter(Boolean).join(delimiter), DBUS_SESSION_BUS_ADDRESS: 'disabled:' };
+  const env: NodeJS.ProcessEnv = { ...options.env, PATH: [join(options.profile, 'bin'), options.env.PATH].filter(Boolean).join(delimiter), DBUS_SESSION_BUS_ADDRESS: 'disabled:' };
+  delete env.AT_SPI_BUS_ADDRESS;
+  // A private accessibility bus tells the bridge when a text field takes
+  // focus, so the phone can raise its keyboard. It can start no programs.
+  if (options.accessibilityBus) env.AT_SPI_BUS_ADDRESS = options.accessibilityBus;
   const chrome = spawnChrome(options.executable, [
     ...chromeArgs(options, options.profile, platform),
+    ...(options.accessibilityBus ? ['--force-renderer-accessibility'] : []),
     // Fills the private screen. Chrome's own toolbar stays, so the owner sees
     // the real address of the page and its tabs.
     '--window-position=0,0', `--window-size=${options.width},${options.height}`,

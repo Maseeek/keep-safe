@@ -149,7 +149,8 @@ What you will notice:
 - Chrome's window is at least 500 pixels wide, so the page is laid out a little wider than your phone and shown slightly smaller.
 - The phone uses taps and swipe scrolling. **Back**, **Forward** and **Reload** press Chrome's own shortcuts, so Chrome behaves as it would at the computer. If a page came from a form, Chrome asks before sending it again, and you see that dialog. Dragging (sliders, puzzle captchas), long press, the window strip, page controls and **Copy** need remote debugging and are not available until the handback. Chrome's own tabs are in the picture.
 - Chrome's address bar and menus are in reach of the phone, so the profile blocks everything in them that reaches the computer: `file://` and `chrome://` addresses (apart from Chrome's own interface, such as the address bar's suggestions), the file picker (upload buttons say access to local files is disabled), downloads, printing and extensions. Chrome cannot start other programs: its `xdg-open` does nothing and it has no desktop message bus. Before this, typing `file:///etc/os-release` into the address bar from the phone showed the file.
-- The phone keyboard does not rise by itself when you tap a field. Use the keyboard button, **Type text** or **Passwords**.
+- Tapping a text field raises the phone keyboard, set for an email address, a password or plain text as the field asks. This needs the accessibility registry (`at-spi2-registryd`, from at-spi2-core, installed with most Linux desktops) and `dbus-daemon`. Without them, use the keyboard button, **Type text** or **Passwords**.
+- A swipe scrolls about as far as your finger moved, in steps of 120 pixels, the distance of one mouse-wheel notch in Chrome.
 
 What it needs: Google Chrome, `ffmpeg`, and either `Xvfb` (hidden, preferred) or `Xephyr`. Xephyr shows the private display as a "Keep Safe sign-in" window on the computer's screen, and needs a desktop session. On Ubuntu, `sudo apt install ffmpeg xvfb` provides both. Without them, or with `KEEP_SAFE_SIGN_IN=debugging`, you sign in to the Chrome window with remote debugging on, as above. `keep-safe status` shows which.
 
@@ -163,6 +164,7 @@ The display's cookie and Chrome's profile are in the same temporary folder, dele
 | `KEEP_SAFE_PORT` | Local port, default 4318 |
 | `KEEP_SAFE_BRIDGE_URL`, `KEEP_SAFE_AGENT_TOKEN` | Point an MCP client at a specific bridge |
 | `KEEP_SAFE_BROWSER` | `auto`, `chrome` or `bundled`. See [the browser](#the-browser) |
+| `KEEP_SAFE_ATSPI_REGISTRY` | Path to `at-spi2-registryd`, when it is not in a usual place |
 | `KEEP_SAFE_SIGN_IN` | `debugging` signs in to Chrome with remote debugging on. See [signing in without remote debugging](#signing-in-without-remote-debugging) |
 | `KEEP_SAFE_CHROME_PATH` | Use a specific Google Chrome program |
 | `KEEP_SAFE_CHROMIUM_PATH` | Use a specific Chromium binary for the hidden browser |

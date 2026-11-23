@@ -182,7 +182,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Where the owner signs in to that Chrome: on a private display with no remote debugging, or in the window itself. */
   const desktopSignIn = managedBrowser === 'chrome' ? await findDesktopTools() : undefined;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.7.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.7.1', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -715,7 +715,8 @@ export async function createBridge(options: BridgeOptions) {
         }
       });
       devicePairing = pairing.then(() => {}, () => {});
-      json(response, 201, await pairing); return;
+      // The phone stores the notification key with its pairing straight away.
+      json(response, 201, { ...await pairing, info }); return;
     }
     if (url.pathname === '/api/pairing' && request.method === 'POST') {
       // Only the owner key on the computer can invite a phone. A paired phone

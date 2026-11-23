@@ -610,3 +610,18 @@ The owner reported that YouTube would not let them sign in through Keep Safe, an
 - The 13:07 bridge had stopped by 16:19, and the agent session's MCP server restarted it inside the session scope again.
 
 Not verified: drags and puzzle captchas, which this mode cannot do; an installed Xvfb; a physical phone.
+
+## Keyboard and scrolling in the Google sign-in on 19 November 2026
+
+The owner reported that scrolling was far too sensitive on the phone and that tapping Google's email field did not raise the keyboard. Both were in the desktop sign-in, which Google sign-ins use.
+
+- Scrolling, cause measured first: one XTEST wheel notch scrolls Chrome 157 by 120 CSS pixels at density 1 and 2 and at window heights from 250 to 900. The session assumed 53 and sent `round(delta / 53)` notches per 50 ms batch, but at least one, so a 5 px nudge scrolled 120 px. The session now keeps the remainder between batches, rounds from half a notch, and starts afresh after 400 ms, a change of direction or a tap. Version 0.7.1.
+- Keyboard: a Chrome without debugging tells nobody which element has focus. Prototyped on a private Xvfb display: with `--force-renderer-accessibility` and `AT_SPI_BUS_ADDRESS` pointing at a private `dbus-daemon` with `at-spi2-registryd`, and no session bus, Chrome reported `focused` with role `entry` and `text-input-type` `email` for an email field, `password text` for a password field, `button`, `document web` and the address bar's `entry` for the rest. Registration is dropped when the registering client disconnects, so the bridge holds one connection. Chrome also broadcast text-change events on that bus while typing (password characters as bullets), even with only focus subscribed; nothing subscribes to them. Added `atspi.ts`, a small D-Bus client that reads only role, input type and the editable bit.
+- Tests: a real-Chrome bridge test checks the reported focus for an email field, a password field, a button, plain text, a second tap on the same field and Tab, that Chrome has accessibility and no debugging, that the bus ends at handback, and that twenty 12 px scroll moves plus one 70 px move scroll exactly 360 px. The phone app test now taps the email field in the picture, gets the phone keyboard with `inputmode=email`, and types the address with it. With the registry made unavailable that step fails, as it should. Both desktop files passed three runs in a row on the hidden display (Ubuntu's `xvfb` unpacked in the scratch folder). Full suite: 440 passed, 6 skipped (on-request Chrome tests).
+
+Not verified: the owner's phone (does the keyboard rise on Google's email field; does scrolling feel right), and Google with accessibility on. Accessibility in Chrome is not visible to page scripts, but a sign-in on Google with it on has not been tried.
+
+### Fixes before release on 23 November 2026
+
+- The GitHub check for the merged pull request 10 failed in `tests/notifications-ui.test.ts`: a phone remembered with the owner key saved its pairing without the bridge's notification key, and the app added it on the first socket `ready`, after the test had read the stored pairing. `POST /api/devices` now returns `info` like the pairing-code route, the app stores the key with the pairing, and the test checks it is there at once.
+- The scroll remainder had no bound: a batch over 40 notches kept the rest and sent it with later batches, so a fling kept scrolling after the finger stopped. The remainder is now capped at one notch.

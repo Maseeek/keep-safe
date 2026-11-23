@@ -256,8 +256,10 @@ describe('notification enrollment on a phone', () => {
       expect(stored.device).not.toContain(ownerToken);
       expect(stored.device).not.toContain(agentToken);
       expect(stored.session).not.toContain(ownerToken);
-      const saved = JSON.parse(stored.device!) as { token: string; device: { id: string } };
+      const saved = JSON.parse(stored.device!) as { token: string; device: { id: string }; source?: string };
       expect(saved.token).not.toBe(ownerToken);
+      // The notification key is stored with the pairing at once, not after the first connection.
+      expect(saved.source).toBe(vapid.publicKey);
       expect(await post(bridge, saved.token, 'status', subscription)).toEqual({ enabled: true });
       expect(await post(bridge, ownerToken, 'status', subscription)).toEqual({ enabled: false });
       await on(await settings(page));
