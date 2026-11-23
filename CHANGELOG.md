@@ -2,6 +2,11 @@
 
 ## 23 November 2026
 
+### Opening a request from its notification
+
+- Tapping a notification on a phone with the app already open now opens that request. The app took the first request in the queue as already on screen, but a phone shows only the queue until one is chosen. A new request is usually first, so nothing opened and no notice appeared.
+- Opening the app from a notification after the computer's address changed now opens the request. The app checked the request at the old address before moving to the one the notification gave, and showed "could not be checked". It now waits until the bridge answers, and keeps the notification when the same paired computer moves.
+
 ### Saved logins on the phone (0.8.0)
 
 The owner asked for a way to keep login secrets, the way the Instinct assistant uses 1Password: the secret stays with the person, every use is approved, and the agent never sees it.
