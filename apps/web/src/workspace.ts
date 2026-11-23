@@ -888,9 +888,9 @@ export function useWorkspace(onError: (message: string) => void) {
         throw new Error(
           "Use the owner token from your bridge to create a new remembered device.",
         );
-      let result: DevicePairResult;
+      let result: DevicePairResult & { info?: BridgeInfo };
       try {
-        result = await callBridge<DevicePairResult>(checked, "/api/devices", {
+        result = await callBridge<DevicePairResult & { info?: BridgeInfo }>(checked, "/api/devices", {
           method: "POST",
           body: JSON.stringify({ name: options.name.trim() || "My phone", ...(options.notificationSubscription ? { notificationSubscription: options.notificationSubscription } : {}) }),
         });
@@ -913,6 +913,8 @@ export function useWorkspace(onError: (message: string) => void) {
       next = {
         ...validateConnection(checked.url, result.token),
         device: result.device,
+        // Stored now, so the saved pairing does not change after the first connection.
+        ...(validSource(result.info?.vapidPublicKey) ? { source: result.info.vapidPublicKey } : {}),
       };
       if (superseded()) {
         await callBridge(checked, `/api/devices/${encodeURIComponent(result.device.id)}/revoke`, { method: "POST", body: "{}" }).catch(() => {});

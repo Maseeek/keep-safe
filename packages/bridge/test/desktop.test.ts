@@ -8,6 +8,7 @@ import { findDesktopTools } from '../src/desktop';
 import { createProfile, launchSignInChrome, removeProfile } from '../src/chrome';
 import { keysymFor, xauthority } from '../src/x11';
 import { openBrowser } from '../src/browser';
+import { findAccessibilityTools, focusFrom } from '../src/atspi';
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close().catch(() => {}); });
@@ -37,7 +38,7 @@ describe('desktop sign-in', () => {
   it('signs in to a Chrome with no debugging that cannot open the computer\'s files or other programs', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'keep-safe-standin-')); cleanup.push(() => rm(directory, { recursive: true, force: true }));
     const program = join(directory, 'chrome');
-    await writeFile(program, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(directory, 'started.json'))}, JSON.stringify({ args: process.argv.slice(2), path: process.env.PATH, bus: process.env.DBUS_SESSION_BUS_ADDRESS, display: process.env.DISPLAY }));\nsetInterval(() => {}, 1000);\n`);
+    await writeFile(program, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(directory, 'started.json'))}, JSON.stringify({ args: process.argv.slice(2), path: process.env.PATH, bus: process.env.DBUS_SESSION_BUS_ADDRESS, display: process.env.DISPLAY, accessibility: process.env.AT_SPI_BUS_ADDRESS }));\nsetInterval(() => {}, 1000);\n`);
     await chmod(program, 0o755);
     const profile = await createProfile(); cleanup.push(() => removeProfile(profile));
     // The preferences Chrome's policies set: no file or settings pages, downloads, printing, extensions or file picker.
@@ -46,18 +47,35 @@ describe('desktop sign-in', () => {
       extensions: { install: { denylist: ['*'] } }, session: { restore_on_startup: 1 },
     });
     expect(JSON.parse(await readFile(join(profile, 'Local State'), 'utf8'))).toEqual({ select_file_dialogs: { allowed: false } });
-    const chrome = await launchSignInChrome({ executable: program, proxyUrl: 'http://127.0.0.1:45000', scale: 2, width: 500, height: 720, profile, url: 'https://example.com/', env: { PATH: '/usr/bin:/bin', DISPLAY: ':99', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' }, platform: 'linux' });
+    const chrome = await launchSignInChrome({ executable: program, proxyUrl: 'http://127.0.0.1:45000', scale: 2, width: 500, height: 720, profile, url: 'https://example.com/', env: { PATH: '/usr/bin:/bin', DISPLAY: ':99', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus', AT_SPI_BUS_ADDRESS: 'unix:path=/run/user/1000/at-spi/bus' }, platform: 'linux' });
     await expect.poll(() => exists(join(directory, 'started.json'))).toBe(true);
-    const started = JSON.parse(await readFile(join(directory, 'started.json'), 'utf8')) as { args: string[]; path: string; bus: string; display: string };
+    const started = JSON.parse(await readFile(join(directory, 'started.json'), 'utf8')) as { args: string[]; path: string; bus: string; display: string; accessibility?: string };
     expect(started.args.some(arg => arg.startsWith('--remote-debugging'))).toBe(false);
     expect(started.args).toEqual(expect.arrayContaining([`--user-data-dir=${profile}`, '--proxy-server=http://127.0.0.1:45000', '--window-position=0,0', '--window-size=500,720', 'https://example.com/']));
     expect(started).toMatchObject({ display: ':99', bus: 'disabled:', path: `${join(profile, 'bin')}:/usr/bin:/bin` });
+    // No accessibility bus unless the bridge started its own private one.
+    expect(started.args).not.toContain('--force-renderer-accessibility');
+    expect(started.accessibility).toBeUndefined();
     // Its xdg-open opens nothing.
     expect(await readFile(join(profile, 'bin', 'xdg-open'), 'utf8')).toBe('#!/bin/sh\nexit 1\n');
     await chrome.stop();
     expect(chrome.exited()).toBe(true);
     // The profile stays for the agent's Chrome.
     expect(await exists(profile)).toBe(true);
+  });
+
+  it('finds the accessibility programs that report focus, and reads only a field\'s kind', async () => {
+    const directory = await programs(['dbus-daemon', 'registryd']);
+    expect(await findAccessibilityTools({ PATH: directory, KEEP_SAFE_ATSPI_REGISTRY: join(directory, 'registryd') })).toEqual({ bus: join(directory, 'dbus-daemon'), registry: join(directory, 'registryd') });
+    expect(await findAccessibilityTools({ PATH: await programs(['ffmpeg']), KEEP_SAFE_ATSPI_REGISTRY: join(directory, 'registryd') })).toBeUndefined();
+    expect(await findAccessibilityTools({ PATH: directory, KEEP_SAFE_ATSPI_REGISTRY: join(directory, 'missing') })).toBeUndefined();
+    // AT-SPI states as Chrome 157 reported them for each element.
+    expect(focusFrom('entry', { 'text-input-type': 'email', tag: 'input' }, [1191188864, 80])).toEqual({ editable: true, kind: 'email' });
+    expect(focusFrom('password text', { 'text-input-type': 'password' }, [1191184768, 64])).toEqual({ editable: true, kind: 'password' });
+    expect(focusFrom('section', { tag: 'div' }, [1124211072, 64])).toEqual({ editable: true, kind: 'text' });
+    expect(focusFrom('entry', { 'text-input-type': 'number' }, [1191188864, 0])).toEqual({ editable: true, kind: 'numeric' });
+    expect(focusFrom('button', { tag: 'button' }, [1124079872, 0])).toEqual({ editable: false });
+    expect(focusFrom('document web', { tag: '#document' }, [1124079872, 0])).toEqual({ editable: false });
   });
 
   it('types any character and writes a display cookie only it can use', () => {
@@ -156,6 +174,51 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('signing i
     expect(await exists(profile)).toBe(false);
     await pause(1500);
     expect(await exists(profile)).toBe(false);
+  }, 90_000);
+
+  it.skipIf(!tools?.accessibility)('tells the phone which kind of field took focus, and scrolls as far as the finger moved', async () => {
+    const page = `<!doctype html><body style="margin:0;font:20px sans-serif">
+<input id=email type=email style="display:block;box-sizing:border-box;width:100%;height:80px">
+<input id=secret type=password style="display:block;box-sizing:border-box;width:100%;height:80px">
+<button style="display:block;width:100%;height:80px">Next</button>
+<p style="height:80px;margin:0">Plain words</p>
+<div style="height:6000px"></div>
+<script>addEventListener('scroll', () => localStorage.setItem('scrolled', String(scrollY)));</script>`;
+    const server = createServer((_request, response) => { response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); response.end(page); });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    const session = await openBrowser({ url, allowLocalUrls: true, viewport: { width: 390, height: 720, scale: 2, touch: true } }); cleanup.push(() => session.close());
+    const [profile] = await ownProfiles();
+    const owner = JSON.parse(await readFile(join(profile, 'keep-safe-owner.json'), 'utf8')) as { chrome: number; bus: number };
+    expect(await readFile(`/proc/${owner.chrome}/cmdline`, 'utf8')).toContain('--force-renderer-accessibility');
+    expect(await readFile(`/proc/${owner.chrome}/cmdline`, 'utf8')).not.toContain('--remote-debugging');
+    expect(running(owner.bus)).toBe(true);
+    await expect.poll(async () => (await session.frame()).width, { timeout: 10_000 }).toBe(500);
+    // Chrome's tab strip and toolbar take the top of the picture; the page starts below them.
+    const top = 87;
+    // Chrome starts sending accessibility events a few seconds after the bridge subscribes.
+    await expect.poll(() => session.input({ type: 'click', x: 250, y: top + 40 }), { timeout: 15_000, interval: 500 }).toEqual({ editable: true, kind: 'email' });
+    expect(await session.input({ type: 'click', x: 250, y: top + 120 })).toEqual({ editable: true, kind: 'password' });
+    expect(await session.input({ type: 'click', x: 250, y: top + 200 })).toEqual({ editable: false });
+    // A second tap on a field that already has focus raises the keyboard again.
+    expect(await session.input({ type: 'click', x: 250, y: top + 40 })).toEqual({ editable: true, kind: 'email' });
+    expect(await session.input({ type: 'key', key: 'Tab' })).toEqual({ editable: true, kind: 'password' });
+    expect(await session.input({ type: 'click', x: 250, y: top + 280 })).toEqual({ editable: false });
+    // A slow swipe arrives as many small moves. Twenty 12 px moves scroll
+    // 240 px, two wheel steps, not a whole step for each move.
+    for (let move = 0; move < 20; move++) { await session.input({ type: 'scroll', deltaX: 0, deltaY: 12, x: 250, y: 400 }); await pause(50); }
+    await pause(1200);
+    // A short swipe of most of a step still moves the page.
+    await pause(500);
+    await session.input({ type: 'scroll', deltaX: 0, deltaY: 70, x: 250, y: 400 });
+    await pause(1200);
+    await session.prepareHandoff!();
+    // The agent's Chrome is ordinary: no accessibility bus.
+    expect(running(owner.bus)).toBe(false);
+    const agent = await chromium.connectOverCDP(session.cdpUrl!); cleanup.push(() => agent.close());
+    const shown = agent.contexts().flatMap(context => context.pages()).find(item => item.url().startsWith(url))!;
+    expect(Number(await shown.evaluate(() => localStorage.getItem('scrolled')))).toBe(360);
   }, 90_000);
 
   it('goes back, forward and reloads with Chrome\'s own keys during sign-in', async () => {

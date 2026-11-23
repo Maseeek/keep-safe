@@ -11,7 +11,7 @@ const tools = await findDesktopTools();
 // real Chrome (a window, with Xephyr), so it runs only on request:
 // KEEP_SAFE_BROWSER=chrome npx vitest run tests/desktop-sign-in-ui.test.ts
 describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('desktop sign-in from the phone', () => {
-  it('signs in with taps, the phone keyboard and Back, then gives the agent the signed-in browser', async () => {
+  it('signs in with a tap that raises the phone keyboard, password boxes and Back, then gives the agent the signed-in browser', async () => {
     const fixture = await startLoginFixture();
     const bridge = await createBridge({ ownerToken: 'desktop-owner', agentToken: 'desktop-agent', port: 0, allowLocalUrls: true, staticDir: resolve('apps/web/dist') });
     const client = new BridgeClient({ url: bridge.url, token: 'desktop-agent' });
@@ -34,14 +34,20 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('desktop s
       // Nothing for the agent while the owner signs in.
       expect((await client.get(request.id)).browser).toBeUndefined();
       await page.waitForTimeout(1500);
-      // A tap on the page's heading, below Chrome's toolbar, then Tab to the email field.
+      // A tap on the email field, below Chrome's toolbar, raises the phone's
+      // own keyboard, set for an email address. Chrome reports focus a few
+      // seconds after the sign-in starts, so the first taps may not.
       const box = (await screen.boundingBox())!;
-      await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height * (150 / 720));
+      const keyboard = page.locator('.live-keyboard-input');
+      await expect.poll(async () => {
+        await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height * (350 / 720));
+        await page.waitForTimeout(700);
+        return keyboard.evaluate(element => element === document.activeElement);
+      }, { timeout: 20_000, interval: 500 }).toBe(true);
+      expect(await keyboard.getAttribute('inputmode')).toBe('email');
+      await page.keyboard.type('fixture@example.invalid');
       await page.getByRole('button', { name: 'Press Tab in browser' }).click();
       await page.getByRole('button', { name: /Passwords/ }).click();
-      await page.locator('#credential-username').fill('fixture@example.invalid');
-      await page.getByRole('button', { name: 'Send username' }).click();
-      await page.getByRole('button', { name: 'Press Tab in browser' }).click();
       await page.locator('#credential-password').fill('synthetic-test-only');
       await page.getByRole('button', { name: 'Send password' }).click();
       await page.getByRole('button', { name: 'Press Enter in browser' }).click();

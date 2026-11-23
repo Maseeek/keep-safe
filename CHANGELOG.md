@@ -1,5 +1,16 @@
 # Change history
 
+## 19 November 2026
+
+### Keyboard and scrolling in the Google sign-in (0.7.1)
+
+The owner found scrolling far too sensitive in the Google sign-in, and tapping Google's email field did not raise the phone keyboard.
+
+- Scroll about as far as the finger moved. Each 50 ms batch of a swipe used to send at least one mouse-wheel notch, and Chrome scrolls 120 pixels per notch, not the 53 assumed, so a slow swipe moved the page many times the finger's distance. The bridge now keeps the remainder between batches.
+- Raise the phone keyboard when a tap or Tab lands in a text field, set for email, password or text. The sign-in Chrome reports focus over a private accessibility bus that only this computer user can reach and that cannot start programs. Only the focused field's role and type are read, never its text. It still has no remote debugging.
+- A fast fling no longer keeps scrolling after the finger stops. Scrolling past the 40-notch limit of one batch is dropped instead of carried into the next.
+- A phone remembered with the owner key stores the computer's notification key straight away. It used to be added after the first connection, so the saved pairing changed under the app, and the GitHub check on `main` failed on that timing.
+
 ## 18 November 2026
 
 ### Sign in to Google and YouTube (0.7.0)
