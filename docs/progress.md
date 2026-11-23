@@ -637,3 +637,13 @@ The owner asked for agents to name the fields a sign-in needs, and for secrets t
 - Found while testing: Chromium's virtual authenticator refuses every request after one failed user verification, so the refusal check runs last in the app test.
 
 Not verified: PRF passkeys on a physical Android or iPhone, the fill in the desktop (Google) sign-in, and Safari's storage eviction for a Home Screen app.
+
+## Notification tap opens its request, 23 November 2026
+
+The owner asked that tapping a notification take them to that request.
+
+- Reproduced in real Chromium through the registered service worker: on a 390 px phone with the app open and an older request in the queue, a notification for a new request opened nothing and showed no notice. The routing compared the target with the queue's first request, which a phone does not show until one is chosen. It now counts only the request actually on screen. At 1440 px it already worked.
+- A cold start where the stored address was dead and the notification had left the new one showed "could not be checked": the check ran at the old address first. Verification now waits for the bridge to connect, and a move of the same paired device (same key, device and notification key) keeps the pending notification.
+- New `tests/notification-open-window.test.ts` covers both; both fail without the change. Typecheck and the full suite pass: 443 passed, 6 skipped. No bridge change, so no version bump.
+
+Not verified: a tap on a real notification on a physical phone.
