@@ -31,6 +31,7 @@ import { AgentMark, BrowserPanel, domain, timeLeft } from "./BrowserPanel";
 import { useWorkspace, validateConnection, type Connection, type Workspace } from "./workspace";
 import { notificationMessage, readNotificationEntry, verifyNotificationIntent, withoutNotificationEntry, type NotificationIntent } from "./notification-intent";
 import { DeviceManager } from "./DeviceManager";
+import { SavedLoginsSettings } from "./SavedLogins";
 import { HistoryControls } from "./HistoryControls";
 import { useNotifications } from "./useNotifications";
 import { PairForm, PromptCard } from "./pairing-ui";
@@ -919,10 +920,11 @@ export function App() {
                   <div className="notification-actions"><button className="button button-light" onClick={() => { void install.install(); }}>Install Keep Safe</button></div>
                 </section>
               ) : null}
+              <SavedLoginsSettings />
               <section className="content-card settings-card privacy-card">
                 <div className="settings-card-head"><span className="settings-section-icon"><ShieldCheck size={20} aria-hidden="true" /></span><h2>Private by design</h2></div>
                 <ul className="privacy-list">
-                  <li><Check size={15} aria-hidden="true" /><div><strong>No saved passwords</strong><span>Text goes to the live website. Keep Safe never saves it.</span></div></li>
+                  <li><Check size={15} aria-hidden="true" /><div><strong>No passwords on your computer</strong><span>Typing goes to the live website. Logins you choose to save stay encrypted on this phone.</span></div></li>
                   <li><Check size={15} aria-hidden="true" /><div><strong>Cookies stay on your computer</strong><span>The browser runs there, never in this app.</span></div></li>
                   <li><Check size={15} aria-hidden="true" /><div><strong>Temporary control</strong><span>Requests expire. Handing back ends your control of the browser.</span></div></li>
                   <li><Check size={15} aria-hidden="true" /><div><strong>You have the final say</strong><span>Agents can ask. Only a paired phone can approve.</span></div></li>

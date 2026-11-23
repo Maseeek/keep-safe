@@ -108,7 +108,7 @@ T3's own environment MCP URL is a different service. Do not point Keep Safe at i
 
 ### Tools
 
-- `request_login`: create a time-limited request with `agent`, `title`, `url`, optional `reason`, `cdp_url`, and `ttl_seconds`.
+- `request_login`: create a time-limited request with `agent`, `title`, `url`, optional `reason`, `fields`, `cdp_url`, and `ttl_seconds`. `fields` lists up to six names of what the sign-in asks for, such as `["Email", "Password", "2FA code"]`; the phone shows them as "Have ready". Names only: the bridge refuses entries that look like values, such as text with `@`, `=` or five or more digits in a row.
 - `get_login_request`: inspect status using `request_id`.
 - `wait_for_login`: wait up to 120 seconds for a terminal status; wait again if it is still pending or active. It long polls the bridge, so a completed handoff is reported as soon as it happens. Against an older bridge it falls back to checking every 1.5 seconds.
 

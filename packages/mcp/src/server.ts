@@ -16,7 +16,7 @@ function result(request: AgentRequest, setup?: string) {
 }
 
 export function createMcpServer(client: LoginClient) {
-  const server = new McpServer({ name: 'keep-safe', version: '0.7.1' });
+  const server = new McpServer({ name: 'keep-safe', version: '0.8.0' });
   server.registerTool('request_login', {
     title: 'Ask the owner to sign in',
     description: 'Hand an actual Chromium website login to the owner on their phone. Pause browser input until the owner explicitly completes the handoff. Never pass passwords, cookies, or tokens in tool arguments. For an existing browser provide its loopback CDP endpoint; otherwise Keep Safe opens a separate managed browser and returns its endpoint to the agent after approval.',
@@ -25,6 +25,7 @@ export function createMcpServer(client: LoginClient) {
       title: z.string().min(1).max(120).describe('Short human-readable task title'),
       url: z.string().url().max(2048).describe('HTTPS website login URL without credentials'),
       reason: z.string().max(500).optional(),
+      fields: z.array(z.string().min(1).max(40)).max(6).optional().describe('Names of what the sign-in will ask for, read from the login page, e.g. ["Email", "Password", "2FA code"]. Shown to the owner so they know what to have ready. Names only, never values.'),
       cdp_url: z.string().url().max(2048).optional().describe('Existing Chromium CDP endpoint on loopback only'),
       ttl_seconds: z.number().int().min(60).max(1800).optional(),
     },

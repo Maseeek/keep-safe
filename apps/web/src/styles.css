@@ -672,3 +672,15 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
   .handoff-field i { width: 62%; }
   .handoff-done { display: none; }
 }
+
+/* Saved logins: inside the Passwords panel and in Settings. */
+.saved-logins { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.saved-logins-head { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; }
+.saved-logins small, .saved-logins-note { font-size: 0.8125rem; color: var(--muted); margin: 0; }
+.saved-logins-error { font-size: 0.8125rem; color: var(--danger, #b42318); margin: 0; }
+.saved-login-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.saved-login-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; }
+.saved-login-list li span { min-width: 0; overflow-wrap: anywhere; font-size: 0.9375rem; }
+.saved-login-list li .button, .saved-login-list li .icon-button { flex: none; }
+.request-fields { margin-top: 6px; font-size: 0.875rem; overflow-wrap: anywhere; }
+.request-fields span { color: var(--muted); }

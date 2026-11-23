@@ -35,6 +35,8 @@ import { browserAddress } from "./browser-address";
 import { ControlNavigator } from "./ControlNavigator";
 import { RemoteSurface } from "./RemoteSurface";
 import { LiveKeyboard, type LiveKeyboardHandle } from "./LiveKeyboard";
+import { SavedLogins } from "./SavedLogins";
+import { loginOrigin } from "./vault";
 
 export function AgentMark({
   name,
@@ -301,6 +303,10 @@ export function BrowserPanel({
     setTimeout(() => setTaps(previous => previous.filter(tap => tap.id !== id)), 450);
   }, [typing]);
   const target = workspace.typingTarget?.requestId === request.id ? workspace.typingTarget : null;
+  // A tap from before the page changed says nothing about the field focused now.
+  const [pageSince, setPageSince] = useState(() => Date.now());
+  useEffect(() => setPageSince(Date.now()), [request.id, liveFrame?.url, workspace.navigationBusy]);
+  const tappedField = target && target.at >= pageSince && target.editable ? target.kind ?? "text" : null;
   // A tap landed in a text field: bring up the keyboard. Phones that insist on
   // a direct touch show the highlighted Keyboard button instead.
   useEffect(() => {
@@ -441,6 +447,9 @@ export function BrowserPanel({
           {request.reason ||
             "Please sign in to this website so I can continue my task."}
         </p>
+        {request.fields?.length ? (
+          <p className="request-fields"><span>Have ready:</span> {request.fields.join(", ")}</p>
+        ) : null}
       </div>
       <div className="session-meta">
         <span>
@@ -648,6 +657,9 @@ export function BrowserPanel({
             ) : null}
             {showCredentials ? (
               <form className="credential-form" id="credential-form" onSubmit={event => event.preventDefault()} autoComplete="on">
+                <SavedLogins origin={loginOrigin(liveFrame?.url ?? request.url)} addressInView={addressInView} field={tappedField}
+                  canSend={!keyInputBlocked} send={workspace.send} onNotice={setToolNotice}
+                  boxes={() => ({ username: credentialUser.current?.value ?? "", password: credentialPassword.current?.value ?? "" })}>
                 <p>Fill these with your password manager. Tap a field on the page, then send the matching one.</p>
                 <label htmlFor="credential-username">Username or email</label>
                 <div className="input-with-button">
@@ -659,7 +671,8 @@ export function BrowserPanel({
                   <input ref={credentialPassword} id="credential-password" name="password" type="password" autoComplete="current-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
                   <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} aria-label="Send password" onClick={() => sendCredential(credentialPassword, "Password")}>Send <ArrowUp size={14} aria-hidden="true" /></button>
                 </div>
-                <small>Each one goes straight to the page and is cleared here. Never saved or shown by Keep Safe.</small>
+                <small>Each one goes straight to the page and is cleared here.</small>
+                </SavedLogins>
               </form>
             ) : null}
             {showKeyboard ? (

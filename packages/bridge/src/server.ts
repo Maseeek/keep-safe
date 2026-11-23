@@ -99,6 +99,16 @@ function safeText(value: unknown, name: string, max: number, fallback?: string) 
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) throw new HttpError(400, `${name} must be 1–${max} characters.`);
   return value.trim();
 }
+/** Names the agent says the sign-in will ask for. Anything that looks like a
+ * value rather than a name, such as text with an @ or a long run of digits, is
+ * refused so a mistaken agent cannot put a secret in front of the owner. */
+function fieldNames(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 6) throw new HttpError(400, 'fields must be a list of up to 6 names.');
+  const names = value.map(item => safeText(item, 'Each field name', 40));
+  if (names.some(name => /[@\\:=]|\d{5,}/.test(name))) throw new HttpError(400, 'fields are names such as "Email" or "Password", never values.');
+  return names.length ? [...new Set(names)] : undefined;
+}
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 async function jsonBody(request: IncomingMessage) {
   if (!request.headers['content-type']?.startsWith('application/json')) throw new HttpError(415, 'Use application/json.');
@@ -182,7 +192,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Where the owner signs in to that Chrome: on a private display with no remote debugging, or in the window itself. */
   const desktopSignIn = managedBrowser === 'chrome' ? await findDesktopTools() : undefined;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.7.1', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.8.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -763,8 +773,9 @@ export async function createBridge(options: BridgeOptions) {
       try { target = validateTargetUrl(body.url, options.allowLocalUrls); cdpUrl = validateCdpUrl(body.cdpUrl); } catch (error) { throw new HttpError(400, (error as Error).message); }
       const ttl = body.ttlSeconds === undefined ? 600 : body.ttlSeconds;
       if (typeof ttl !== 'number' || !Number.isInteger(ttl) || ttl < 1 || ttl > 1800) throw new HttpError(400, 'ttlSeconds must be an integer between 1 and 1800.');
+      const fields = fieldNames(body.fields);
       const time = now();
-      const item: LoginRequest = { id: randomUUID(), agent: safeText(body.agent, 'Agent', 80), title: safeText(body.title, 'Title', 120), url: target, origin: new URL(target).origin, reason: safeText(body.reason, 'Reason', 500, 'Complete the sign-in so your agent can continue.'), status: 'pending', createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString(), expiresAt: new Date(time + ttl * 1000).toISOString() };
+      const item: LoginRequest = { id: randomUUID(), agent: safeText(body.agent, 'Agent', 80), title: safeText(body.title, 'Title', 120), url: target, origin: new URL(target).origin, reason: safeText(body.reason, 'Reason', 500, 'Complete the sign-in so your agent can continue.'), ...(fields ? { fields } : {}), status: 'pending', createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString(), expiresAt: new Date(time + ttl * 1000).toISOString() };
       // Body reading is asynchronous, so recheck resource limits immediately
       // before mutation. Never evict an outcome the agent can still retrieve.
       if ([...entries.values()].filter(entry => !terminal.has(entry.request.status)).length >= 20) throw new HttpError(429, 'The request queue is full.');
