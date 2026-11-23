@@ -2,6 +2,15 @@
 
 ## 23 November 2026
 
+### Easier phone password manager access
+
+- **Passwords** sits right beside **Keyboard** in the tool row, so it is visible on narrow phones without swiping. It is highlighted and scrolled into view when you tap an email or password field on the page.
+- Opening **Passwords** focuses the matching username or password box during the tap, so the phone's keyboard and password manager suggestions come up at once. The form stays above the soft keyboard.
+- With **Passwords** open, tapping the next field on the page no longer pulls focus back to live typing, so a two-step sign-in keeps the password box ready.
+- The boxes use a standard `method="post"` form with a submit button, send on Enter or Go, show when a box is ready to send, have a close button, and name the website to search for in the password manager.
+
+Not verified: password manager prompts on a physical phone.
+
 ### Opening a request from its notification
 
 - Tapping a notification on a phone with the app already open now opens that request. The app took the first request in the queue as already on screen, but a phone shows only the queue until one is chosen. A new request is usually first, so nothing opened and no notice appeared.
