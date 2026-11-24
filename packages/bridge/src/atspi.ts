@@ -228,6 +228,9 @@ export async function connectDBus(socketPath: string, timeoutMs = 3000): Promise
 
 /** AT-SPI's EDITABLE state, bit 7 of the first state word. */
 const editableBit = 1 << 7;
+/** A Collection rule that matches objects in the FOCUSED state (bit 12):
+ * states, match all; no attributes, roles or interfaces; not inverted. */
+const focusedRule = [[1 << 12, 0], 1, [], 1, [], 1, [], 1, false];
 const kinds: Record<string, EditableKind> = { password: 'password', email: 'email', tel: 'tel', url: 'url', search: 'search', number: 'numeric' };
 
 /** What a focused accessible object means for the phone keyboard. Reads the
@@ -243,8 +246,10 @@ export interface FocusWatch {
   address: string;
   /** The bus process, recorded so a later bridge can end it if this one is killed. */
   pid: number;
-  /** Resolves with the focus after an action: as soon as focus moves, or after
-   * `settleMs` with focus unchanged, such as a second tap on the same field. */
+  /** The registry process, recorded for the same reason. */
+  registryPid: number;
+  /** Resolves with the focus after an action: once focus moves, or after
+   * `settleMs` with focus unchanged, Chrome is asked which object has focus. */
   after<T>(action: () => Promise<T>, settleMs?: number): Promise<FocusState | undefined>;
   close(): Promise<void>;
 }
@@ -313,34 +318,77 @@ export async function startFocusWatch(tools: AccessibilityTools, folder: string,
     /** Counts focus moves, so a slow answer about an older object never wins. */
     let moves = 0;
     const waiters = new Set<() => void>();
+    const describe = async (sender: string, path: string) => {
+      const object = (member: string) => bridge.call(sender, path, 'org.a11y.atspi.Accessible', member);
+      const [[role], [attributes], [states]] = await Promise.all([object('GetRoleName'), object('GetAttributes'), object('GetState')]);
+      return focusFrom(role as string, Object.fromEntries(attributes as Array<[string, string]>), states as number[]);
+    };
+    /** Asks Chrome which object has focus now. Events alone miss a field that
+     * took focus before Chrome's accessibility was ready, such as Google's
+     * email box, which has focus as the page loads, and a tap on a field that
+     * already has focus sends no event at all. */
+    const ask = async (): Promise<FocusState | undefined> => {
+      const [apps] = await bridge.call('org.a11y.atspi.Registry', '/org/a11y/atspi/accessible/root', 'org.a11y.atspi.Accessible', 'GetChildren') as [Array<[string, string]>];
+      let found: [string, string] | undefined;
+      for (const [app, path] of apps) {
+        const [matches] = await bridge.call(app, path, 'org.a11y.atspi.Collection', 'GetMatches', '(aiia{ss}iaiiasib)uib', [focusedRule, 1, 8, true]) as [Array<[string, string]>];
+        // In tree order, so the last is the innermost: the field, not its window.
+        if (matches.length) found = matches[matches.length - 1];
+      }
+      return found ? describe(...found) : undefined;
+    };
+    /** One question to Chrome at a time: a slow walk of a huge page is
+     * shared by the taps that wait on it instead of stacking up. */
+    let asking: Promise<FocusState | undefined> | undefined;
+    const askOnce = () => asking ??= ask().catch(() => undefined).finally(() => { asking = undefined; });
+    /** Only the newest focus event is looked up, one lookup at a time, so a
+     * page that moves focus in a tight loop cannot pile up calls. */
+    let latest: { sender: string; path: string; move: number } | undefined;
+    let describing = false;
+    const lookUp = async () => {
+      if (describing) return;
+      describing = true;
+      try {
+        while (latest) {
+          const target = latest; latest = undefined;
+          const state = await describe(target.sender, target.path).catch(() => undefined);
+          if (state && target.move === moves) { current = state; for (const waiter of waiters) waiter(); }
+        }
+      } finally { describing = false; }
+    };
     bridge.onSignal(message => {
       if (message.member !== 'StateChanged' || message.body[0] !== 'focused' || message.body[1] !== 1 || !message.sender || !message.path) return;
-      const move = ++moves;
-      void (async () => {
-        const object = (member: string) => bridge.call(message.sender!, message.path!, 'org.a11y.atspi.Accessible', member);
-        const [[role], [attributes], [states]] = await Promise.all([object('GetRoleName'), object('GetAttributes'), object('GetState')]);
-        const state = focusFrom(role as string, Object.fromEntries(attributes as Array<[string, string]>), states as number[]);
-        if (move !== moves) return;
-        current = state;
-        for (const waiter of waiters) waiter();
-      })().catch(() => {});
+      latest = { sender: message.sender, path: message.path, move: ++moves };
+      void lookUp();
     });
     return {
       address,
       pid: bus.pid!,
-      async after(action, settleMs = 350) {
+      registryPid: registry.pid!,
+      async after(action, settleMs = 200) {
         const before = moves;
         let waiter: (() => void) | undefined;
         let timer: ReturnType<typeof setTimeout> | undefined;
+        let heard = false;
         const moved = new Promise<void>(resolve => {
-          waiter = () => { if (moves !== before) resolve(); };
+          waiter = () => { if (moves !== before) { heard = true; resolve(); } };
           waiters.add(waiter);
         });
         try {
           await action();
           await Promise.race([moved, new Promise<void>(resolve => { timer = setTimeout(resolve, settleMs); timer.unref(); })]);
         } finally { waiters.delete(waiter!); clearTimeout(timer); }
-        return current;
+        // Focus moved and was looked up: that is the answer.
+        if (heard) return current;
+        // No event: ask Chrome, but never hold the phone's input for long. On
+        // a page with tens of thousands of elements the walk can take seconds.
+        const start = moves;
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        const now = await Promise.race([askOnce(), new Promise<undefined>(resolve => { deadline = setTimeout(() => resolve(undefined), 250); deadline.unref(); })]);
+        clearTimeout(deadline);
+        if (!now) return current;
+        if (moves === start) current = now;
+        return now;
       },
       close,
     };

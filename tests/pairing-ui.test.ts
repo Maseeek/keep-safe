@@ -273,9 +273,12 @@ describe('pairing and onboarding', () => {
       await twin.close();
       const box = (await image.boundingBox())!;
       await page.touchscreen.tap(box.x + email.x + email.width / 2, box.y + email.y + email.height / 2);
-      // The tap focused a text field, so the phone's keyboard target takes focus by itself.
+      // The tap focused a text field, so the phone's keyboard opens by itself. Where
+      // the browser can open it on request, the target already took focus during
+      // the tap, with the keyboard held down until the bridge named the field.
       const capture = page.getByLabel('Type into the remote page', { exact: true });
-      await expect.poll(() => capture.evaluate(element => document.activeElement === element)).toBe(true);
+      await page.getByRole('button', { name: 'Hide keyboard', exact: true }).waitFor();
+      expect(await capture.evaluate(element => document.activeElement === element)).toBe(true);
       expect(await capture.getAttribute('type')).toBe('password');
       expect(await capture.getAttribute('inputmode')).toBe('email');
       await page.keyboard.type('fixture@example.invalid');

@@ -7,7 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
 import type { FrameHeader, BridgeInfo, EditableKind, HistoryCleanupResult, LoginRequest, PairingState, ServerMessage, ViewportRequest } from '../../shared/src/protocol';
 import { findDesktopTools } from './desktop';
-import { BrowserFrameChangedError, BrowserNavigationError, browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserSession } from './browser';
+import { BrowserFrameChangedError, BrowserNavigationError, browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserFrame, type BrowserSession } from './browser';
 import { chooseBrowser } from './chrome';
 import { atomicJsonWriter, createDeviceStore, DEVICE_LIFETIME_DAYS } from './devices';
 
@@ -56,6 +56,12 @@ interface Client {
   frames?: { stop(): void; live: boolean };
   /** Asked for binary frames with `watch.stream`. */
   binary?: boolean;
+  /** Acknowledges each frame it shows, so the stream is paced by the phone. */
+  acks?: boolean;
+  /** The last frame number sent and the last one the phone acknowledged.
+   * Both only grow while the socket is open, so a late acknowledgement from
+   * an earlier view can never release frames early by more than it covers. */
+  seq: number; acked: number; ackWaiters: Set<() => void>;
   /** When the last live frame left, to pace the stream. */
   streamedAt: number;
   /** Pointer moves received so far, and the ones that must not be skipped. */
@@ -76,6 +82,16 @@ const frameIntervalMs = 100;
  * is not changing sends nothing. */
 const streamIntervalMs = 33;
 const streamBytesPerMs = 2500;
+/** A phone that acknowledges frames is paced by what it has shown instead
+ * of by image size: up to thirty frames a second, with at most two on their
+ * way at once. A tunnel reads everything the bridge writes, so without
+ * acknowledgements a slow phone link would fill the tunnel with stale frames. */
+const ackedIntervalMs = streamIntervalMs;
+const framesInFlight = 2;
+/** A phone that stops acknowledging still gets about a frame a second. */
+const ackWaitMs = 1000;
+/** How long a stream must be still before the sharp image replaces the last moving one. */
+const settleMs = 300;
 /** Pointer moves arrive up to sixty times a second, beside keys and taps. */
 const messagesPerSecond = 240;
 const sleep = (milliseconds: number) => new Promise<void>(resolve => { setTimeout(resolve, milliseconds); });
@@ -192,7 +208,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Where the owner signs in to that Chrome: on a private display with no remote debugging, or in the window itself. */
   const desktopSignIn = managedBrowser === 'chrome' ? await findDesktopTools() : undefined;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.8.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.8.1', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, frameAcks: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -284,9 +300,27 @@ export async function createBridge(options: BridgeOptions) {
   function sendFrame(client: Client, header: FrameHeader, data: string) {
     if (!client.binary) { send(client, { ...header, data }); return; }
     if (!validClient(client) || client.ws.readyState !== WebSocket.OPEN) return;
-    const meta = Buffer.from(JSON.stringify(header));
+    const meta = Buffer.from(JSON.stringify(client.acks ? { ...header, seq: ++client.seq } : header));
     const length = Buffer.alloc(4); length.writeUInt32BE(meta.length);
     client.ws.send(Buffer.concat([length, meta, Buffer.from(data, 'base64')]), { binary: true });
+  }
+  /** True while the phone has fewer frames on their way than it may. */
+  function roomFor(client: Client) { return !client.acks || client.seq - client.acked < framesInFlight; }
+  /** Waits until the phone has room for another frame, or the wait limit passes. */
+  async function waitForRoom(client: Client, stopped: () => boolean) {
+    const deadline = Date.now() + ackWaitMs;
+    while (!roomFor(client) && !stopped() && client.ws.readyState === WebSocket.OPEN && Date.now() < deadline) {
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); client.ackWaiters.delete(done); resolve(); };
+        const timer = setTimeout(done, Math.max(1, deadline - Date.now()));
+        client.ackWaiters.add(done);
+      });
+    }
+  }
+  function acknowledge(client: Client, seq: unknown) {
+    if (!Number.isSafeInteger(seq) || (seq as number) <= client.acked || (seq as number) > client.seq) return;
+    client.acked = seq as number;
+    for (const waiter of [...client.ackWaiters]) waiter();
   }
   function closeEntry(entry: Entry): Promise<void> {
     if (entry.controller) unwatch(entry.controller);
@@ -338,7 +372,7 @@ export async function createBridge(options: BridgeOptions) {
   async function frame(entry: Entry, client: Client) {
     if (client.pendingFrame || entry.navigating || !entry.browser || !active(entry, client)) return;
     // A slow phone link skips captures instead of queuing stale images.
-    if (client.ws.bufferedAmount > 512_000) return;
+    if (client.ws.bufferedAmount > 512_000 || !roomFor(client)) return;
     client.pendingFrame = true;
     const epoch = entry.frameEpoch ??= randomUUID();
     try {
@@ -399,26 +433,77 @@ export async function createBridge(options: BridgeOptions) {
     if (!client.binary || !browser?.stream) return { stop: capture(), live: false };
     // The browser pushes a frame whenever the page repaints. Nothing is sent
     // while the page is still.
-    let stopped = false; let end: (() => void) | undefined;
-    const feed = { stop() { stopped = true; end?.(); }, live: true };
-    browser.stream(async image => {
-      if (stopped || !client.frames || entry.navigating || entry.browser !== browser || !active(entry, client)) return;
+    let stopped = false; let end: (() => void) | undefined; let settle: ReturnType<typeof setTimeout> | undefined;
+    const feed = { stop() { stopped = true; clearTimeout(settle); end?.(); }, live: true };
+    const isStopped = () => stopped;
+    const current = () => !stopped && !!client.frames && !entry.navigating && entry.browser === browser && active(entry, client);
+    /** Moving frames sent so far. A sharp still is sent only if none followed it. */
+    let moving = 0;
+    /** Moving frames since the page last settled, and the last one sent. */
+    let run = 0; let previous: BrowserFrame | undefined;
+    const show = (image: BrowserFrame) => {
       const epoch = entry.frameEpoch ??= randomUUID();
       entry.size = { width: image.width, height: image.height };
       entry.navigationAvailable = !!browser.navigate && image.navigationAvailable === true;
       sendFrame(client, { type: 'frame', requestId: entry.request.id, width: image.width, height: image.height, url: image.url, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable, ...(image.gestures ? { gestures: true } : {}), ...(image.addressInView ? { addressInView: true } : {}) }, image.data);
+    };
+    /** Once the page stops moving, one sharper image replaces the last moving one. */
+    const sharpen = async () => {
+      const seen = moving;
+      // Only after real motion such as a scroll. A lone change, such as a
+      // blinking caret, keeps the stream's own quality instead of flickering.
+      const burst = run >= 3; run = 0;
+      if (!burst) return;
+      try {
+        await waitForRoom(client, isStopped);
+        if (!current() || seen !== moving) return;
+        const image = await browser.still?.();
+        if (image && current() && seen === moving && roomFor(client)) show(image);
+      } catch { /* The next change streams again; a page that moved needs no still. */ }
+    };
+    const deliver = async (image: BrowserFrame) => {
+      if (!current()) return;
+      // Taking the sharp still repaints the page, which the browser streams
+      // again unchanged. The same image twice in a row is not motion.
+      if (previous && previous.data === image.data && previous.url === image.url && previous.width === image.width && previous.height === image.height) return;
+      previous = image;
+      moving++; run++;
+      show(image);
+      clearTimeout(settle);
+      if (browser.still) settle = setTimeout(() => { void sharpen(); }, settleMs);
       // Hold the browser's next frame until this one has left and the pace
       // allows another. A slow link gets fewer frames, never a backlog.
       const sent = client.streamedAt = Date.now();
-      await sleep(Math.max(streamIntervalMs, Math.min(250, image.data.length * 0.75 / streamBytesPerMs)));
+      if (client.acks) {
+        await sleep(ackedIntervalMs);
+        await waitForRoom(client, isStopped);
+      } else await sleep(Math.max(streamIntervalMs, Math.min(250, image.data.length * 0.75 / streamBytesPerMs)));
       while (!stopped && client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount > 128_000 && Date.now() - sent < 2000) await sleep(15);
-    }).then(stop => { end = () => { void stop().catch(() => {}); }; if (stopped) end(); }, () => {
+    };
+    // One frame is sent at a time. A frame that arrives meanwhile waits, and a
+    // newer one replaces it, releasing the browser to paint the next.
+    let busy = false; let queued: { image: BrowserFrame; done: () => void } | undefined;
+    const listener = (image: BrowserFrame) => new Promise<void>(resolve => {
+      if (busy) { queued?.done(); queued = { image, done: resolve }; return; }
+      busy = true;
+      void (async () => {
+        let next: typeof queued = { image, done: resolve };
+        while (next) {
+          try { await deliver(next.image); } catch { /* A frame the phone could not take is skipped. */ }
+          next.done();
+          next = stopped ? undefined : queued; queued = undefined;
+        }
+        queued?.done(); queued = undefined;
+        busy = false;
+      })();
+    });
+    browser.stream(listener).then(stop => { end = () => { void stop().catch(() => {}); }; if (stopped) end(); }, () => {
       // A browser that cannot stream is still shown with timed captures.
       if (!stopped) { feed.live = false; end = capture(); }
     });
     return feed;
   }
-  async function watch(client: Client, id: unknown, requestedViewport?: unknown, stream?: unknown) {
+  async function watch(client: Client, id: unknown, requestedViewport?: unknown, stream?: unknown, acks?: unknown) {
     if (typeof id !== 'string') throw new Error('Choose a valid request.');
     const viewport = viewportOf(requestedViewport);
     const entry = checkEntry(id);
@@ -427,6 +512,9 @@ export async function createBridge(options: BridgeOptions) {
     unwatch(client);
     client.watching = id;
     client.binary = stream === true;
+    client.acks = stream === true && acks === true;
+    // Frames of an earlier view no longer hold this one back.
+    client.acked = client.seq;
     entry.controller = client;
     try {
       if (!entry.browser) {
@@ -466,7 +554,7 @@ export async function createBridge(options: BridgeOptions) {
       return;
     }
     if (!validClient(client)) return;
-    if (message.type === 'watch') { await watch(client, message.requestId, message.viewport, message.stream); return; }
+    if (message.type === 'watch') { await watch(client, message.requestId, message.viewport, message.stream, message.acks); return; }
     if (message.type === 'unwatch') { unwatch(client); return; }
     const entry = client.watching ? entries.get(client.watching) : undefined;
     if (!entry?.browser || !active(entry, client)) throw new Error('Open an approved session before sending input.');
@@ -889,7 +977,7 @@ export async function createBridge(options: BridgeOptions) {
   server.on('upgrade', upgrade);
   for (const extra of extraServers) extra.server.on('upgrade', upgrade);
   sockets.on('connection', ws => {
-    const client: Client = { idle: 0, tick: 0, ws, authenticated: false, alive: true, pendingFrame: false, operations: Promise.resolve(), count: 0, window: Date.now(), streamedAt: 0, moves: 0, keptMoves: new Set(), lastWasMove: false };
+    const client: Client = { idle: 0, tick: 0, ws, authenticated: false, alive: true, pendingFrame: false, operations: Promise.resolve(), count: 0, window: Date.now(), streamedAt: 0, moves: 0, keptMoves: new Set(), lastWasMove: false, seq: 0, acked: 0, ackWaiters: new Set() };
     clients.add(client);
     client.timer = setTimeout(() => ws.close(4001, 'Authentication timeout'), 5000);
     ws.on('pong', () => { client.alive = true; });
@@ -899,6 +987,9 @@ export async function createBridge(options: BridgeOptions) {
       if (++client.count > messagesPerSecond) { ws.close(4029, 'Input rate exceeded'); return; }
       let message: Record<string, unknown> | undefined;
       try { const parsed: unknown = JSON.parse(Buffer.from(raw as Buffer).toString()); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) message = parsed as Record<string, unknown>; } catch { /* Reported in order, below. */ }
+      // Taken at once, never queued behind a slow browser action: the stream
+      // waits on it. It changes nothing but the pace of frames to this phone.
+      if (message?.type === 'frame-ack') { if (client.authenticated && validClient(client)) acknowledge(client, message.seq); return; }
       // Number pointer moves at receipt, so one that waited behind a slow page
       // can be dropped once a newer position has arrived. The last move before
       // any other message is kept: a release happens where the finger was.
@@ -908,7 +999,7 @@ export async function createBridge(options: BridgeOptions) {
       const move = moving ? ++client.moves : undefined;
       client.operations = client.operations.then(() => handleMessage(client, message, move)).catch(() => send(client, { type: 'error', message: 'The requested action was not accepted. Check that the session is still active.' }));
     });
-    ws.on('close', () => { clearTimeout(client.timer); unwatch(client); clients.delete(client); });
+    ws.on('close', () => { clearTimeout(client.timer); unwatch(client); clients.delete(client); for (const waiter of [...client.ackWaiters]) waiter(); });
     ws.on('error', () => { /* Socket closes without logging input or credentials. */ });
   });
   const expiryTimer = setInterval(() => { void expire().catch(() => {}); }, options.expiryIntervalMs ?? 1000);

@@ -109,7 +109,9 @@ describe('starting Chrome', () => {
     const gone = spawn(process.execPath, ['-e', '0']); await new Promise(resolve => gone.once('exit', resolve));
     const orphanProfile = join(directory, 'keep-safe-chrome-orphan'); await mkdir(orphanProfile);
     const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', `--user-data-dir=${orphanProfile}`], { stdio: 'ignore' }); cleanup.push(async () => { orphan.kill('SIGKILL'); });
-    await writeFile(join(orphanProfile, 'keep-safe-owner.json'), JSON.stringify({ bridge: gone.pid, chrome: orphan.pid }));
+    // Its accessibility registry names no path on its command line, only in its bus address.
+    const registry = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: { ...process.env, AT_SPI_BUS_ADDRESS: `unix:path=${orphanProfile}/keep-safe-a11y/bus,guid=0` } }); cleanup.push(async () => { registry.kill('SIGKILL'); });
+    await writeFile(join(orphanProfile, 'keep-safe-owner.json'), JSON.stringify({ bridge: gone.pid, chrome: orphan.pid, registry: registry.pid }));
     await writeFile(join(orphanProfile, 'Cookies'), 'synthetic');
     // A profile whose bridge is alive (this process) is in use.
     const live = join(directory, 'keep-safe-chrome-live'); await mkdir(live);
@@ -117,13 +119,14 @@ describe('starting Chrome', () => {
     // A dead bridge whose recorded Chrome number now belongs to an unrelated program: remove the folder, leave the program.
     const reusedProfile = join(directory, 'keep-safe-chrome-reused'); await mkdir(reusedProfile);
     const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); cleanup.push(async () => { unrelated.kill('SIGKILL'); });
-    await writeFile(join(reusedProfile, 'keep-safe-owner.json'), JSON.stringify({ bridge: gone.pid, chrome: unrelated.pid }));
+    await writeFile(join(reusedProfile, 'keep-safe-owner.json'), JSON.stringify({ bridge: gone.pid, chrome: unrelated.pid, registry: unrelated.pid }));
     // Folders this program did not write are never touched.
     const foreign = join(directory, 'keep-safe-chrome-foreign'); await mkdir(foreign); await writeFile(join(foreign, 'notes.txt'), 'keep');
     const other = join(directory, 'someone-else'); await mkdir(other);
     await pause(200);
     await sweepStaleProfiles(directory);
     await expect.poll(() => running(orphan.pid!)).toBe(false);
+    await expect.poll(() => running(registry.pid!)).toBe(false);
     expect((await readdir(directory)).sort()).toEqual(['keep-safe-chrome-foreign', 'keep-safe-chrome-live', 'someone-else']);
     expect(running(unrelated.pid!)).toBe(true);
   });

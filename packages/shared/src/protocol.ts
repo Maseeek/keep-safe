@@ -44,6 +44,9 @@ export interface BridgeInfo {
   liveViewAvailable?: boolean;
   /** Frames can arrive as binary messages, pushed as the page changes. */
   streamAvailable?: boolean;
+  /** The bridge paces a stream by the phone's `frame-ack` messages, so a slow
+   * link or a busy phone holds frames back instead of queuing them in a tunnel. */
+  frameAcks?: boolean;
   /** The owner can see and switch between the windows a sign-in opened. */
   tabsAvailable?: boolean;
   /** The owner can copy text they selected on the page to their own device. */
@@ -152,11 +155,15 @@ export interface FrameHeader {
   /** The image shows the browser's own address bar, which is the place to
    * check the address. `url` then stays the address the session started on. */
   addressInView?: boolean;
+  /** Present when the phone asked for acknowledgements. Count up per stream. */
+  seq?: number;
 }
 
 export type ClientMessage =
   | { type: 'auth'; token: string }
-  | { type: 'watch'; requestId: string; viewport?: ViewportRequest; stream?: boolean }
+  | { type: 'watch'; requestId: string; viewport?: ViewportRequest; stream?: boolean; acks?: boolean }
+  /** Every frame up to and including `seq` is on screen or was skipped for a newer one. */
+  | { type: 'frame-ack'; seq: number }
   | TouchMessage
   | MouseMessage
   | { type: 'tab'; tabId: string }
