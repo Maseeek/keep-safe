@@ -20,10 +20,13 @@ export interface SurfaceProps {
   onTap?: (point: { clientX: number; clientY: number }) => void;
 }
 
-/** Puts each new image straight into the element. The previous image stays
- * visible until the next has decoded, so the view never flashes. */
+/** Puts each new image straight into the element. The screen hands over
+ * only images it has already decoded, so the swap is immediate and the
+ * previous image stays visible until then: no flash. */
 export function useScreenImage(image: RefObject<HTMLImageElement | null>, screen: Screen) {
   useLayoutEffect(() => {
+    // Decoded already: painting it in the same frame is free and never blank.
+    if (image.current) image.current.decoding = "sync";
     const show = (source: string | null) => { if (image.current && source) image.current.src = source; };
     show(screen.current());
     return screen.subscribe(show);

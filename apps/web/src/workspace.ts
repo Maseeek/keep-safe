@@ -450,9 +450,9 @@ export function useWorkspace(onError: (message: string) => void) {
     clearTimeout(pending.timer);
     pending.resolve(text);
   }, []);
-  const setFrame = useCallback((next: BrowserFrame | null, image?: string | Blob) => {
-    if (!next || image === undefined) { screen.current!.clear(); setFrameState(null); setTabs([]); endCopy(null); return; }
-    screen.current!.show(image);
+  const setFrame = useCallback((next: BrowserFrame | null, image?: string | Blob, onShown?: () => void) => {
+    if (!next || image === undefined) { onShown?.(); screen.current!.clear(); setFrameState(null); setTabs([]); endCopy(null); return; }
+    screen.current!.show(image, onShown);
     // Most frames change only the picture, which React does not need to see.
     setFrameState(previous => previous && previous.requestId === next.requestId && previous.width === next.width && previous.height === next.height &&
       previous.url === next.url && previous.frameEpoch === next.frameEpoch && previous.navigationAvailable === next.navigationAvailable && previous.gestures === next.gestures && previous.addressInView === next.addressInView ? previous : next);
@@ -693,10 +693,22 @@ export function useWorkspace(onError: (message: string) => void) {
         if (!currentSocket()) return;
         let message: ServerMessage;
         let image: string | Blob | undefined;
+        /** Tells the bridge this frame is done with, shown or skipped, so it
+         * sends the next. Sent once, and only on the socket it came from. */
+        let ack: (() => void) | undefined;
         if (typeof event.data !== "string") {
           const binary = readBinaryFrame(event.data);
           if (!binary) return;
           message = { ...binary.header, data: "" }; image = binary.image;
+          const seq = binary.header.seq;
+          if (typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0) {
+            let sent = false;
+            ack = () => {
+              if (sent) return;
+              sent = true;
+              if (currentSocket() && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "frame-ack", seq }));
+            };
+          }
         } else {
           try {
             message = JSON.parse(event.data) as ServerMessage;
@@ -723,7 +735,7 @@ export function useWorkspace(onError: (message: string) => void) {
           if (watchId.current && !paused.current && visible() && activeRequest(watchId.current, message.requests)) {
             transportWatchId.current = watchId.current;
             ws.send(
-              JSON.stringify({ type: "watch", requestId: watchId.current, ...(viewport.current && message.info.liveViewAvailable ? { viewport: viewport.current } : {}), ...(message.info.streamAvailable ? { stream: true } : {}) }),
+              JSON.stringify({ type: "watch", requestId: watchId.current, ...(viewport.current && message.info.liveViewAvailable ? { viewport: viewport.current } : {}), ...(message.info.streamAvailable ? { stream: true } : {}), ...(message.info.streamAvailable && message.info.frameAcks ? { acks: true } : {}) }),
             );
           }
         } else if (message.type === "requests") {
@@ -767,8 +779,8 @@ export function useWorkspace(onError: (message: string) => void) {
           message.requestId === watchId.current
         ) {
           const pending = navigationAttempt.current;
-          if (pending && (!pending.result || message.frameEpoch !== pending.result.frameEpoch)) return;
-          if (expectedFrameEpoch.current && message.frameEpoch !== expectedFrameEpoch.current) return;
+          if (pending && (!pending.result || message.frameEpoch !== pending.result.frameEpoch)) { ack?.(); return; }
+          if (expectedFrameEpoch.current && message.frameEpoch !== expectedFrameEpoch.current) { ack?.(); return; }
           if (pending) {
             if (pending.timer) clearTimeout(pending.timer);
             setNavigationError(pending.result?.ok ? "" : pending.result?.message || "The website could not be navigated. Check the page before trying again.");
@@ -781,8 +793,10 @@ export function useWorkspace(onError: (message: string) => void) {
             setNavigationUncertain(false);
           }
           setNavigationAvailable(message.navigationAvailable === true);
-          setFrame({ requestId: message.requestId, width: message.width, height: message.height, url: message.url, frameEpoch: message.frameEpoch, navigationAvailable: message.navigationAvailable, gestures: message.gestures === true, addressInView: message.addressInView === true }, image);
+          setFrame({ requestId: message.requestId, width: message.width, height: message.height, url: message.url, frameEpoch: message.frameEpoch, navigationAvailable: message.navigationAvailable, gestures: message.gestures === true, addressInView: message.addressInView === true }, image, ack);
         }
+        // A frame the view will not show is still done with.
+        else if (message.type === "frame") ack?.();
         else if (message.type === "error" && !paused.current && visible()) {
           if (navigationAttempt.current) {
             pauseBrowser();
@@ -1107,7 +1121,7 @@ export function useWorkspace(onError: (message: string) => void) {
       if (canWatch) transportWatchId.current = requestId;
       socket.current.send(
         JSON.stringify(
-          canWatch ? { type: "watch", requestId, ...(viewport.current && currentInfo.current?.liveViewAvailable ? { viewport: viewport.current } : {}), ...(currentInfo.current?.streamAvailable ? { stream: true } : {}) } : { type: "unwatch" },
+          canWatch ? { type: "watch", requestId, ...(viewport.current && currentInfo.current?.liveViewAvailable ? { viewport: viewport.current } : {}), ...(currentInfo.current?.streamAvailable ? { stream: true } : {}), ...(currentInfo.current?.streamAvailable && currentInfo.current.frameAcks ? { acks: true } : {}) } : { type: "unwatch" },
         ),
       );
     }
