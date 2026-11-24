@@ -321,7 +321,10 @@ export function BrowserPanel({
     const id = performance.now();
     setTaps(previous => [...previous.slice(-3), { id, x: point.clientX - bounds.left, y: point.clientY - bounds.top }]);
     setTimeout(() => setTaps(previous => previous.filter(tap => tap.id !== id)), 450);
-  }, [typing]);
+    // Still inside the tap: phones open the keyboard only for a page the owner
+    // is touching, and the bridge says whether this was a text field later.
+    if (!showCredentials && !showKeyboard) keyboard.current?.prime();
+  }, [typing, showCredentials, showKeyboard]);
   const target = workspace.typingTarget?.requestId === request.id ? workspace.typingTarget : null;
   // A tap from before the page changed says nothing about the field focused now.
   const [pageSince, setPageSince] = useState(() => Date.now());
@@ -332,6 +335,7 @@ export function BrowserPanel({
   // A tap landed in a text field: bring up the keyboard. While Passwords is
   // open, stay there instead of pulling focus away from the password manager.
   useEffect(() => {
+    if (target && !target.editable) keyboard.current?.unprime();
     if (!target?.editable || !canInput || showKeyboard) return;
     if (credentialSuggested && !showCredentials) {
       const button = passwordsTrigger.current;

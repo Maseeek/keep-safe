@@ -45,14 +45,16 @@ export async function sweepStaleProfiles(directory = tmpdir()): Promise<void> {
     for (const name of names.filter(item => item.startsWith(profilePrefix))) {
       const path = join(directory, name);
       try {
-        const owner = JSON.parse(await readFile(join(path, 'keep-safe-owner.json'), 'utf8')) as { bridge?: unknown; chrome?: unknown; display?: unknown; bus?: unknown };
+        const owner = JSON.parse(await readFile(join(path, 'keep-safe-owner.json'), 'utf8')) as { bridge?: unknown; chrome?: unknown; display?: unknown; bus?: unknown; registry?: unknown };
         if (alive(owner.bridge)) continue;
-        // Chrome, then the private display it was shown on and its accessibility bus.
-        for (const pid of [owner.chrome, owner.display, owner.bus]) {
+        // Chrome, then the private display it was shown on, its accessibility bus and registry.
+        for (const pid of [owner.chrome, owner.display, owner.bus, owner.registry]) {
           if (!alive(pid)) continue;
-          // Only a process that is still that Chrome or display: a reused process number is left alone.
+          // Only a process that is still one of those: a reused process number is left alone.
+          // The registry's command line names no path, but its bus address, in its environment, does.
           const command = await readFile(`/proc/${pid as number}/cmdline`, 'utf8').catch(() => '');
-          if (command.includes(path)) { try { process.kill(pid as number, 'SIGKILL'); } catch { /* Already gone. */ } await new Promise<void>(resolve => { setTimeout(resolve, 300); }); }
+          const environment = pid === owner.registry ? await readFile(`/proc/${pid as number}/environ`, 'utf8').catch(() => '') : '';
+          if (command.includes(path) || environment.includes(`AT_SPI_BUS_ADDRESS=unix:path=${path}/`)) { try { process.kill(pid as number, 'SIGKILL'); } catch { /* Already gone. */ } await new Promise<void>(resolve => { setTimeout(resolve, 300); }); }
         }
         await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
       } catch { /* Not a profile this program wrote, or still starting. */ }
@@ -122,7 +124,7 @@ export async function removeProfile(profile: string): Promise<void> {
 
 /** Records which processes belong to a profile, so a later bridge can end
  * them if this one is killed. */
-export async function recordOwner(profile: string, processes: { chrome?: number; display?: number; bus?: number }): Promise<void> {
+export async function recordOwner(profile: string, processes: { chrome?: number; display?: number; bus?: number; registry?: number }): Promise<void> {
   const path = join(profile, 'keep-safe-owner.json');
   const previous = await readFile(path, 'utf8').then(text => JSON.parse(text) as Record<string, unknown>, () => ({}));
   await writeFile(path, JSON.stringify({ ...previous, bridge: process.pid, ...processes }), { mode: 0o600 });

@@ -1,5 +1,20 @@
 # Change history
 
+## 24 November 2026
+
+### Smoother live view and the keyboard on tap (0.8.1)
+
+The owner found the Google sign-in unresponsive and choppy on their phone, and the keyboard did not open on Google's email field.
+
+- The phone now acknowledges each frame it shows, and the bridge keeps at most two frames on their way. A Cloudflare tunnel accepts everything the bridge writes, so a slow phone link used to fill it with old frames and the view fell behind your finger. Frames are now paced by what the phone has shown, still at up to 30 a second. Phones and bridges from before this change keep the old pacing.
+- The phone decodes each frame before it replaces the one on screen, one at a time and never cancelled, with only the newest frame waiting. On a phone slower than the stream, the view used to freeze while each new frame cancelled the decode of the one before it.
+- The bridge sends one frame at a time, and a newer frame replaces one still waiting, so the phone always gets the latest picture. After a scroll or other motion, it sends one sharper image once the page stops moving, and no longer repeats identical frames.
+- Desktop sign-in capture runs at 30 frames a second instead of 20, and ffmpeg writes each image out as soon as it is encoded.
+- On Chrome for Android, a tap on the live picture focuses the phone's typing box during the tap itself, with the keyboard held down, and opens it with `navigator.virtualKeyboard.show()` when the bridge says the tap landed in a text field. A keyboard opened only after the bridge's answer could be refused by the phone. Phones without that API keep the **Tap to type** button.
+- A swipe in the Google sign-in starts scrolling after a quarter of a wheel step instead of half, and the total still matches the finger.
+- After a tap with no focus event, the bridge asks Chrome which field has focus, for at most 250 ms, instead of waiting 350 ms. Focus events are looked up one at a time, newest first, so a page cannot flood the bridge.
+- A killed bridge's accessibility registry is now ended by the next bridge, like the bus and Chrome.
+
 ## 23 November 2026
 
 ### Easier phone password manager access
