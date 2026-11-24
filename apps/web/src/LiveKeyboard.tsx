@@ -3,7 +3,24 @@ import { Keyboard } from "lucide-react";
 import type { EditableKind } from "../../../packages/shared/src/protocol";
 import type { Workspace } from "./workspace";
 
-export interface LiveKeyboardHandle { focus(): void; focused(): boolean }
+export interface LiveKeyboardHandle {
+  focus(): void;
+  focused(): boolean;
+  /** Call inside the tap itself. Where the browser lets a page open the
+   * keyboard on request, takes focus now without showing it, so a later
+   * `focus()` can open it even though the bridge answers after the tap. */
+  prime(): void;
+  /** The tap did not land in a text field: lets go of a primed focus. */
+  unprime(): void;
+}
+
+/** Chrome on Android: opens the keyboard on request while the page still has
+ * the tap's user activation. Missing on iOS and Firefox, which keep focus(). */
+type VirtualKeyboard = { show(): void; hide(): void };
+const virtualKeyboard = (): VirtualKeyboard | undefined => {
+  const candidate = (navigator as Navigator & { virtualKeyboard?: Partial<VirtualKeyboard> }).virtualKeyboard;
+  return typeof candidate?.show === "function" && typeof candidate.hide === "function" ? candidate as VirtualKeyboard : undefined;
+};
 interface Props {
   enabled: boolean;
   /** The remote page has a text field focused, so typing would land somewhere. */
@@ -26,6 +43,26 @@ export const LiveKeyboard = forwardRef<LiveKeyboardHandle, Props>(function LiveK
   const input = useRef<HTMLInputElement>(null);
   const [active, setActive] = useState(false);
   const composing = useRef(false);
+  /** Focused during a tap, keyboard not shown yet. Not "active" until shown. */
+  const primed = useRef(false);
+  const primeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const settle = () => { clearTimeout(primeTimer.current); primeTimer.current = undefined; };
+  /** Opens the keyboard for a primed focus. */
+  const reveal = () => {
+    const element = input.current;
+    settle();
+    if (!primed.current || !element || document.activeElement !== element) return false;
+    primed.current = false;
+    try { virtualKeyboard()?.show(); } catch { /* The button stays as a fallback. */ }
+    reset(); setActive(true); onActive(true);
+    return true;
+  };
+  const unprime = () => {
+    settle();
+    if (!primed.current) return;
+    primed.current = false;
+    input.current?.blur();
+  };
   const reset = () => {
     const element = input.current;
     if (!element) return;
@@ -33,10 +70,25 @@ export const LiveKeyboard = forwardRef<LiveKeyboardHandle, Props>(function LiveK
     try { element.setSelectionRange(1, 1); } catch { /* Not focused yet. */ }
   };
   useImperativeHandle(handle, () => ({
-    focus() { if (enabled) input.current?.focus({ preventScroll: true }); },
+    focus() { if (enabled && !reveal()) input.current?.focus({ preventScroll: true }); },
     focused: () => document.activeElement === input.current,
-  }), [enabled]);
+    prime() {
+      const element = input.current;
+      if (!enabled || !element || !virtualKeyboard() || document.activeElement === element) return;
+      // Manual: focus alone keeps the keyboard down until the bridge says the
+      // tap landed in a text field.
+      element.setAttribute("virtualkeyboardpolicy", "manual");
+      primed.current = true;
+      element.focus({ preventScroll: true });
+      if (document.activeElement !== element) { primed.current = false; element.removeAttribute("virtualkeyboardpolicy"); return; }
+      // An older bridge, or a browser that reports no focus, never answers.
+      settle();
+      primeTimer.current = setTimeout(unprime, 2000);
+    },
+    unprime,
+  }), [enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!enabled && document.activeElement === input.current) input.current?.blur(); }, [enabled]);
+  useEffect(() => settle, []);
   useEffect(() => {
     const clear = () => { if (document.visibilityState === "hidden") { reset(); input.current?.blur(); } };
     document.addEventListener("visibilitychange", clear);
@@ -64,7 +116,7 @@ export const LiveKeyboard = forwardRef<LiveKeyboardHandle, Props>(function LiveK
         aria-pressed={active} aria-label={active ? "Hide keyboard" : "Keyboard: type straight into the page"}
         // Keep focus where it is on press, then move it deliberately on click.
         onMouseDown={event => event.preventDefault()}
-        onClick={() => { if (active) input.current?.blur(); else input.current?.focus({ preventScroll: true }); }}>
+        onClick={() => { if (active) input.current?.blur(); else if (!reveal()) input.current?.focus({ preventScroll: true }); }}>
         <Keyboard size={16} aria-hidden="true" />
         {wanted && !active ? "Tap to type" : "Keyboard"}
       </button>
@@ -72,8 +124,14 @@ export const LiveKeyboard = forwardRef<LiveKeyboardHandle, Props>(function LiveK
         autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="go"
         inputMode={numeric ? "numeric" : kind === "email" ? "email" : kind === "url" ? "url" : "text"}
         disabled={!enabled} defaultValue={sentinel}
-        onFocus={() => { reset(); setActive(true); onActive(true); }}
-        onBlur={() => { reset(); setActive(false); onActive(false); }}
+        onFocus={() => { reset(); if (!primed.current) { setActive(true); onActive(true); } }}
+        onBlur={event => {
+          const wasPrimed = primed.current;
+          primed.current = false; settle();
+          event.currentTarget.removeAttribute("virtualkeyboardpolicy");
+          reset();
+          if (!wasPrimed) { setActive(false); onActive(false); }
+        }}
         onCompositionStart={() => { composing.current = true; }}
         onCompositionEnd={() => { composing.current = false; flush(); }}
         onInput={flush}

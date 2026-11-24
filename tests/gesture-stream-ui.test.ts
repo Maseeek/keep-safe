@@ -180,14 +180,28 @@ describe('touching the live page as the website itself', () => {
       await expect.poll(() => site.count('paste-arrived'), { timeout: 5000 }).toBe(1);
       await expect.poll(() => page.locator('.tool-notice').innerText(), { timeout: 10000 }).toBe('Pasted into the page.');
 
-      // Passwords: two boxes a password manager recognises. Filling them is what a manager does.
-      await page.getByRole('button', { name: 'Passwords', exact: true }).click();
+      // Passwords: visible in the toolbar without horizontal scrolling, suggested on an email/password field,
+      // and focuses the matching box straight away without LiveKeyboard stealing focus back.
+      const passwordsButton = page.getByRole('button', { name: 'Passwords', exact: true });
+      const passwordsBox = (await passwordsButton.boundingBox())!;
+      expect(passwordsBox.height).toBeGreaterThanOrEqual(44);
+      expect(passwordsBox.x).toBeGreaterThanOrEqual(0);
+      expect(passwordsBox.x + passwordsBox.width).toBeLessThanOrEqual(width + 1);
+      expect(await passwordsButton.evaluate(element => element.classList.contains('is-suggested'))).toBe(true);
+      await passwordsButton.click();
       const user = page.getByLabel('Username or email', { exact: true }); const secret = page.getByLabel('Password', { exact: true });
+      // Opening Passwords after tapping the email field focuses Username synchronously for the phone password manager.
+      expect(await user.evaluate(element => document.activeElement === element)).toBe(true);
       expect(await user.getAttribute('autocomplete')).toBe('username');
       expect(await secret.getAttribute('autocomplete')).toBe('current-password');
       expect(await secret.getAttribute('type')).toBe('password');
       expect(await user.evaluate(element => element.closest('form')?.getAttribute('autocomplete'))).toBe('on');
+      expect(await user.evaluate(element => element.closest('form')?.getAttribute('method'))).toBe('post');
+      expect(await page.getByRole('button', { name: 'Send password', exact: true }).getAttribute('type')).toBe('submit');
+      expect(await page.locator('.credential-site-hint').innerText()).toContain('127.0.0.1');
       await user.fill(gestureFixtureValues.user); await secret.fill(gestureFixtureValues.secret);
+      expect(await page.getByRole('button', { name: 'Send username', exact: true }).evaluate(element => element.classList.contains('button-accent'))).toBe(true);
+      expect(await page.getByRole('button', { name: 'Send password', exact: true }).evaluate(element => element.classList.contains('button-accent'))).toBe(true);
       // The username replaces the pasted text in the page field.
       await page.getByRole('button', { name: 'More keys', exact: true }).click();
       await page.getByRole('button', { name: 'Select all in browser', exact: true }).click();
@@ -195,13 +209,25 @@ describe('touching the live page as the website itself', () => {
       await page.getByRole('button', { name: 'Send username', exact: true }).click();
       await expect.poll(() => site.count('user-arrived'), { timeout: 5000 }).toBe(1);
       expect(await user.inputValue()).toBe('');
+      await expect.poll(() => page.locator('.tool-notice').innerText(), { timeout: 5000 }).toContain('Tap the password field');
+      // Tapping the remote password field while Passwords is open must not let LiveKeyboard steal focus or hide the form.
       await tapAt(100, 494);
-      await page.getByRole('button', { name: 'Passwords', exact: true }).waitFor();
-      if (!await secret.isVisible()) await page.getByRole('button', { name: 'Passwords', exact: true }).click();
-      if (await secret.inputValue() === '') await secret.fill(gestureFixtureValues.secret);
+      await expect.poll(() => page.locator('#credential-form p').innerText(), { timeout: 5000 }).toContain('Password field focused');
+      expect(await page.locator('.live-keyboard-input').evaluate(element => document.activeElement === element)).toBe(false);
+      expect(await secret.isVisible()).toBe(true);
+      expect(await secret.inputValue()).toBe(gestureFixtureValues.secret);
       await page.getByRole('button', { name: 'Send password', exact: true }).click();
       await expect.poll(() => site.count('secret-arrived'), { timeout: 5000 }).toBe(1);
       expect(await secret.inputValue()).toBe('');
+      // Closing and reopening Passwords while the password field is focused focuses the Password box straight away.
+      await user.fill(gestureFixtureValues.user);
+      const closePasswords = page.getByRole('button', { name: 'Close password manager boxes', exact: true });
+      expect((await closePasswords.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await closePasswords.click();
+      expect(await page.locator('#credential-form').count()).toBe(0);
+      await passwordsButton.click();
+      expect(await user.inputValue()).toBe('');
+      expect(await secret.evaluate(element => document.activeElement === element)).toBe(true);
       // Nothing filled or pasted is left in the phone app's own page.
       expect(await page.locator('body').innerText()).not.toContain(gestureFixtureValues.secret);
       expect(await page.locator('body').innerText()).not.toContain(gestureFixtureValues.user);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowDown,
   ArrowLeft,
@@ -116,11 +117,16 @@ export function BrowserPanel({
   const [fullScreen, setFullScreen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [showCredentials, setShowCredentials] = useState(false);
+  const [hasCredentialUser, setHasCredentialUser] = useState(false);
+  const [hasCredentialPassword, setHasCredentialPassword] = useState(false);
   const [toolNotice, setToolNotice] = useState("");
   const credentialUser = useRef<HTMLInputElement>(null);
   const credentialPassword = useRef<HTMLInputElement>(null);
+  const passwordsTrigger = useRef<HTMLButtonElement>(null);
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
   const [typing, setTyping] = useState(false);
+  const [toolTyping, setToolTyping] = useState(false);
+  const toolBlurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [taps, setTaps] = useState<{ id: number; x: number; y: number }[]>([]);
   const [lift, setLift] = useState(0);
   const [keyboardArea, setKeyboardArea] = useState<{ top: number; height: number } | null>(null);
@@ -206,14 +212,15 @@ export function BrowserPanel({
     if (next) void document.documentElement.requestFullscreen?.({ navigationUI: "hide" }).catch(() => {});
     else if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
   };
-  // While the phone keyboard is open, fit the whole live view into the space
-  // above it and slide the page so the tapped field stays in view.
+  // While the phone keyboard is open (either live typing or a tool form like
+  // Passwords), fit the live view into the space above it.
   useEffect(() => {
     const viewport = window.visualViewport;
-    if (!viewport || !typing) { setKeyboardArea(null); setLift(0); return; }
+    if (!viewport || (!typing && !toolTyping)) { setKeyboardArea(null); setLift(0); return; }
     const update = () => {
       const open = viewport.height < window.innerHeight - 120;
       setKeyboardArea(open ? { top: Math.round(viewport.offsetTop), height: Math.round(viewport.height) } : null);
+      if (!typing) { setLift(0); return; }
       const image = stage.current?.querySelector("img");
       const room = stage.current?.clientHeight ?? 0;
       if (!open || !image || lastTapY.current === null || !room) { setLift(0); return; }
@@ -224,7 +231,7 @@ export function BrowserPanel({
     viewport.addEventListener("resize", update);
     viewport.addEventListener("scroll", update);
     return () => { clearTimeout(settle); viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); };
-  }, [typing, taps.length]);
+  }, [typing, toolTyping, taps.length]);
   useEffect(() => {
     setText("");
     setDemoStep(0);
@@ -235,11 +242,20 @@ export function BrowserPanel({
     setShowText(false);
     setShowDetails(false);
     setShowCredentials(false);
+    setToolTyping(false);
+    clearTimeout(toolBlurTimer.current);
     setSelecting(false);
     setToolNotice("");
     setTaps([]);
     lastTapY.current = null;
   }, [request.id]);
+  useEffect(() => () => clearTimeout(toolBlurTimer.current), []);
+  useEffect(() => {
+    if (!showCredentials && !showKeyboard) {
+      clearTimeout(toolBlurTimer.current);
+      setToolTyping(false);
+    }
+  }, [showCredentials, showKeyboard]);
   const clearLocalInput = useCallback(() => {
     if (draftInput.current) {
       draftInput.current.value = "";
@@ -248,6 +264,8 @@ export function BrowserPanel({
     // What a password manager filled is held only in these two boxes.
     if (credentialUser.current) credentialUser.current.value = "";
     if (credentialPassword.current) credentialPassword.current.value = "";
+    setHasCredentialUser(false);
+    setHasCredentialPassword(false);
     setText("");
     setShowText(false);
   }, []);
@@ -255,6 +273,8 @@ export function BrowserPanel({
   useEffect(() => {
     const clearDraft = () => {
       clearLocalInput();
+      clearTimeout(toolBlurTimer.current);
+      setToolTyping(false);
       setShowKeyboard(false);
       setShowMoreKeys(false);
       setShowCredentials(false);
@@ -299,15 +319,37 @@ export function BrowserPanel({
     const id = performance.now();
     setTaps(previous => [...previous.slice(-3), { id, x: point.clientX - bounds.left, y: point.clientY - bounds.top }]);
     setTimeout(() => setTaps(previous => previous.filter(tap => tap.id !== id)), 450);
-  }, [typing]);
+    // Still inside the tap: phones open the keyboard only for a page the owner
+    // is touching, and the bridge says whether this was a text field later.
+    if (!showCredentials && !showKeyboard) keyboard.current?.prime();
+  }, [typing, showCredentials, showKeyboard]);
   const target = workspace.typingTarget?.requestId === request.id ? workspace.typingTarget : null;
-  // A tap landed in a text field: bring up the keyboard. Phones that insist on
-  // a direct touch show the highlighted Keyboard button instead.
+  const credentialSuggested = !!(target?.editable && (target.kind === "email" || target.kind === "password"));
+  const siteHost = domain(addressInView ? request.url : liveFrame?.url ?? request.url);
+  // A tap landed in a text field: bring up the keyboard. While Passwords is
+  // open, stay there instead of pulling focus away from the password manager.
   useEffect(() => {
-    if (target?.editable && canInput && !showKeyboard) keyboard.current?.focus();
+    if (target && !target.editable) keyboard.current?.unprime();
+    if (!target?.editable || !canInput || showKeyboard) return;
+    if (credentialSuggested && !showCredentials) {
+      const button = passwordsTrigger.current;
+      const toolbar = button?.closest<HTMLElement>(".remote-toolbar");
+      if (button && toolbar) {
+        const buttonBox = button.getBoundingClientRect();
+        const barBox = toolbar.getBoundingClientRect();
+        if (buttonBox.left < barBox.left + 8) toolbar.scrollLeft -= barBox.left + 8 - buttonBox.left;
+        else if (buttonBox.right > barBox.right - 8) toolbar.scrollLeft += buttonBox.right - (barBox.right - 8);
+      }
+    }
+    if (showCredentials) {
+      const box = target.kind === "password" ? credentialPassword.current : target.kind === "email" ? credentialUser.current : null;
+      if (box && !box.value) box.focus({ preventScroll: true });
+      return;
+    }
+    keyboard.current?.focus();
   }, [target?.at]); // eslint-disable-line react-hooks/exhaustive-deps
-  // With the phone keyboard open the page keeps its size and slides instead.
-  const fitTo = keyboardArea ? stageSize : stageBox ?? stageSize;
+  // With the live keyboard open the page keeps its size and slides instead.
+  const fitTo = keyboardArea && typing ? stageSize : stageBox ?? stageSize;
   const displaySize = liveFrame && fitTo ? (() => {
     const scale = Math.min(fitTo.width / liveFrame.width, fitTo.height / liveFrame.height);
     return { width: Math.round(liveFrame.width * scale), height: Math.round(liveFrame.height * scale) };
@@ -359,7 +401,38 @@ export function BrowserPanel({
     if (!element || !element.value || keyInputBlocked) return;
     const value = element.value;
     element.value = "";
-    if (workspace.send({ type: "text", text: value.slice(0, 4096) })) setToolNotice(`${name} sent to the page.`);
+    if (field === credentialUser) setHasCredentialUser(false);
+    if (field === credentialPassword) setHasCredentialPassword(false);
+    if (workspace.send({ type: "text", text: value.slice(0, 4096) })) {
+      const waitingPassword = field === credentialUser && Boolean(credentialPassword.current?.value);
+      setToolNotice(waitingPassword ? "Username sent. Tap the password field on the page, then send Password." : `${name} sent to the page.`);
+    }
+  };
+  const toggleCredentials = () => {
+    if (showCredentials) {
+      clearLocalInput();
+      clearTimeout(toolBlurTimer.current);
+      setToolTyping(false);
+      setShowCredentials(false);
+      return;
+    }
+    // Mount synchronously inside the tap gesture so mobile browsers open the
+    // keyboard and surface the phone's password manager immediately.
+    flushSync(() => {
+      setShowKeyboard(false);
+      setShowCredentials(true);
+    });
+    if (!canInput) return;
+    const box = target?.kind === "password" ? credentialPassword.current : credentialUser.current;
+    box?.focus({ preventScroll: true });
+  };
+  const onToolFocus = () => {
+    clearTimeout(toolBlurTimer.current);
+    setToolTyping(true);
+  };
+  const onToolBlur = (event: React.FocusEvent<HTMLFormElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    toolBlurTimer.current = setTimeout(() => setToolTyping(false), 150);
   };
   useEffect(() => {
     if (!toolNotice) return;
@@ -373,7 +446,7 @@ export function BrowserPanel({
   };
 
   const liveNow = live && !finished && !expired;
-  const toolsOpen = showKeyboard || showMoreKeys;
+  const toolsOpen = showKeyboard || showMoreKeys || showCredentials;
   const addressButton = (
           <button
       className={`address${active && liveFrame && !isDemo && moved ? " is-moved" : ""}`}
@@ -397,7 +470,7 @@ export function BrowserPanel({
     <section
       ref={panel}
       style={keyboardArea ? { position: "fixed", left: 0, right: 0, top: keyboardArea.top, height: keyboardArea.height } : undefined}
-      className={`browser-panel${keyboardArea ? " is-typing" : ""}${toolsOpen ? " has-tools" : ""}${live && !finished && !expired ? " is-live" : ""}${fullScreen ? " is-full-screen" : ""}${showDetails ? " shows-details" : ""}`}
+      className={`browser-panel${keyboardArea && typing ? " is-typing" : ""}${keyboardArea && !typing && toolTyping ? " is-tool-typing" : ""}${toolsOpen ? " has-tools" : ""}${live && !finished && !expired ? " is-live" : ""}${fullScreen ? " is-full-screen" : ""}${showDetails ? " shows-details" : ""}`}
       aria-label={`Request from ${request.agent}`}
     >
       <div className="panel-topline">
@@ -647,23 +720,102 @@ export function BrowserPanel({
               </div>
             ) : null}
             {showCredentials ? (
-              <form className="credential-form" id="credential-form" onSubmit={event => event.preventDefault()} autoComplete="on">
-                <p>Fill these with your password manager. Tap a field on the page, then send the matching one.</p>
+              <form
+                className="credential-form"
+                id="credential-form"
+                method="post"
+                autoComplete="on"
+                onFocus={onToolFocus}
+                onBlur={onToolBlur}
+                onSubmit={event => { event.preventDefault(); sendCredential(credentialPassword, "Password"); }}
+              >
+                <div className="credential-form-head">
+                  <p>
+                    {target?.editable && target.kind === "password"
+                      ? "Password field focused. Fill with your password manager, then send Password."
+                      : target?.editable && target.kind === "email"
+                        ? "Email field focused. Fill with your password manager, then send Username."
+                        : "Fill these with your password manager. Tap a field on the page, then send the matching one."}
+                  </p>
+                  <button
+                    type="button"
+                    className="icon-button credential-close"
+                    aria-label="Close password manager boxes"
+                    onClick={toggleCredentials}
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </div>
+                <small className="credential-site-hint">
+                  Search <strong>{siteHost}</strong> in your password manager if it isn’t suggested automatically.
+                </small>
                 <label htmlFor="credential-username">Username or email</label>
                 <div className="input-with-button">
-                  <input ref={credentialUser} id="credential-username" name="username" type="text" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
-                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} aria-label="Send username" onClick={() => sendCredential(credentialUser, "Username")}>Send <ArrowUp size={14} aria-hidden="true" /></button>
+                  <input
+                    ref={credentialUser}
+                    id="credential-username"
+                    name="username"
+                    type="text"
+                    inputMode={target?.kind === "email" ? "email" : "text"}
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    enterKeyHint="send"
+                    placeholder="Username or email"
+                    disabled={!canInput}
+                    onInput={() => setHasCredentialUser(Boolean(credentialUser.current?.value))}
+                    onChange={() => setHasCredentialUser(Boolean(credentialUser.current?.value))}
+                    onKeyDown={event => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        sendCredential(credentialUser, "Username");
+                      }
+                    }}
+                  />
+                  <button
+                    className={`button button-small ${hasCredentialUser ? "button-accent" : "button-dark"}`}
+                    type="button"
+                    disabled={keyInputBlocked}
+                    aria-label="Send username"
+                    onMouseDown={event => event.preventDefault()}
+                    onClick={() => sendCredential(credentialUser, "Username")}
+                  >
+                    Send <ArrowUp size={14} aria-hidden="true" />
+                  </button>
                 </div>
                 <label htmlFor="credential-password">Password</label>
                 <div className="input-with-button">
-                  <input ref={credentialPassword} id="credential-password" name="password" type="password" autoComplete="current-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={keyInputBlocked} />
-                  <button className="button button-dark button-small" type="button" disabled={keyInputBlocked} aria-label="Send password" onClick={() => sendCredential(credentialPassword, "Password")}>Send <ArrowUp size={14} aria-hidden="true" /></button>
+                  <input
+                    ref={credentialPassword}
+                    id="credential-password"
+                    name="password"
+                    type="password"
+                    autoComplete="current-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    enterKeyHint="send"
+                    placeholder="Password"
+                    disabled={!canInput}
+                    onInput={() => setHasCredentialPassword(Boolean(credentialPassword.current?.value))}
+                    onChange={() => setHasCredentialPassword(Boolean(credentialPassword.current?.value))}
+                  />
+                  <button
+                    className={`button button-small ${hasCredentialPassword ? "button-accent" : "button-dark"}`}
+                    type="submit"
+                    disabled={keyInputBlocked}
+                    aria-label="Send password"
+                    onMouseDown={event => event.preventDefault()}
+                  >
+                    Send <ArrowUp size={14} aria-hidden="true" />
+                  </button>
                 </div>
                 <small>Each one goes straight to the page and is cleared here. Never saved or shown by Keep Safe.</small>
               </form>
             ) : null}
             {showKeyboard ? (
-              <form className="remote-text-form" id="remote-text-form" onSubmit={sendText}>
+              <form className="remote-text-form" id="remote-text-form" onFocus={onToolFocus} onBlur={onToolBlur} onSubmit={sendText}>
                 <label htmlFor="remote-input">
                   Tap a field in the browser, then send text
                 </label>
@@ -705,25 +857,27 @@ export function BrowserPanel({
           </div>
           <div className="remote-toolbar">
             <div className="remote-toolbar-actions">
-              <LiveKeyboard ref={keyboard} enabled={canInput && !workspace.focusBlocked} wanted={!!target?.editable} kind={target?.kind}
+              <LiveKeyboard ref={keyboard} enabled={canInput && !workspace.focusBlocked} wanted={!!target?.editable && !showCredentials} kind={target?.kind}
                 send={workspace.send} onActive={setTyping} />
-              <button
-                className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
-                onClick={() => setShowKeyboard(!showKeyboard)}
-                aria-expanded={showKeyboard}
-                aria-controls={showKeyboard ? "remote-text-form" : undefined}
-              >
-                <Keyboard size={16} />
-                Type text
+              <button ref={passwordsTrigger} className={`button button-light button-small ${showCredentials ? "selected" : credentialSuggested ? "is-suggested" : ""}`} aria-expanded={showCredentials}
+                aria-controls={showCredentials ? "credential-form" : undefined}
+                // Keep focus steady on press so switching from LiveKeyboard does not drop the keyboard before click.
+                onMouseDown={event => event.preventDefault()}
+                onClick={toggleCredentials}>
+                <KeyRound size={16} aria-hidden="true" /> Passwords
               </button>
               <button className="button button-light button-small" disabled={keyInputBlocked} onClick={() => { void paste(); }}
                 aria-label="Paste this device's clipboard into the page">
                 <ClipboardPaste size={16} aria-hidden="true" /> Paste
               </button>
-              <button className={`button button-light button-small ${showCredentials ? "selected" : ""}`} aria-expanded={showCredentials}
-                aria-controls={showCredentials ? "credential-form" : undefined}
-                onClick={() => { if (showCredentials) clearLocalInput(); setShowCredentials(!showCredentials); }}>
-                <KeyRound size={16} aria-hidden="true" /> Passwords
+              <button
+                className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
+                onClick={() => { if (!showKeyboard && showCredentials) { clearLocalInput(); setShowCredentials(false); } setShowKeyboard(!showKeyboard); }}
+                aria-expanded={showKeyboard}
+                aria-controls={showKeyboard ? "remote-text-form" : undefined}
+              >
+                <Keyboard size={16} />
+                Type text
               </button>
               {canCopy ? <>
                 <button className={`button button-light button-small ${selecting ? "selected" : ""}`} aria-pressed={selecting} disabled={!canInput}

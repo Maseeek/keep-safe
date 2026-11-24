@@ -625,3 +625,50 @@ Not verified: the owner's phone (does the keyboard rise on Google's email field;
 
 - The GitHub check for the merged pull request 10 failed in `tests/notifications-ui.test.ts`: a phone remembered with the owner key saved its pairing without the bridge's notification key, and the app added it on the first socket `ready`, after the test had read the stored pairing. `POST /api/devices` now returns `info` like the pairing-code route, the app stores the key with the pairing, and the test checks it is there at once.
 - The scroll remainder had no bound: a batch over 40 notches kept the rest and sent it with later batches, so a fling kept scrolling after the finger stopped. The remainder is now capped at one notch.
+
+## Phone password manager flow on 23 November 2026
+
+The owner asked about scanning passkey QR codes (`FIDO:/…`) and making the phone's password manager available when logging in. After reviewing the platform limits (mobile browsers block web navigation to `fido:/…` since CVE-2024-9956, and FIDO2 hybrid transport enforces Bluetooth proximity to the computer), the owner chose to skip passkey QR codes and improve the phone password manager flow instead.
+
+- Moved **Passwords** right next to **Keyboard** so it stays visible on 320 px and 390 px screens without swiping. Tapping an email or password field on the remote page highlights **Passwords** and scrolls it into view in the tool row if the row was scrolled away.
+- Opening **Passwords** mounts the form synchronously inside the tap gesture (`flushSync`) and focuses the matching box (`#credential-password` for a password field, `#credential-username` otherwise) so mobile browsers open the keyboard and password-manager bar immediately without `LiveKeyboard` dropping focus between press and click.
+- Stopped `LiveKeyboard` from stealing focus when tapping fields on the remote page while **Passwords** is open, so a two-step login (username, then password) keeps the filled password ready to send in one tap.
+- Upgraded the **Passwords** form to `method="post"` with a `type="submit"` button, Enter/Go support on both inputs, a ready-to-send accent state (boolean-only React state; values stay strictly in uncontrolled DOM inputs and are still cleared on send, close, navigation, URL change, `pagehide`, and `visibilitychange`), a close button, and a hostname search hint explaining that the phone is on Keep Safe's URL rather than the target website's origin.
+- Extended `visualViewport` keyboard fitting to keep `.tool-tray` above the phone's soft keyboard while typing in **Passwords** or **Type text**.
+- Updated built-app Playwright coverage at 320 px and 390 px in `tests/gesture-stream-ui.test.ts` to verify toolbar visibility, suggestion highlighting, synchronous focus for email and password fields, no focus stealing by `LiveKeyboard`, form semantics, and clearing on close and `pagehide`. Physical-phone password-manager prompts remain unverified.
+
+## Notification tap opens its request, 23 November 2026
+
+The owner asked that tapping a notification take them to that request.
+
+- Reproduced in real Chromium through the registered service worker: on a 390 px phone with the app open and an older request in the queue, a notification for a new request opened nothing and showed no notice. The routing compared the target with the queue's first request, which a phone does not show until one is chosen. It now counts only the request actually on screen. At 1440 px it already worked.
+- A cold start where the stored address was dead and the notification had left the new one showed "could not be checked": the check ran at the old address first. Verification now waits for the bridge to connect, and a move of the same paired device (same key, device and notification key) keeps the pending notification.
+- New `tests/notification-open-window.test.ts` covers both; both fail without the change. Typecheck and the full suite pass: 443 passed, 6 skipped. No bridge change, so no version bump.
+
+Not verified: a tap on a real notification on a physical phone.
+
+## Smoother live view (0.8.0), 23 November 2026
+
+The owner asked to make the phone's live view stream as smoothly as possible.
+
+- Found that over the default route the bridge could not see backpressure: `cloudflared` reads everything from the loopback socket, so `bufferedAmount` stayed near zero and frames queued in the tunnel behind a slow phone link. Added phone acknowledgements (`frameAcks`, `watch.acks`, `seq`, `frame-ack`): at most two frames are unacknowledged, and acknowledgements skip the browser input queue. Older phones and bridges keep the previous pacing.
+- On the phone, frames are decoded off the page before they replace the visible image, one decode at a time and never cancelled, with only the newest frame waiting. Before, each frame set `img.src` directly, so on a phone that decoded slower than the stream each new frame cancelled the one decoding and the view could freeze.
+- The bridge sends one frame at a time, with a newer frame replacing one still waiting. After motion it sends one sharper image once the page settles, and it does not resend identical frames. The first version also sharpened after single frames, and `Page.captureScreenshot` repainted the page, which the screencast sent again: a frame every ~300 ms on a still page. The existing "nothing while still" test caught it; the fix is the identical-frame check plus burst-only sharpening.
+- Desktop sign-in capture: 30 frames a second (was 20), `-flush_packets 1` and `-fflags nobuffer`; the MJPEG splitter no longer rescans each image from the start.
+- New tests: ack pacing, malformed acks and quiet-after-settle in `packages/bridge/test/gestures.test.ts`; `packages/bridge/test/jpeg-frames.test.ts`; `tests/screen.test.ts`.
+
+Not verified: smoothness on a physical phone over a real tunnel, and the desktop capture changes under Xvfb (desktop tests skip without it).
+
+## Keyboard and scrolling, second pass, 24 November 2026
+
+The owner tested 0.7.1 on their phone: the keyboard did not open on Google's email field, and scrolling felt unresponsive and choppy. Work split across five subagents, then merged and checked together.
+
+- Ruled out the bridge for the keyboard: on the real Google sign-in page in a private session, a tap on the autofocused email box reported a text field each time. Chrome's focus events also arrive within about 20 ms on the owner's live session. The weak link is the phone opening its keyboard from an asynchronous `focus()`. The app now focuses the typing box during the tap with `virtualkeyboardpolicy="manual"` and calls `navigator.virtualKeyboard.show()` when the answer is a text field (`tests/keyboard-raise-ui.test.ts`, with the API stubbed). `tests/pairing-ui.test.ts` now waits for the keyboard to open, not just for focus.
+- Typing: a new real-Chrome test types symbols, digits, non-ASCII and more than eight characters missing from the keymap, in 1–3 character pieces, into a text and a password box; every character arrived, three runs in a row. No defect found in `x11.ts`.
+- Scrolling: the first step of a swipe now goes at 30 px instead of 60. Chrome already animates each 120 px step over about 140 ms, so the remaining choppiness is the step size itself.
+- Stream: frames at 1000 px wide, quality 5, are 85–155 KB; with the 30 fps capture that is about 3.5 MB/s, against about 1.5–2 MB/s measured through a quick tunnel. Recommended next: moving frames at 750 px and quality 7–8 (40–65 KB), with a sharp still after motion. Not changed yet.
+- Review fixes: the focus question to Chrome is skipped when an event already answered, shared between taps and capped at 250 ms (on a 20,000-row page it took over 3 s); focus events are looked up newest first, one at a time; the registry process is recorded and swept, matched by the bus address in its environment (`chrome.test.ts` fails without it).
+- Checks: typecheck passes. Real-Chrome desktop, typing, sign-in UI and Chrome tests: 15 passed. Full suite: 452 passed, 7 skipped, and one different load-sensitive test failing per run (`page-controls` frame-inspection deadline, `gestures` momentum, `login-handoff`); each passes alone, three runs in a row.
+
+Not verified: any of this on the owner's phone.
+

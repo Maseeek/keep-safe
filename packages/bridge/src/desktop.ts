@@ -80,18 +80,33 @@ async function startDisplay(tools: DesktopTools, profile: string, width: number,
   } catch (error) { await stop(); throw error; }
 }
 
-/** Splits ffmpeg's MJPEG output into whole JPEG images. */
-function jpegFrames(stream: Readable, onFrame: (image: Buffer) => void) {
+/** Splits ffmpeg's MJPEG output into whole JPEG images. Each search for the
+ * end of an image resumes where the last one stopped, instead of rescanning
+ * the whole image every time another chunk arrives. */
+export function jpegFrames(stream: Readable, onFrame: (image: Buffer) => void) {
+  const start = Buffer.from([0xff, 0xd8]); const end = Buffer.from([0xff, 0xd9]);
   let buffer: Buffer = Buffer.alloc(0);
+  /** Where the current image starts in `buffer`, once found. */
+  let begin = -1;
+  /** Bytes already searched for the end marker. */
+  let searched = 0;
   stream.on('data', (chunk: Buffer) => {
     buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
     for (;;) {
-      const start = buffer.indexOf(Buffer.from([0xff, 0xd8]));
-      if (start < 0) { buffer = Buffer.alloc(0); return; }
-      const end = buffer.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
-      if (end < 0) { if (start > 0) buffer = buffer.subarray(start); return; }
-      onFrame(Buffer.from(buffer.subarray(start, end + 2)));
-      buffer = buffer.subarray(end + 2);
+      if (begin < 0) {
+        begin = buffer.indexOf(start);
+        if (begin < 0) { buffer = buffer.subarray(Math.max(0, buffer.length - 1)); searched = 0; return; }
+        searched = begin + 2;
+      }
+      // Back up one byte: a marker can straddle two chunks.
+      const stop = buffer.indexOf(end, Math.max(begin + 2, searched - 1));
+      if (stop < 0) {
+        if (begin > 0) { buffer = buffer.subarray(begin); searched -= begin; begin = 0; }
+        searched = buffer.length;
+        return;
+      }
+      onFrame(Buffer.from(buffer.subarray(begin, stop + 2)));
+      buffer = buffer.subarray(stop + 2); begin = -1; searched = 0;
     }
   });
 }
@@ -154,8 +169,10 @@ export async function openDesktopSession(input: {
     chrome = await launchSignInChrome({ executable: input.executable, proxyUrl: input.proxyUrl, scale, width, height, profile, env: screen.env, url: input.url, restore, accessibilityBus: focus?.address });
     x11 = await connectX11(screen.number, screen.cookie);
     capture = spawn(input.tools.ffmpeg, [
-      '-loglevel', 'error', '-nostdin', '-f', 'x11grab', '-draw_mouse', '0', '-framerate', '20', '-video_size', `${pixels.width}x${pixels.height}`, '-i', screen.env.DISPLAY!,
-      '-f', 'image2pipe', '-c:v', 'mjpeg', '-pix_fmt', 'yuvj420p', '-q:v', '5', '-',
+      // Thirty images a second, each written out the moment it is encoded
+      // rather than held in ffmpeg's output buffer until the next one.
+      '-loglevel', 'error', '-nostdin', '-fflags', 'nobuffer', '-f', 'x11grab', '-draw_mouse', '0', '-framerate', '30', '-video_size', `${pixels.width}x${pixels.height}`, '-i', screen.env.DISPLAY!,
+      '-f', 'image2pipe', '-flush_packets', '1', '-c:v', 'mjpeg', '-pix_fmt', 'yuvj420p', '-q:v', '5', '-',
     ], { stdio: ['ignore', 'pipe', 'ignore'], env: screen.env });
     jpegFrames(capture.stdout!, image => {
       // The screen did not change: nothing new to send.
@@ -169,7 +186,7 @@ export async function openDesktopSession(input: {
     // Without it the sign-in still works; the phone shows its Keyboard button instead.
     if (input.tools.accessibility) {
       focus = await startFocusWatch(input.tools.accessibility, join(profile, 'keep-safe-a11y'), display.env);
-      if (focus) await recordOwner(profile, { bus: focus.pid });
+      if (focus) await recordOwner(profile, { bus: focus.pid, registry: focus.registryPid });
     }
     await startSignIn(false);
   } catch (error) { await close(); throw error; }
@@ -189,7 +206,8 @@ export async function openDesktopSession(input: {
   /** Scrolling the phone asked for that has not yet made a whole wheel step.
    * Kept between messages, so a slow swipe scrolls as far as the finger
    * moved instead of a full step for every few pixels. */
-  const carry = { x: 0, y: 0, at: 0, direction: { x: 0, y: 0 } };
+  const carry = { x: 0, y: 0, at: 0, direction: { x: 0, y: 0 }, moved: { x: false, y: false } };
+  const restart = () => { carry.x = carry.y = 0; carry.moved.x = carry.moved.y = false; };
   /** Clicks and keys that can move focus report it, so the phone raises its keyboard for a text field. */
   const focusAfter = async (action: () => Promise<void>): Promise<FocusState | undefined> => {
     if (!focus) { await action(); return undefined; }
@@ -206,6 +224,7 @@ export async function openDesktopSession(input: {
       const image = latest && Date.now() - latestAt < 5000 ? latest : await nextImage(5000);
       return frameOf(image);
     },
+    async still() { return managed?.still ? managed.still() : undefined; },
     async stream(listener) {
       if (managed?.stream) return managed.stream(listener);
       signIn();
@@ -228,7 +247,7 @@ export async function openDesktopSession(input: {
       const display = signIn();
       const point = () => [Math.max(0, Math.min(pixels.width - 1, (message.x as number) * scale)), Math.max(0, Math.min(pixels.height - 1, (message.y as number) * scale))] as const;
       if (message.type === 'click') {
-        carry.x = carry.y = 0;
+        restart();
         return focusAfter(async () => {
           await release();
           await display.move(...point());
@@ -239,15 +258,19 @@ export async function openDesktopSession(input: {
         if (typeof message.x === 'number' && typeof message.y === 'number') await display.move(...point());
         // A pause between swipes, or a change of direction, starts afresh.
         const now = Date.now();
-        if (now - carry.at > 400) carry.x = carry.y = 0;
+        if (now - carry.at > 400) restart();
         carry.at = now;
-        // Wheel buttons: 4 up, 5 down, 6 left, 7 right. Half a step or more
-        // rounds to a whole one, so a short swipe still moves the page.
+        // Wheel buttons: 4 up, 5 down, 6 left, 7 right. The first step of a
+        // swipe goes once the finger has moved a quarter of a step, so the
+        // page answers at once; after that, half a step or more rounds to a
+        // whole one. The carry keeps the total as far as the finger moved.
         const steps = (axis: 'x' | 'y', delta: number, less: number, more: number) => {
           const direction = Math.sign(delta);
-          if (direction && direction !== carry.direction[axis]) { carry[axis] = 0; carry.direction[axis] = direction; }
+          if (direction && direction !== carry.direction[axis]) { carry[axis] = 0; carry.moved[axis] = false; carry.direction[axis] = direction; }
           carry[axis] += delta;
-          const count = Math.min(40, Math.round(Math.abs(carry[axis]) / wheelStep));
+          const lead = carry.moved[axis] ? wheelStep / 2 : wheelStep / 4;
+          const count = Math.min(40, Math.floor((Math.abs(carry[axis]) + wheelStep - lead) / wheelStep));
+          if (count) carry.moved[axis] = true;
           const button = carry[axis] < 0 ? less : more;
           carry[axis] -= Math.sign(carry[axis]) * count * wheelStep;
           // Past the cap, the rest is dropped: a fling never keeps scrolling after the finger stops.

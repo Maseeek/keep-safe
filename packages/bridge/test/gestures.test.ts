@@ -14,7 +14,7 @@ type Header = { type: string; requestId: string; width: number; height: number; 
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 /** A phone speaking the socket protocol directly, against a real managed Chromium. */
-async function phone(options: { stream?: boolean; attach?: boolean } = {}) {
+async function phone(options: { stream?: boolean; attach?: boolean; acks?: boolean } = {}) {
   const site = await startGestureFixture(); cleanup.push(site.close);
   let cdpUrl: string | undefined;
   if (options.attach) {
@@ -44,7 +44,7 @@ async function phone(options: { stream?: boolean; attach?: boolean } = {}) {
     throw new Error(`Expected WebSocket message ${type}`);
   };
   send({ type: 'auth', token: ownerToken }); const ready = await next('ready');
-  send({ type: 'watch', requestId: request.id, viewport: { width: 390, height: 720, scale: 2, touch: true }, ...(options.stream === false ? {} : { stream: true }) });
+  send({ type: 'watch', requestId: request.id, viewport: { width: 390, height: 720, scale: 2, touch: true }, ...(options.stream === false ? {} : { stream: true }), ...(options.acks ? { acks: true } : {}) });
   await expect.poll(() => binary.length + json.length, { timeout: 15000 }).toBeGreaterThan(0);
   await expect.poll(() => site.count('ready')).toBe(1);
   const touch = (phase: string, x: number, y: number, tap?: boolean, t?: number) => send({ type: 'touch', phase, x, y, ...(tap ? { tap } : {}), ...(t !== undefined ? { t } : {}) });
@@ -81,6 +81,50 @@ describe('raw gestures and the live stream', () => {
     await expect.poll(() => test.binary.length, { timeout: 5000 }).toBeGreaterThan(still + 5);
     const page = await test.complete();
     expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(400); // 360 from the finger, the rest from momentum
+  }, 40000);
+
+  it('paces a phone that acknowledges frames, and goes quiet once the page settles', async () => {
+    const test = await phone({ acks: true });
+    expect((test.ready.info as { frameAcks?: boolean }).frameAcks).toBe(true);
+    const ack = (seq: unknown) => test.send({ type: 'frame-ack', seq });
+    await expect.poll(() => test.binary.at(-1)?.header.seq).toBeTypeOf('number');
+    // Acknowledge whatever has arrived until the page stops sending.
+    let settled = -1;
+    for (let quiet = 0; quiet < 6; await pause(150)) {
+      const latest = test.binary.at(-1)!;
+      ack(latest.header.seq);
+      if (test.binary.length === settled) quiet++; else { settled = test.binary.length; quiet = 0; }
+    }
+    const before = test.binary.length;
+    await pause(1000);
+    expect(test.binary.length).toBe(before);
+    // Sequence numbers count up without gaps.
+    const numbers = test.binary.map(frame => frame.header.seq as number);
+    expect(numbers).toEqual(numbers.map((_, index) => numbers[0] + index));
+    // An unacknowledged phone holds at most two frames while the page moves.
+    test.touch('start', 200, 600, false, 1000);
+    for (let step = 1; step <= 12; step++) { test.touch('move', 200, 600 - step * 30, false, 1000 + step * 16); await pause(16); }
+    test.touch('end', 200, 240, false, 1000 + 13 * 16);
+    await expect.poll(() => test.binary.length).toBeGreaterThan(before);
+    await pause(500);
+    expect(test.binary.length - before).toBeLessThanOrEqual(2);
+    // Acknowledging releases the rest, and malformed or future numbers change nothing.
+    ack('7'); ack(-1); ack(1e12);
+    await pause(300);
+    expect(test.binary.length - before).toBeLessThanOrEqual(2);
+    let last = 0;
+    for (let quiet = 0; quiet < 6; await pause(150)) {
+      ack(test.binary.at(-1)!.header.seq);
+      if (test.binary.length === last) quiet++; else { last = test.binary.length; quiet = 0; }
+    }
+    expect(test.binary.length - before).toBeGreaterThan(2);
+    // The sharp still after the swipe repaints the page without starting the stream again.
+    const settledCount = test.binary.length;
+    await pause(1000);
+    expect(test.binary.length).toBe(settledCount);
+    // The socket still takes input after all of that. The page is scrolled, so the tap finds no field.
+    test.touch('start', 100, 48); test.touch('end', 100, 48, true);
+    expect(await test.next('editable')).toMatchObject({ type: 'editable', requestId: test.request.id });
   }, 40000);
 
   it('drags a puzzle to the end, wherever the moves were dropped in between', async () => {

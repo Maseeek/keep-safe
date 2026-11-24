@@ -1,5 +1,38 @@
 # Change history
 
+## 23 November 2026
+
+### Smoother live view (0.8.0)
+
+- The phone now acknowledges each frame it shows, and the bridge keeps at most two frames on their way. A Cloudflare tunnel accepts everything the bridge writes, so a slow phone link used to fill it with old frames and the view fell behind your finger. Frames are now paced by what the phone has shown, still at up to 30 a second. Phones and bridges from before this change keep the old pacing.
+- The phone decodes each frame before it replaces the one on screen, one at a time and never cancelled, with only the newest frame waiting. On a phone slower than the stream, the view used to freeze while each new frame cancelled the decode of the one before it.
+- The bridge sends one frame at a time, and a newer frame replaces one still waiting, so the phone always gets the latest picture.
+- After a scroll or other motion, the bridge sends one sharper image of the page once it stops moving. An identical repeated frame is no longer sent.
+- Desktop sign-in capture runs at 30 frames a second instead of 20, and ffmpeg writes each image out as soon as it is encoded.
+
+### Keyboard and scrolling in the Google sign-in, second pass
+
+The owner found the keyboard still did not open, and scrolling unresponsive and choppy.
+
+- On Chrome for Android, a tap on the live picture now focuses the phone's typing box during the tap itself, with the keyboard held down, and opens it with `navigator.virtualKeyboard.show()` when the bridge says the tap landed in a text field. A keyboard opened only after the bridge's answer could be refused by the phone. Phones without that API keep the **Tap to type** button.
+- A swipe in the Google sign-in starts scrolling after a quarter of a wheel step instead of half, and the total still matches the finger.
+- After a tap with no focus event, the bridge asks Chrome which field has focus, for at most 250 ms, instead of waiting 350 ms. Focus events are looked up one at a time, newest first, so a page cannot flood the bridge.
+- A killed bridge's accessibility registry is now ended by the next bridge, like the bus and Chrome.
+
+### Easier phone password manager access
+
+- Place **Passwords** right beside **Keyboard** in the tool row so it is visible on narrow phones without swiping, and highlight and scroll it into view whenever you tap an email or password field on the page.
+- Focus the matching username or password box synchronously when opening **Passwords** so mobile keyboards surface the phone's password manager straight away, and keep the form above the soft keyboard.
+- Stop live typing from stealing focus back when you tap the next field on the page while **Passwords** is open, keeping a password filled on step one ready to send on step two.
+- Use standard `method="post"` and `type="submit"` login-form semantics, Enter/Go submission, a ready-to-send button state, a close button, and a hint showing the website hostname to search in your password manager.
+
+Not yet verified: password manager prompts on a physical phone.
+
+### Opening a request from its notification
+
+- Tapping a notification on a phone with the app already open now opens that request. The app took the first request in the queue as already on screen, but a phone shows only the queue until one is chosen. A new request is usually first, so nothing opened and no notice appeared.
+- Opening the app from a notification after the computer's address changed now opens the request. The app checked the request at the old address before moving to the one the notification gave, and showed "could not be checked". It now waits until the bridge answers, and keeps the notification when the same paired computer moves.
+
 ## 19 November 2026
 
 ### Keyboard and scrolling in the Google sign-in (0.7.1)

@@ -178,12 +178,13 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('signing i
 
   it.skipIf(!tools?.accessibility)('tells the phone which kind of field took focus, and scrolls as far as the finger moved', async () => {
     const page = `<!doctype html><body style="margin:0;font:20px sans-serif">
-<input id=email type=email style="display:block;box-sizing:border-box;width:100%;height:80px">
+<input id=email type=email autofocus style="display:block;box-sizing:border-box;width:100%;height:80px">
 <input id=secret type=password style="display:block;box-sizing:border-box;width:100%;height:80px">
 <button style="display:block;width:100%;height:80px">Next</button>
 <p style="height:80px;margin:0">Plain words</p>
 <div style="height:6000px"></div>
-<script>addEventListener('scroll', () => localStorage.setItem('scrolled', String(scrollY)));</script>`;
+<script>if (!navigator.webdriver) addEventListener('scroll', () => localStorage.setItem('scrolled', String(scrollY)));</script>`;
+    // Recorded in the sign-in Chrome only: in the agent's, autofocus scrolls back to the email box.
     const server = createServer((_request, response) => { response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); response.end(page); });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -197,7 +198,9 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('signing i
     await expect.poll(async () => (await session.frame()).width, { timeout: 10_000 }).toBe(500);
     // Chrome's tab strip and toolbar take the top of the picture; the page starts below them.
     const top = 87;
-    // Chrome starts sending accessibility events a few seconds after the bridge subscribes.
+    // Chrome's accessibility is ready a few seconds after it starts. The email
+    // box, like Google's, took focus as the page loaded, before that, so no
+    // event announced it, and tapping it again sends none either.
     await expect.poll(() => session.input({ type: 'click', x: 250, y: top + 40 }), { timeout: 15_000, interval: 500 }).toEqual({ editable: true, kind: 'email' });
     expect(await session.input({ type: 'click', x: 250, y: top + 120 })).toEqual({ editable: true, kind: 'password' });
     expect(await session.input({ type: 'click', x: 250, y: top + 200 })).toEqual({ editable: false });
@@ -213,12 +216,17 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('signing i
     await pause(500);
     await session.input({ type: 'scroll', deltaX: 0, deltaY: 70, x: 250, y: 400 });
     await pause(1200);
+    // A swipe starts the page once the finger has moved a quarter of a step:
+    // 36 px makes one step, where rounding alone would wait for 60.
+    await session.input({ type: 'scroll', deltaX: 0, deltaY: 36, x: 250, y: 400 });
+    await pause(1200);
     await session.prepareHandoff!();
     // The agent's Chrome is ordinary: no accessibility bus.
     expect(running(owner.bus)).toBe(false);
     const agent = await chromium.connectOverCDP(session.cdpUrl!); cleanup.push(() => agent.close());
     const shown = agent.contexts().flatMap(context => context.pages()).find(item => item.url().startsWith(url))!;
-    expect(Number(await shown.evaluate(() => localStorage.getItem('scrolled')))).toBe(360);
+    // Three steps for the slow swipe and the short one, one for the quarter-step start.
+    expect(Number(await shown.evaluate(() => localStorage.getItem('scrolled')))).toBe(480);
   }, 90_000);
 
   it('goes back, forward and reloads with Chrome\'s own keys during sign-in', async () => {

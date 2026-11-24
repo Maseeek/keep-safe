@@ -21,6 +21,10 @@ export interface BrowserSession {
   readonly cdpUrl?: string;
   readonly pageUrl?: string;
   frame(): Promise<BrowserFrame>;
+  /** A sharper image of the page as it is now. Sent once a live stream goes
+   * quiet, so text is crisp when nothing moves while moving frames stay small.
+   * Resolves to nothing when this browser has no sharper image to give. */
+  still?(): Promise<BrowserFrame | undefined>;
   /** May report what the action left focused, so the phone can raise its keyboard. */
   input(input: { type: string; [key: string]: unknown }): Promise<FocusState | void>;
   /** Pushes a frame whenever the page repaints. The browser sends the next one
@@ -608,40 +612,42 @@ async function openManaged({ url, cdpUrl, allowLocalUrls, viewport }: Parameters
       await context.unroute('**/*', guard).catch(() => {});
     }
   };
+  const capture = async (quality: number, optimizeForSpeed: boolean): Promise<BrowserFrame> => {
+    selectActivePage();
+    if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+    const target = page; const source = target.url(); const generation = documentGeneration; const popups = popupGeneration;
+    const monitor = await ensurePopupMonitor(target);
+    // Captured as the page is: the text caret stays visible and animations
+    // keep running. Chromium's own capture is used directly because a
+    // Playwright screenshot of a Chrome window can stall while the page navigates.
+    // A capture asked for at the instant a page is replaced may never be
+    // answered. Ask once more after a moment and take whichever answers,
+    // so a busy computer is not mistaken for a broken view.
+    const session = monitor.session!;
+    const image = await new Promise<{ data: string }>((resolve, reject) => {
+      let settled = false;
+      const finish = (work: () => void) => { if (settled) return; settled = true; clearTimeout(again); clearTimeout(limit); work(); };
+      const ask = () => {
+        session.send('Page.captureScreenshot', { format: 'jpeg', quality, optimizeForSpeed }).then(result => finish(() => resolve(result)), error => {
+          // Chromium says this when the page has nothing painted yet, such as just after opening.
+          if (!settled && /Unable to capture screenshot/.test(String((error as Error | null)?.message))) setTimeout(() => { if (!settled) ask(); }, 100);
+          else finish(() => reject(error));
+        });
+      };
+      const again = setTimeout(ask, 1200);
+      const limit = setTimeout(() => finish(() => reject(new Error('The browser did not produce an image.'))), 5000);
+      ask();
+    });
+    const shown = chrome ? { ...size } : target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    selectActivePage();
+    if (target !== page || target.isClosed() || target.url() !== source || generation !== documentGeneration || popups !== popupGeneration) throw new BrowserFrameChangedError();
+    return { data: image.data, ...shown, url: source, navigationAvailable: owned, gestures: true };
+  };
   return {
     cdpUrl,
     get pageUrl() { selectActivePage(); return page.url(); },
-    async frame() {
-      selectActivePage();
-      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
-      const target = page; const source = target.url(); const generation = documentGeneration; const popups = popupGeneration;
-      const monitor = await ensurePopupMonitor(target);
-      // Captured as the page is: the text caret stays visible and animations
-      // keep running. Chromium's own capture is used directly because a
-      // Playwright screenshot of a Chrome window can stall while the page navigates.
-      // A capture asked for at the instant a page is replaced may never be
-      // answered. Ask once more after a moment and take whichever answers,
-      // so a busy computer is not mistaken for a broken view.
-      const session = monitor.session!;
-      const image = await new Promise<{ data: string }>((resolve, reject) => {
-        let settled = false;
-        const finish = (work: () => void) => { if (settled) return; settled = true; clearTimeout(again); clearTimeout(limit); work(); };
-        const ask = () => {
-          session.send('Page.captureScreenshot', { format: 'jpeg', quality: 62, optimizeForSpeed: true }).then(result => finish(() => resolve(result)), error => {
-            // Chromium says this when the page has nothing painted yet, such as just after opening.
-            if (!settled && /Unable to capture screenshot/.test(String((error as Error | null)?.message))) setTimeout(() => { if (!settled) ask(); }, 100);
-            else finish(() => reject(error));
-          });
-        };
-        const again = setTimeout(ask, 1200);
-        const limit = setTimeout(() => finish(() => reject(new Error('The browser did not produce an image.'))), 5000);
-        ask();
-      });
-      const shown = chrome ? { ...size } : target.viewportSize() ?? await target.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-      selectActivePage();
-      if (target !== page || target.isClosed() || target.url() !== source || generation !== documentGeneration || popups !== popupGeneration) throw new BrowserFrameChangedError();
-      return { data: image.data, ...shown, url: source, navigationAvailable: owned, gestures: true };
-    },
+    frame: () => capture(62, true),
+    still: () => capture(80, false),
     async stream(listener) {
       if (streaming || closed) throw new Error('This browser cannot be streamed right now.');
       let stopped = false;

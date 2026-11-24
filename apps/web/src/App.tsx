@@ -40,6 +40,9 @@ import { useInstall, Welcome } from "./Welcome";
 type Section = "inbox" | "activity" | "devices" | "settings";
 type Filter = "all" | "pending" | "active";
 const repository = "https://github.com/Maseeek/keep-safe";
+function sameComputer(a: Connection, b: Connection) {
+  return !!a.device && a.device.id === b.device?.id && a.token === b.token && !!a.source && a.source === b.source;
+}
 const notificationGuidance = "This notification cannot identify a request on this computer. Connect to the computer that sent it, then choose a request from its queue.";
 interface PendingNotification {
   intent: NotificationIntent;
@@ -418,8 +421,11 @@ export function App() {
   const selected =
     selectedId !== null ? workspace.requests.find((request) => request.id === selectedId)
       : notificationEntry.present ? undefined : filtered[0];
-  const notificationRoute = useRef({ connection: workspace.connection, info: workspace.info, requests: workspace.requests, section, selectedId, selected, connectOpen });
-  notificationRoute.current = { connection: workspace.connection, info: workspace.info, requests: workspace.requests, section, selectedId, selected, connectOpen };
+  // A phone shows only the queue until a request is chosen, so the queue's
+  // first request is not on screen and must not count as already open.
+  const shown = selected && (!mobileLayout || selectedId) ? selected : undefined;
+  const notificationRoute = useRef({ connection: workspace.connection, info: workspace.info, requests: workspace.requests, section, selectedId, selected: shown, connectOpen });
+  notificationRoute.current = { connection: workspace.connection, info: workspace.info, requests: workspace.requests, section, selectedId, selected: shown, connectOpen };
   useLayoutEffect(() => {
     if (notificationEntry.present) window.history.replaceState(null, "", withoutNotificationEntry(window.location.href));
   }, [notificationEntry]);
@@ -440,9 +446,16 @@ export function App() {
   useEffect(() => {
     const pending = pendingNotification;
     if (!pending || pending.verified || pendingNotificationRef.current !== pending) return;
+    const moved = pending.source && workspace.connection && pending.source !== workspace.connection && sameComputer(pending.source, workspace.connection);
+    // A paired computer whose tunnel address changed is still the same
+    // computer; its notification carried the new address.
+    if (moved) { setPendingNotification({ ...pending, source: workspace.connection }); return; }
     if (!pending.source || pending.source !== workspace.connection) {
       setPendingNotification(null); setNotificationNotice({ message: notificationGuidance }); return;
     }
+    // Opening from a notification usually starts the app or wakes it. Check
+    // only once the bridge answers, possibly at the address the notification gave.
+    if (workspace.status !== "connected") return;
     let cancelled = false;
     void verifyNotificationIntent(pending.intent, pending.source, async () => {
       const [info, result] = await Promise.all([
@@ -461,7 +474,7 @@ export function App() {
         }
       });
     return () => { cancelled = true; };
-  }, [pendingNotification, workspace.connection, workspace.api, setPendingNotification]);
+  }, [pendingNotification, workspace.connection, workspace.status, workspace.api, setPendingNotification]);
   useEffect(() => {
     const pending = pendingNotification;
     if (!pending?.verified || pendingNotificationRef.current !== pending) return;

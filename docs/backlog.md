@@ -56,6 +56,7 @@
 - [x] Open the owner's installed Google Chrome as a visible window for managed sessions, so websites see an ordinary browser. Linux with a display only; other systems opt in with `KEEP_SAFE_BROWSER=chrome`.
 - [ ] Verify the Chrome window route with the screen locked and the display off, on macOS and Windows, and against a website that showed a captcha to the hidden browser.
 - [x] Tab switcher, paste from the phone, text selection with copy back, and boxes a phone password manager can fill. No address bar, as agreed with the owner on 16 November 2026.
+- [x] Surface **Passwords** beside **Keyboard** when an email or password field is focused, focus the matching box synchronously on tap, stop `LiveKeyboard` stealing focus while **Passwords** is open, keep the form above the phone keyboard, and use `method="post"` + `type="submit"` login-form semantics with a site-search hint.
 - [ ] Verify on a physical phone that password managers offer to fill the **Passwords** boxes, and how iOS and Android prompt for clipboard access.
 - [x] Sign in to Google (YouTube, Gmail) without remote debugging: Chrome on a private X display with screen capture and real input, reopened with debugging for the agent at handback. Linux with `ffmpeg` and `Xvfb` or `Xephyr`. Owner verified YouTube on 19 November 2026.
 - [ ] Complete a real Google sign-in through it and confirm YouTube keeps the agent signed in after the handback. Needs the owner.
