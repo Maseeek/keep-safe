@@ -644,9 +644,21 @@ The owner asked that tapping a notification take them to that request.
 
 - Reproduced in real Chromium through the registered service worker: on a 390 px phone with the app open and an older request in the queue, a notification for a new request opened nothing and showed no notice. The routing compared the target with the queue's first request, which a phone does not show until one is chosen. It now counts only the request actually on screen. At 1440 px it already worked.
 - A cold start where the stored address was dead and the notification had left the new one showed "could not be checked": the check ran at the old address first. Verification now waits for the bridge to connect, and a move of the same paired device (same key, device and notification key) keeps the pending notification.
-- New `tests/notification-open-window.test.ts` covers both; both fail without the change. Typecheck and the full suite pass: 443 passed, 6 skipped. No bridge change, so no version bump.
+- New `tests/notification-open-window.test.ts` covers both; both fail without the change. Typecheck and the full suite pass: 443 passed, 6 skipped. No bridge change, so no version bump. Typecheck and the full suite pass: 451 passed, 6 skipped.
 
 Not verified: a tap on a real notification on a physical phone.
+
+## Phone password manager flow on 23 November 2026
+
+The owner asked about scanning passkey QR codes (`FIDO:/…`) and making the phone's password manager available when logging in. After reviewing the platform limits (mobile browsers block web navigation to `fido:/…` since CVE-2024-9956, and FIDO2 hybrid transport enforces Bluetooth proximity to the computer), the owner chose to skip passkey QR codes and improve the phone password manager flow instead.
+
+- Moved **Passwords** right next to **Keyboard** so it stays visible on 320 px and 390 px screens without swiping. Tapping an email or password field on the remote page highlights **Passwords** and scrolls it into view in the tool row if the row was scrolled away.
+- Opening **Passwords** mounts the form synchronously inside the tap gesture (`flushSync`) and focuses the matching box (`#credential-password` for a password field, `#credential-username` otherwise) so mobile browsers open the keyboard and password-manager bar immediately without `LiveKeyboard` dropping focus between press and click.
+- Stopped `LiveKeyboard` from stealing focus when tapping fields on the remote page while **Passwords** is open, so a two-step login (username, then password) keeps the filled password ready to send in one tap.
+- Upgraded the **Passwords** form to `method="post"` with a `type="submit"` button, Enter/Go support on both inputs, a ready-to-send accent state (boolean-only React state; values stay strictly in uncontrolled DOM inputs and are still cleared on send, close, navigation, URL change, `pagehide`, and `visibilitychange`), a close button, and a hostname search hint explaining that the phone is on Keep Safe's URL rather than the target website's origin.
+- Extended `visualViewport` keyboard fitting to keep `.tool-tray` above the phone's soft keyboard while typing in **Passwords** or **Type text**.
+- Updated built-app Playwright coverage at 320 px and 390 px in `tests/gesture-stream-ui.test.ts` to verify toolbar visibility, suggestion highlighting, synchronous focus for email and password fields, no focus stealing by `LiveKeyboard`, form semantics, and clearing on close and `pagehide`. Physical-phone password-manager prompts remain unverified.
+- Rebased onto 0.8.0's saved logins: the saved-login controls stay inside the same **Passwords** form, below the site hint. No bridge change, so no version bump. Typecheck and the full suite pass: 451 passed, 6 skipped.
 
 ## Smoother live view, 23 November 2026 (released as 0.8.1)
 

@@ -86,8 +86,9 @@ dialog::backdrop { background: rgb(10 12 14 / 55%); }
 .button:active:not(:disabled) { transform: scale(0.97); }
 .button:disabled { opacity: 0.45; cursor: default; }
 .button-dark { background: var(--ink); color: var(--on-ink); }
+.button-accent { background: var(--accent); color: var(--on-accent); }
 .button-light { background: var(--surface); color: var(--text); border-color: var(--line-strong); }
-.button-light.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.button-light.selected, .button-light.is-suggested { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
 .button-quiet { background: transparent; color: var(--muted); }
 .button-danger { background: var(--danger); color: #fff; }
 .button-small { min-height: 44px; padding: 0 14px; font-size: 0.9375rem; border-radius: 12px; }
@@ -406,6 +407,9 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .window-tab-close { display: inline-grid; place-items: center; min-width: 44px; flex: none; color: var(--muted); }
 .window-tab button:active:not(:disabled) { background: var(--surface-2); }
 .credential-form label { font-size: 0.875rem; font-weight: 600; }
+.credential-form-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.credential-close { margin: -8px -8px 0 0; }
+.credential-site-hint strong { color: var(--text); overflow-wrap: anywhere; }
 .tool-notice { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3; margin: 0; padding: 10px 14px; border-radius: 12px; background: rgb(11 12 13 / 86%); color: #fff; font-size: 0.875rem; line-height: 1.35; text-align: center; pointer-events: none; }
 .tool-notice:empty { display: none; }
 /* The website gets every touch on a live page, as it would in a phone browser. Two fingers zoom the view here. */
@@ -506,9 +510,11 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .browser-panel.is-live .session-actions .button { min-height: 48px; }
 .browser-panel.is-live .website-navigation-error, .browser-panel.is-live .website-navigation-hint { margin: 6px 8px 0; flex: none; }
 .browser-panel.is-live .remote-controls .website-navigation-hint { margin: 0; }
-.browser-panel.is-typing { z-index: 55; }
+.browser-panel.is-typing, .browser-panel.is-tool-typing { z-index: 55; }
 .browser-panel.is-typing .session-actions, .browser-panel.is-typing .website-navigation, .browser-panel.is-typing .window-tabs, .browser-panel.is-typing .redirect-note, .browser-panel.is-typing .tool-tray { display: none; }
-.browser-panel.is-typing .panel-topline { padding-top: 4px; }
+.browser-panel.is-tool-typing .session-actions, .browser-panel.is-tool-typing .website-navigation, .browser-panel.is-tool-typing .window-tabs, .browser-panel.is-tool-typing .redirect-note { display: none; }
+.browser-panel.is-typing .panel-topline, .browser-panel.is-tool-typing .panel-topline { padding-top: 4px; }
+.browser-panel.is-tool-typing .tool-tray { max-height: 62%; }
 .browser-panel.is-full-screen { position: fixed; inset: 0; z-index: 70; height: 100dvh; gap: 0; background: var(--bg); }
 
 /* Welcome */
