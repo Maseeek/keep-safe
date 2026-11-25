@@ -6,6 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startShadowLoginFixture } from './fixtures/shadow-login-site';
 import { serverMessage } from './helpers/socket-frames';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 describe('open-shadow login through the phone interface', () => {
   let browser: Browser;
@@ -31,7 +32,7 @@ describe('open-shadow login through the phone interface', () => {
       await page.getByText('Bridge connected', { exact: true }).waitFor();
       await page.getByRole('button', { name: /Component login fixture/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
-      await page.locator('.remote-screen img').waitFor();
+      await switchToLiveBrowser(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       await page.getByRole('button', { name: 'Focus Component email', exact: true }).click();
       await page.getByText('Focus confirmed on Component email.', { exact: true }).waitFor();

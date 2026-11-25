@@ -36,6 +36,7 @@ import { browserAddress } from "./browser-address";
 import { ControlNavigator } from "./ControlNavigator";
 import { RemoteSurface } from "./RemoteSurface";
 import { LiveKeyboard, type LiveKeyboardHandle } from "./LiveKeyboard";
+import { LoginFormCard } from "./LoginFormCard";
 import { SavedLogins } from "./SavedLogins";
 import { loginOrigin } from "./vault";
 
@@ -119,6 +120,7 @@ export function BrowserPanel({
   const [fullScreen, setFullScreen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [showCredentials, setShowCredentials] = useState(false);
+  const [manualBrowser, setManualBrowser] = useState(false);
   const [hasCredentialUser, setHasCredentialUser] = useState(false);
   const [hasCredentialPassword, setHasCredentialPassword] = useState(false);
   const [toolNotice, setToolNotice] = useState("");
@@ -126,6 +128,7 @@ export function BrowserPanel({
   const credentialPassword = useRef<HTMLInputElement>(null);
   const passwordsTrigger = useRef<HTMLButtonElement>(null);
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
+  const measuredPanel = useRef<{ width: number; height: number } | null>(null);
   const [typing, setTyping] = useState(false);
   const [toolTyping, setToolTyping] = useState(false);
   const toolBlurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -165,17 +168,28 @@ export function BrowserPanel({
   const moved = !addressInView && address.label !== requestedAddress.label;
 
   const live = active && !isDemo;
+  const activeForm = live && workspace.formState?.requestId === request.id ? workspace.formState.state : null;
+  const hasGuidedForm = !!activeForm && ["credentials", "otp", "signed-in"].includes(activeForm.stage);
+  const showingForm = live && !finished && !expired && !workspace.browserPaused && !workspace.navigationBusy && hasGuidedForm && !manualBrowser;
+  const challengeHint = live && activeForm?.stage === "challenge" ? activeForm.hint : undefined;
   // Measure the space the website gets, before the browser is opened, so it
   // is laid out for this screen rather than letterboxed into it.
   useLayoutEffect(() => {
     const element = stage.current;
-    if (!live || !element) { setStageSize(null); setStageBox(null); return; }
+    if (!live || !element) { if (!live) { setStageSize(null); measuredPanel.current = null; } setStageBox(null); return; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const measure = (immediate: boolean) => {
       const width = Math.floor(element.clientWidth); const height = Math.floor(element.clientHeight);
       if (width > 0 && height > 0) setStageBox(previous => previous && previous.width === width && previous.height === height ? previous : { width, height });
       if (width < 200 || height < 200) return;
+      const host = panel.current;
+      const outer = host ? { width: Math.floor(host.clientWidth), height: Math.floor(host.clientHeight) } : { width, height };
       const apply = () => {
+        // Switching between the guided form and the live browser borrows a strip
+        // from the stage without changing the phone's screen size; keep the
+        // browser's layout steady unless the outer panel itself resized.
+        if (measuredPanel.current && measuredPanel.current.width === outer.width && measuredPanel.current.height === outer.height) return;
+        measuredPanel.current = outer;
         setStageSize(previous => previous && previous.width === width && previous.height === height ? previous : { width, height });
         workspace.setViewport({ width, height, scale: Math.min(2, Math.max(1, window.devicePixelRatio || 1)), touch: window.matchMedia("(pointer: coarse)").matches });
       };
@@ -184,13 +198,13 @@ export function BrowserPanel({
       // The on-screen keyboard and rotation animate through many sizes.
       // Open tool panels and the window strip borrow space from the page; that
       // is not a new screen size, and resizing would re-lay out the website.
-      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form, .window-tabs")) apply(); }, 250);
+      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form, .window-tabs, .view-mode-switch")) apply(); }, 250);
     };
     measure(true);
     const observer = new ResizeObserver(() => measure(false));
     observer.observe(element);
     return () => { clearTimeout(timer); observer.disconnect(); };
-  }, [live, workspace.setViewport, workspace.browserPaused, workspace.navigationBusy, fullScreen]);
+  }, [live, workspace.setViewport, workspace.browserPaused, workspace.navigationBusy, fullScreen, showingForm]);
   useEffect(() => {
     workspace.watch(active && !isDemo && !expired ? request.id : null);
     return () => workspace.watch(null);
@@ -244,6 +258,8 @@ export function BrowserPanel({
     setShowText(false);
     setShowDetails(false);
     setShowCredentials(false);
+    setManualBrowser(false);
+    measuredPanel.current = null;
     setToolTyping(false);
     clearTimeout(toolBlurTimer.current);
     setSelecting(false);
@@ -253,11 +269,11 @@ export function BrowserPanel({
   }, [request.id]);
   useEffect(() => () => clearTimeout(toolBlurTimer.current), []);
   useEffect(() => {
-    if (!showCredentials && !showKeyboard) {
+    if (!showCredentials && !showKeyboard && !showingForm) {
       clearTimeout(toolBlurTimer.current);
       setToolTyping(false);
     }
-  }, [showCredentials, showKeyboard]);
+  }, [showCredentials, showKeyboard, showingForm]);
   const clearLocalInput = useCallback(() => {
     if (draftInput.current) {
       draftInput.current.value = "";
@@ -476,7 +492,7 @@ export function BrowserPanel({
     <section
       ref={panel}
       style={keyboardArea ? { position: "fixed", left: 0, right: 0, top: keyboardArea.top, height: keyboardArea.height } : undefined}
-      className={`browser-panel${keyboardArea && typing ? " is-typing" : ""}${keyboardArea && !typing && toolTyping ? " is-tool-typing" : ""}${toolsOpen ? " has-tools" : ""}${live && !finished && !expired ? " is-live" : ""}${fullScreen ? " is-full-screen" : ""}${showDetails ? " shows-details" : ""}`}
+      className={`browser-panel${keyboardArea && typing ? " is-typing" : ""}${keyboardArea && !typing && toolTyping ? " is-tool-typing" : ""}${toolsOpen ? " has-tools" : ""}${live && !finished && !expired ? " is-live" : ""}${showingForm ? " is-guided-form" : ""}${fullScreen ? " is-full-screen" : ""}${showDetails ? " shows-details" : ""}`}
       aria-label={`Request from ${request.agent}`}
     >
       <div className="panel-topline">
@@ -547,7 +563,23 @@ export function BrowserPanel({
             <span>{addressInView ? "Chrome's own address bar, at the top of the live picture, shows the real address. Check it before entering credentials." : address.secure ? "HTTPS website" : "This page is not using HTTPS."}</span>
           </div>
         ) : null}
-        {active && !expired && !isDemo && !workspace.browserPaused && tabs.length > 1 ? (
+        {showingForm ? (
+          <div className="view-mode-switch" role="tablist" aria-label="Sign-in view">
+            <button type="button" role="tab" aria-selected={true} className="is-active" onClick={() => { setManualBrowser(false); setShowCredentials(false); setShowKeyboard(false); }}>
+              Sign-in form
+            </button>
+            <button type="button" role="tab" aria-selected={false} onClick={() => setManualBrowser(true)}>
+              Live browser
+            </button>
+          </div>
+        ) : null}
+        {challengeHint && !showingForm ? (
+          <div className="challenge-banner" role="status">
+            <ShieldCheck size={16} aria-hidden="true" />
+            <span>{challengeHint}</span>
+          </div>
+        ) : null}
+        {active && !expired && !isDemo && !workspace.browserPaused && !showingForm && tabs.length > 1 ? (
           <div className="window-tabs" role="group" aria-label="Windows this sign-in opened">
             {tabs.map((tab, index) => {
               const name = tab.title || (tab.origin ? domain(tab.origin) : `Window ${index + 1}`);
@@ -561,7 +593,7 @@ export function BrowserPanel({
             })}
           </div>
         ) : null}
-        {active && !expired && !isDemo && !workspace.browserPaused && workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
+        {active && !expired && !isDemo && !workspace.browserPaused && !showingForm && workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
           <div className="website-navigation" role="group" aria-label="Website navigation">
             <span>Website navigation</span>
             <div>
@@ -655,6 +687,23 @@ export function BrowserPanel({
             <h3>Loading website…</h3>
             <p>Waiting for the browser to confirm navigation and show a fresh image. Then choose a field again before typing.</p>
           </div>
+        ) : showingForm && activeForm ? (
+          <LoginFormCard
+            formState={activeForm}
+            requestUrl={request.url}
+            addressInView={addressInView}
+            busy={workspace.formBusy}
+            disabled={!canInput || busy}
+            onSubmit={async (values, expectedOrigin) => {
+              const result = await workspace.submitForm(values, expectedOrigin);
+              if (result.state && ["otp", "signed-in"].includes(result.state.stage)) setManualBrowser(false);
+              return result;
+            }}
+            onOpenBrowser={() => setManualBrowser(true)}
+            onHandBack={() => onAction(request.id, "complete")}
+            onFocusForm={onToolFocus}
+            onBlurForm={onToolBlur}
+          />
         ) : (
           <div className="remote-screen" ref={stage}>
             {liveFrame ? <div className="remote-page" style={lift ? { transform: `translateY(${-lift}px)` } : undefined}>
@@ -706,7 +755,7 @@ export function BrowserPanel({
       </div>
       {active && !isDemo && workspace.navigationError ? <p className="website-navigation-error" role="alert">{workspace.navigationError}</p> : null}
       {active && !isDemo && workspace.navigationUncertain ? <p className="website-navigation-hint" role="status">Resume and check the website before handing back.</p> : null}
-      {active && !isDemo && !expired && !workspace.browserPaused ? (
+      {active && !isDemo && !expired && !workspace.browserPaused && !showingForm ? (
         <div className="remote-controls">
           {!workspace.navigationBusy && liveFrame && (!workspace.info?.navigationAvailable || !workspace.navigationAvailable) ? (
             <p className="website-navigation-hint">{workspace.info?.navigationAvailable
@@ -870,6 +919,11 @@ export function BrowserPanel({
           </div>
           <div className="remote-toolbar">
             <div className="remote-toolbar-actions">
+              {hasGuidedForm ? (
+                <button type="button" className="button button-light button-small" onClick={() => { setManualBrowser(false); setShowCredentials(false); setShowKeyboard(false); }}>
+                  <LockKeyhole size={15} aria-hidden="true" /> Sign-in form
+                </button>
+              ) : null}
               <LiveKeyboard ref={keyboard} enabled={canInput && !workspace.focusBlocked} wanted={!!target?.editable && !showCredentials} kind={target?.kind}
                 send={workspace.send} onActive={setTyping} />
               <button ref={passwordsTrigger} className={`button button-light button-small ${showCredentials ? "selected" : credentialSuggested ? "is-suggested" : ""}`} aria-expanded={showCredentials}

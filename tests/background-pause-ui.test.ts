@@ -11,6 +11,7 @@ import { BridgeClient } from '../packages/mcp/src/client';
 import type { DevicePairResult, PageControlsSnapshot, ServerMessage } from '../packages/shared/src/protocol';
 import type { Workspace } from '../apps/web/src/workspace';
 import { backgroundFixtureCredentials, startBackgroundLoginFixture } from './fixtures/background-login-site';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 const owner = 'synthetic-background-owner'; const agent = 'synthetic-background-agent';
 type HarnessWindow = Window & { backgroundWorkspace: Workspace; backgroundSockets: globalThis.WebSocket[] };
@@ -74,7 +75,7 @@ describe('explicit browser resume after mobile background pause', () => {
       const request = await client.create({ agent: 'Background login fixture', title: 'Synthetic background pause', url: site.loginUrl, ttlSeconds: 120 });
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: owner })}`);
       await page.getByRole('button', { name: /Background login fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
-      await page.locator('.remote-screen img').waitFor(); await expect.poll(() => site.formReadyCount).toBe(1);
+      await switchToLiveBrowser(page); await expect.poll(() => site.formReadyCount).toBe(1);
       await page.getByRole('button', { name: 'Type text', exact: true }).click();
       const text = page.getByLabel('Tap a field in the browser, then send text'); await text.fill('synthetic-unsent-draft'); await page.getByLabel('Show text', { exact: true }).check();
       const beforePause = watches; expect(await visibility(page, true, width === 390)).toEqual({ empty: true, masked: true });

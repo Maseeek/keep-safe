@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 const ownerToken = 'saved-logins-owner'; const agentToken = 'saved-logins-agent';
 // Synthetic values for a local fixture only.
@@ -37,7 +38,7 @@ describe('logins saved on the phone', () => {
         await page.getByRole('button', { name: new RegExp(title) }).click();
         await page.getByText('Have ready: Email, Password', { exact: true }).waitFor();
         await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
-        await page.locator('.remote-screen img').waitFor();
+        await switchToLiveBrowser(page);
         await expect.poll(async () => (await client.get(request.id)).status).toBe('active');
         return request;
       };

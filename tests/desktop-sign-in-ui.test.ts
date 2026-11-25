@@ -5,6 +5,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { findDesktopTools } from '../packages/bridge/src/desktop';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 const tools = await findDesktopTools();
 // The owner's sign-in on a private display, from the built phone app. Opens
@@ -28,7 +29,10 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('desktop s
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: 'desktop-owner' })}`);
       await page.getByRole('button', { name: /Desktop test/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
+      const liveTab = page.getByRole('tab', { name: 'Live browser', exact: true });
       const screen = page.locator('.remote-screen img');
+      await Promise.race([liveTab.waitFor({ state: 'visible', timeout: 20_000 }), screen.waitFor({ state: 'visible', timeout: 20_000 })]);
+      if (await liveTab.isVisible()) await switchToLiveBrowser(page);
       await screen.waitFor({ state: 'visible', timeout: 20_000 });
       await expect.poll(() => page.locator('.address').innerText()).toBe('Address shown in page');
       // Nothing for the agent while the owner signs in.

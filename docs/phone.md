@@ -6,8 +6,8 @@ Keep Safe on the phone has four tabs: **Inbox**, **Activity**, **Connect** and *
 
 1. An agent asks for a sign-in. The request appears in **Inbox**, with a notification if you turned those on.
 2. Open it. You see which agent is asking, why, the website, and the time left. Choose **Approve & open** or **Decline**.
-3. The live view opens full screen. The browser on your computer is sized to your phone, so the website shows its mobile layout.
-4. Sign in. Touch the page as you would the website itself: tap, swipe, drag. Tap a field and type.
+3. If the page has a standard login form, Keep Safe opens **Sign-in form** first: native username/email and password fields that work with your phone's password manager and passkey-locked saved logins, plus a **Copy site** button for quick lookup. Tap **Sign in** and the bridge types your details into the browser with real keystrokes (including two-step Email → Password flows).
+4. If the site asks for a verification code, Keep Safe switches to a two-factor code card with one-time-code autofill. For push approvals, CAPTCHAs, or OAuth pickers, switch to **Live browser** (or Keep Safe switches automatically).
 5. Choose **Done, hand back**. Keep Safe clears any password fields still on the page and gives the browser back to the agent.
 
 **End session** declines the request instead. The agent is told it was denied.

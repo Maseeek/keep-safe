@@ -5,7 +5,7 @@ import { readFile, stat, realpath } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush, { type PushSubscription } from 'web-push';
-import type { FrameHeader, BridgeInfo, EditableKind, HistoryCleanupResult, LoginRequest, PairingState, ServerMessage, ViewportRequest } from '../../shared/src/protocol';
+import type { FrameHeader, BridgeInfo, EditableKind, FormFieldKind, FormState, FormSubmitValue, HistoryCleanupResult, LoginRequest, PairingState, ServerMessage, ViewportRequest } from '../../shared/src/protocol';
 import { findDesktopTools } from './desktop';
 import { BrowserFrameChangedError, BrowserNavigationError, browserAvailable, openBrowser, validateCdpUrl, validateTargetUrl, type BrowserFactory, type BrowserFrame, type BrowserSession } from './browser';
 import { chooseBrowser } from './chrome';
@@ -66,6 +66,8 @@ interface Client {
   streamedAt: number;
   /** Pointer moves received so far, and the ones that must not be skipped. */
   moves: number; keptMoves: Set<number>; lastWasMove: boolean;
+  /** Serialized last sent form state, last URL inspected, and settle timer. */
+  lastFormState?: string; lastFormUrl?: string; formTimer?: ReturnType<typeof setTimeout>;
   pendingFrame: boolean; operations: Promise<void>; count: number; window: number;
 }
 interface StoredSubscription extends PushSubscription { deviceId?: string }
@@ -98,6 +100,7 @@ const sleep = (milliseconds: number) => new Promise<void>(resolve => { setTimeou
 const pairingCodeLifetimeMs = 10 * 60 * 1000;
 const pairingAlphabet = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
 const editableKinds = new Set<EditableKind>(['text', 'password', 'email', 'numeric', 'tel', 'url', 'search']);
+const formFieldKinds = new Set<FormFieldKind>(['email', 'username', 'password', 'otp', 'text']);
 const allowedKeys = new Set(['Enter', 'Tab', 'Shift+Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space', 'ControlOrMeta+A']);
 
 function equalToken(actual: string | undefined, expected: string) {
@@ -208,7 +211,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Where the owner signs in to that Chrome: on a private display with no remote debugging, or in the window itself. */
   const desktopSignIn = managedBrowser === 'chrome' ? await findDesktopTools() : undefined;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.8.1', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, frameAcks: true, tabsAvailable: true, selectionAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.9.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, frameAcks: true, tabsAvailable: true, selectionAvailable: true, formFillAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -280,6 +283,10 @@ export async function createBridge(options: BridgeOptions) {
     client.frames?.stop();
     client.frames = undefined;
     client.lastFrame = undefined;
+    client.lastFormState = undefined;
+    client.lastFormUrl = undefined;
+    clearTimeout(client.formTimer);
+    client.formTimer = undefined;
     if (client.watching) {
       const entry = entries.get(client.watching);
       if (entry?.controller === client) {
@@ -369,6 +376,33 @@ export async function createBridge(options: BridgeOptions) {
   }
   function checkEntry(id: string) { const entry = entries.get(id); if (!entry) throw new HttpError(404, 'Request not found.'); return entry; }
   function active(entry: Entry, client: Client) { return validClient(client) && !entry.finalizing && !entry.draining && !terminal.has(entry.request.status) && now() < Date.parse(entry.request.expiresAt) && entry.controller === client && client.watching === entry.request.id && client.ws.readyState === WebSocket.OPEN; }
+  function pushFormState(entry: Entry, client: Client, state: FormState, force = false) {
+    if (!active(entry, client)) return;
+    const serialized = JSON.stringify(state);
+    if (!force && client.lastFormState === serialized) return;
+    client.lastFormState = serialized;
+    send(client, { type: 'form-state', requestId: entry.request.id, state });
+  }
+  async function reportFormState(entry: Entry, client: Client, force = false) {
+    const browser = entry.browser;
+    if (!browser?.inspectForm || entry.navigating || !active(entry, client)) return;
+    try {
+      const state = await browser.inspectForm();
+      if (entry.browser === browser && !entry.navigating && active(entry, client)) pushFormState(entry, client, state, force);
+    } catch { /* A navigating page will report once settled. */ }
+  }
+  function maybeReportForm(entry: Entry, client: Client, url: string) {
+    if (!entry.browser?.inspectForm || client.lastFormUrl === url) return;
+    client.lastFormUrl = url;
+    clearTimeout(client.formTimer);
+    void reportFormState(entry, client);
+    // Re-check shortly after navigation so SPA/delayed login forms are detected once mounted.
+    client.formTimer = setTimeout(() => {
+      client.formTimer = undefined;
+      if (client.lastFormUrl === url && active(entry, client)) void reportFormState(entry, client);
+    }, 350);
+    client.formTimer.unref();
+  }
   async function frame(entry: Entry, client: Client) {
     if (client.pendingFrame || entry.navigating || !entry.browser || !active(entry, client)) return;
     // A slow phone link skips captures instead of queuing stale images.
@@ -388,6 +422,7 @@ export async function createBridge(options: BridgeOptions) {
         if (!last || last.data !== result.data) client.idle = 0; else client.idle++;
         client.lastFrame = { data: result.data, url: result.url, epoch, at: time };
         sendFrame(client, { type: 'frame', requestId: entry.request.id, width: result.width, height: result.height, url: result.url, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable, ...(result.gestures ? { gestures: true } : {}), ...(result.addressInView ? { addressInView: true } : {}) }, result.data);
+        maybeReportForm(entry, client, result.url);
       }
     } catch (error) { if (!(error instanceof BrowserFrameChangedError) && active(entry, client) && !entry.navigating && entry.frameEpoch === epoch) { send(client, { type: 'error', message: 'The browser could not be displayed. Reopen the session to try again.' }); unwatch(client); } }
     finally { client.pendingFrame = false; }
@@ -446,6 +481,7 @@ export async function createBridge(options: BridgeOptions) {
       entry.size = { width: image.width, height: image.height };
       entry.navigationAvailable = !!browser.navigate && image.navigationAvailable === true;
       sendFrame(client, { type: 'frame', requestId: entry.request.id, width: image.width, height: image.height, url: image.url, frameEpoch: epoch, navigationAvailable: entry.navigationAvailable, ...(image.gestures ? { gestures: true } : {}), ...(image.addressInView ? { addressInView: true } : {}) }, image.data);
+      maybeReportForm(entry, client, image.url);
     };
     /** Once the page stops moving, one sharper image replaces the last moving one. */
     const sharpen = async () => {
@@ -528,6 +564,10 @@ export async function createBridge(options: BridgeOptions) {
       entry.request.status = 'active';
       entry.request.updatedAt = new Date(now()).toISOString();
       broadcast();
+      if (entry.browser.inspectForm) {
+        client.lastFormUrl = entry.browser.pageUrl;
+        await reportFormState(entry, client, true);
+      }
       await frame(entry, client);
       if (active(entry, client)) client.frames = startFrames(entry, client);
     } catch { unwatch(client); entry.opening = undefined; throw new Error('Unable to open this browser. Install Chromium with npx playwright install chromium, or check the agent CDP connection.'); }
@@ -571,10 +611,12 @@ export async function createBridge(options: BridgeOptions) {
       entry.navigating = true;
       operation = Promise.resolve().then(async () => {
         let ok = false; let notice = 'The website could not be navigated. Check the new image before trying again.';
+        let nextForm: FormState | undefined;
         try {
           if (!supported) throw new Error('Navigation is unavailable.');
           await browser.navigate!(message.direction as 'back' | 'forward' | 'reload');
           ok = true;
+          if (browser.inspectForm) nextForm = await browser.inspectForm().catch(() => undefined);
         } catch (error) {
           if (!supported) notice = 'Navigation is available only in a managed Keep Safe browser.';
           else if (error instanceof BrowserNavigationError) notice = error.reason === 'form'
@@ -585,8 +627,43 @@ export async function createBridge(options: BridgeOptions) {
         } finally { entry.navigating = false; }
         if (active(entry, client) && entry.frameEpoch === epoch) {
           send(client, { type: 'navigated', requestId: entry.request.id, navigationId: message.navigationId as string, frameEpoch: epoch, ok, ...(!ok ? { message: notice } : {}) });
+          if (nextForm) {
+            client.lastFormUrl = browser.pageUrl;
+            pushFormState(entry, client, nextForm, true);
+          }
           await frame(entry, client);
         }
+      });
+    } else if (message.type === 'inspect-form') {
+      if (Object.keys(message).some(key => key !== 'type')) throw new Error('Invalid form inspection request.');
+      if (!entry.browser.inspectForm) throw new Error('This browser does not support guided form sign-in.');
+      operation = reportFormState(entry, client, true);
+    } else if (message.type === 'form-submit') {
+      if (typeof message.submitId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(message.submitId) ||
+          !Array.isArray(message.values) || message.values.length < 1 || message.values.length > 4 ||
+          (message.expectedOrigin !== undefined && (typeof message.expectedOrigin !== 'string' || message.expectedOrigin.length > 2048)) ||
+          Object.keys(message).some(key => !['type', 'submitId', 'values', 'expectedOrigin'].includes(key))) {
+        throw new Error('Provide valid sign-in form values.');
+      }
+      const values: FormSubmitValue[] = [];
+      for (const item of message.values) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('Provide valid sign-in form values.');
+        const record = item as Record<string, unknown>;
+        if (typeof record.kind !== 'string' || !formFieldKinds.has(record.kind as FormFieldKind) ||
+            typeof record.value !== 'string' || record.value.length < 1 || record.value.length > 4096 ||
+            Object.keys(record).some(key => !['kind', 'value'].includes(key))) {
+          throw new Error('Provide valid sign-in form values.');
+        }
+        values.push({ kind: record.kind as FormFieldKind, value: record.value });
+      }
+      if (!entry.browser.submitForm) throw new Error('This browser does not support guided form sign-in.');
+      const submitId = message.submitId;
+      const expectedOrigin = message.expectedOrigin;
+      operation = entry.browser.submitForm(values, expectedOrigin).then(result => {
+        if (!active(entry, client)) return;
+        client.lastFormState = JSON.stringify(result.state);
+        client.lastFormUrl = entry.browser?.pageUrl;
+        send(client, { type: 'form-result', requestId: entry.request.id, submitId, ok: result.ok, ...(result.message ? { message: result.message } : {}), state: result.state });
       });
     } else if (message.type === 'inspect-controls') {
       if (typeof message.inspectionId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.inspectionId)) throw new Error('Choose a valid page control inspection.');

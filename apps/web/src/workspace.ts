@@ -6,6 +6,8 @@ import type {
   ClientMessage,
   DevicePairResult,
   EditableKind,
+  FormState,
+  FormSubmitValue,
   ViewportRequest,
   HistoryCleanupResult,
   LoginRequest,
@@ -450,8 +452,20 @@ export function useWorkspace(onError: (message: string) => void) {
     clearTimeout(pending.timer);
     pending.resolve(text);
   }, []);
+  /** Guided form state reported by the bridge for the active browser page. */
+  const [formState, setFormState] = useState<{ requestId: string; state: FormState } | null>(null);
+  const [formBusy, setFormBusy] = useState(false);
+  const formAttempt = useRef<{ id: string; resolve: (result: { ok: boolean; message?: string; state?: FormState }) => void; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const endForm = useCallback((result: { ok: boolean; message?: string; state?: FormState }) => {
+    const pending = formAttempt.current;
+    if (!pending) return;
+    formAttempt.current = null;
+    clearTimeout(pending.timer);
+    setFormBusy(false);
+    pending.resolve(result);
+  }, []);
   const setFrame = useCallback((next: BrowserFrame | null, image?: string | Blob, onShown?: () => void) => {
-    if (!next || image === undefined) { onShown?.(); screen.current!.clear(); setFrameState(null); setTabs([]); endCopy(null); return; }
+    if (!next || image === undefined) { onShown?.(); screen.current!.clear(); setFrameState(null); setTabs([]); endCopy(null); endForm({ ok: false, message: "Browser view closed before sign-in finished." }); setFormState(null); return; }
     screen.current!.show(image, onShown);
     // Most frames change only the picture, which React does not need to see.
     setFrameState(previous => previous && previous.requestId === next.requestId && previous.width === next.width && previous.height === next.height &&
@@ -760,6 +774,13 @@ export function useWorkspace(onError: (message: string) => void) {
         else if (message.type === "selection" && receivingBrowser() && message.requestId === watchId.current && message.copyId === copyAttempt.current?.id) {
           endCopy(typeof message.text === "string" ? message.text : "");
         }
+        else if (message.type === "form-state" && receivingBrowser() && message.requestId === watchId.current && message.state) {
+          setFormState({ requestId: message.requestId, state: message.state });
+        }
+        else if (message.type === "form-result" && receivingBrowser() && message.requestId === watchId.current && message.submitId === formAttempt.current?.id) {
+          if (message.state) setFormState({ requestId: message.requestId, state: message.state });
+          endForm({ ok: message.ok === true, message: message.message, state: message.state });
+        }
         else if (message.type === "editable" && receivingBrowser() && message.requestId === watchId.current) {
           setTypingTarget({ requestId: message.requestId, editable: message.editable === true, kind: message.kind, at: Date.now() });
         }
@@ -808,6 +829,7 @@ export function useWorkspace(onError: (message: string) => void) {
           if (transportWatchId.current && !freshFrame.current) pauseBrowser();
           inspectionAttempt.current = null; focusAttempt.current = null;
           setControlsBusy(false); setFocusBusy(false); setControlsError(message.message);
+          endForm({ ok: false, message: message.message });
           errorCallback.current(message.message);
         }
       };
@@ -1057,7 +1079,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const send = useCallback((message: ClientMessage) => {
     // Navigation must use its correlated intent/epoch lifecycle below.
     if (message.type === "navigate") return false;
-    const remoteAction = ["click", "scroll", "touch", "mouse", "tab", "close-tab", "copy-selection", "text", "key", "inspect-controls", "focus", "resize"].includes(message.type);
+    const remoteAction = ["click", "scroll", "touch", "mouse", "tab", "close-tab", "copy-selection", "text", "key", "inspect-controls", "inspect-form", "form-submit", "focus", "resize"].includes(message.type);
     if (remoteAction && (navigationAttempt.current || paused.current || !visible() || !watchId.current ||
       transportWatchId.current !== watchId.current || !activeRequest(watchId.current) ||
       freshFrame.current?.socket !== socket.current || freshFrame.current?.requestId !== watchId.current ||
@@ -1100,6 +1122,24 @@ export function useWorkspace(onError: (message: string) => void) {
     copyAttempt.current = { id, resolve, timer: setTimeout(() => { if (copyAttempt.current?.id === id) endCopy(null); }, 4000) };
     if (!send({ type: "copy-selection", copyId: id })) endCopy(null);
   }), [endCopy, send]);
+  /** Sends guided form values to the bridge to type and submit with trusted input. */
+  const submitForm = useCallback((values: FormSubmitValue[], expectedOrigin?: string) => new Promise<{ ok: boolean; message?: string; state?: FormState }>(resolve => {
+    endForm({ ok: false, message: "Replaced by a newer submission." });
+    const id = crypto.randomUUID();
+    setFormBusy(true);
+    formAttempt.current = {
+      id,
+      resolve,
+      timer: setTimeout(() => {
+        if (formAttempt.current?.id === id) endForm({ ok: false, message: "The browser took too long to answer. Check the live browser." });
+      }, 15000),
+    };
+    const sent = send({ type: "form-submit", submitId: id, values, ...(expectedOrigin ? { expectedOrigin } : {}) });
+    if (!sent) endForm({ ok: false, message: "The browser is not ready yet. Wait a moment and try again." });
+  }), [endForm, send]);
+  const inspectForm = useCallback(() => {
+    if (currentInfo.current?.formFillAvailable) send({ type: "inspect-form" });
+  }, [send]);
   const watch = useCallback((requestId: string | null) => {
     if (watchId.current === requestId) return;
     watchId.current = requestId;
@@ -1283,6 +1323,7 @@ export function useWorkspace(onError: (message: string) => void) {
     screen: screen.current,
     /** The windows of the live session. More than one only after the website opened another. */
     tabs, copySelection,
+    formState, formBusy, submitForm, inspectForm,
     navigationBusy, navigationError, navigationAvailable, navigationUncertain, navigateBrowser,
     browserPaused, browserVisible, resumeBrowser,
     pageControls, focusedControl, controlsBusy, focusBusy, focusBlocked, controlsError, inspectControls, focusControl,

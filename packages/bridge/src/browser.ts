@@ -3,10 +3,11 @@ import { createServer } from 'node:net';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page, type Route } from 'playwright';
 import { createOutboundProxy, validateTargetUrl, resolveDestination } from './network';
 import { createPageControls } from './page-controls';
+import { createLoginFormController } from './login-form';
 import { chooseBrowser, launchChrome, type ChromeProcess } from './chrome';
 import { findDesktopTools, openDesktopSession } from './desktop';
 import { randomUUID } from 'node:crypto';
-import type { BrowserTab, EditableKind, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
+import type { BrowserTab, EditableKind, FormState, FormSubmitValue, NavigationDirection, PageControlsSnapshot, ViewportRequest } from '../../shared/src/protocol';
 export { validateTargetUrl } from './network';
 
 export interface BrowserFrame {
@@ -47,6 +48,10 @@ export interface BrowserSession {
   /** Managed browsers only: match the controlling phone's screen. */
   resize?(viewport: ViewportRequest): Promise<void>;
   inspectControls?(options?: { includeFrames?: boolean }): Promise<PageControlsSnapshot>;
+  /** Value-free description of the current login/2FA step on the active page. */
+  inspectForm?(): Promise<FormState>;
+  /** Fills and submits the current login/2FA step with trusted input. Never logs or returns values. */
+  submitForm?(values: FormSubmitValue[], expectedOrigin?: string): Promise<{ ok: boolean; message?: string; state: FormState }>;
   navigate?(direction: NavigationDirection): Promise<void>;
   prepareHandoff?(): Promise<void>;
   close(): Promise<void>;
@@ -506,6 +511,7 @@ async function openManaged({ url, cdpUrl, allowLocalUrls, viewport }: Parameters
   };
   instrument(page);
   pageControls = createPageControls(() => { selectActivePage(); return page; });
+  const loginForm = createLoginFormController(() => { selectActivePage(); return page; }, url);
   if (owned) {
     const initialPage = page;
     try {
@@ -788,6 +794,18 @@ async function openManaged({ url, cdpUrl, allowLocalUrls, viewport }: Parameters
       if (closed || page.isClosed()) throw new Error('This browser page is closed.');
       await ensureActivePageMonitor();
       return pageControls!.inspect(options);
+    },
+    async inspectForm() {
+      selectActivePage();
+      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+      return loginForm.inspect();
+    },
+    async submitForm(values, expectedOrigin) {
+      selectActivePage();
+      if (closed || page.isClosed()) throw new Error('This browser page is closed.');
+      await ensureActivePageMonitor();
+      await releasePointers();
+      return loginForm.submit(values, expectedOrigin);
     },
     ...(owned ? { navigate } : {}),
     releasePointers() { if (!closed && (held.touch || held.mouse)) return releasePointers(); },
