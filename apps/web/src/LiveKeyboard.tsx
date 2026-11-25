@@ -117,8 +117,8 @@ export const LiveKeyboard = forwardRef<LiveKeyboardHandle, Props>(function LiveK
         // Keep focus where it is on press, then move it deliberately on click.
         onMouseDown={event => event.preventDefault()}
         onClick={() => { if (active) input.current?.blur(); else if (!reveal()) input.current?.focus({ preventScroll: true }); }}>
-        <Keyboard size={16} aria-hidden="true" />
-        {wanted && !active ? "Tap to type" : "Keyboard"}
+        <Keyboard size={17} aria-hidden="true" />
+        <span className="dock-label">{wanted && !active ? "Tap to type" : "Keyboard"}</span>
       </button>
       <input ref={input} className="live-keyboard-input" type="password" aria-label="Type into the remote page" tabIndex={-1}
         autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="go"

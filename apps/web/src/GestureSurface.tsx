@@ -63,6 +63,7 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
   const [zoomed, setZoomed] = useState(false);
   const wheel = useRef<{ scope: Scope; deltaX: number; deltaY: number; x: number; y: number; timer?: ReturnType<typeof setTimeout> } | null>(null);
   const lastWheel = useRef(-Infinity);
+  const lastTapAt = useRef(-Infinity);
 
   const valid = useCallback((owner: Scope) => current.current === owner && owner.enabled &&
     owner.width > 0 && owner.height > 0 && document.visibilityState !== "hidden" && !!image.current?.isConnected, []);
@@ -274,6 +275,7 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
     const tap = !active.moved && performance.now() - active.started < 600;
     if (!location) { sender.current({ type: active.kind, phase: "cancel", x: 0, y: 0 }); return; }
     if (sender.current({ type: active.kind, phase: active.kind === "touch" ? "end" : "up", x: location.x, y: location.y, ...(tap ? { tap: true } : {}), ...at(active.kind, event.timeStamp) } as Parameters<typeof send>[0]) && tap) {
+      if (active.kind === "touch") lastTapAt.current = performance.now();
       tapped.current?.({ clientX: event.clientX, clientY: event.clientY });
     }
     try { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Capture already ended. */ }
@@ -294,6 +296,7 @@ export function GestureSurface({ frame, screen, enabled, controlIdentity, alt, s
       // Keeps the phone keyboard open while touching the page: without this
       // the press would move focus off the typing field and close it.
       onMouseDown={event => event.preventDefault()}
+      onTouchEnd={event => { if (performance.now() - lastTapAt.current < 120) event.preventDefault(); }}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={cancelled}
       onLostPointerCapture={event => { if (press.current?.pointerId === event.pointerId) cancel(); }}
       onContextMenu={event => event.preventDefault()} />

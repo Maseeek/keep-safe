@@ -6,7 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { navigationFixtureCredentials, startNavigationLoginFixture } from './fixtures/navigation-login-site';
 import { serverMessage } from './helpers/socket-frames';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 async function usableTarget(button: Locator) {
   await button.scrollIntoViewIfNeeded();
@@ -38,13 +38,14 @@ describe('website navigation through the phone interface', () => {
       socket.on('framesent', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'navigate') directions.push(message.direction); });
     });
     const focus = async (name: string) => {
+      await openMoreTools(page);
       const refresh = page.getByRole('button', { name: 'Refresh page controls', exact: true });
       if (await refresh.count()) await refresh.click();
       else await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       const target = page.getByRole('button', { name: `Focus ${name}`, exact: true }); await usableTarget(target); await target.click();
       await page.getByText(`Focus confirmed on ${name}.`, { exact: true }).waitFor();
     };
-    const pressEnter = () => page.getByRole('button', { name: 'Press Enter in browser', exact: true }).click();
+    const pressEnter = async () => { await openMoreTools(page); await page.getByRole('button', { name: 'Press Enter in browser', exact: true }).click(); };
     const navigate = async (name: string, path: string) => {
       const button = page.getByRole('button', { name, exact: true }); await usableTarget(button);
       const before = frameEpoch; await button.click();
@@ -71,19 +72,19 @@ describe('website navigation through the phone interface', () => {
       const text = page.getByLabel('Tap a field in the browser, then send text');
       await text.fill('synthetic-unsent-navigation-draft'); await page.getByLabel('Show text', { exact: true }).check();
       await navigate('Back in the website', '/start');
-      if (!(await text.count())) await page.getByRole('button', { name: 'Type text', exact: true }).click();
+      if (!(await text.count())) { await openMoreTools(page); await page.getByRole('button', { name: 'Type text', exact: true }).click(); }
       expect(await text.inputValue()).toBe(''); expect(await text.getAttribute('type')).toBe('password'); expect(await page.getByLabel('Show text', { exact: true }).isChecked()).toBe(false);
       expect(await text.isDisabled()).toBe(true);
       await navigate('Forward in the website', '/wrong'); await navigate('Back in the website', '/start');
       await focus('Practice login'); await pressEnter(); await expect.poll(() => framePath).toBe('/login');
       expect(site.loginViews).toBe(1); await navigate('Reload website', '/login'); await expect.poll(() => site.loginViews).toBe(2);
       await focus('Synthetic navigation password');
-      if (!(await text.count())) await page.getByRole('button', { name: 'Type text', exact: true }).click();
+      if (!(await text.count())) { await openMoreTools(page); await page.getByRole('button', { name: 'Type text', exact: true }).click(); }
       await text.fill('synthetic-discarded-on-reload'); await page.getByRole('button', { name: 'Send', exact: true }).click();
       // Same-URL reload must still discard local drafts and require renewed focus.
       await text.fill('synthetic-unsent-same-url-draft'); await page.getByLabel('Show text', { exact: true }).check();
       await navigate('Reload website', '/login'); await expect.poll(() => site.loginViews).toBe(3);
-      if (!(await text.count())) await page.getByRole('button', { name: 'Type text', exact: true }).click();
+      if (!(await text.count())) { await openMoreTools(page); await page.getByRole('button', { name: 'Type text', exact: true }).click(); }
       expect(await text.inputValue()).toBe(''); expect(await text.getAttribute('type')).toBe('password'); expect(await text.isDisabled()).toBe(true);
       await focus('Navigation email'); await text.fill(navigationFixtureCredentials.email); await page.getByRole('button', { name: 'Send', exact: true }).click();
       await focus('Synthetic navigation password'); await text.fill(navigationFixtureCredentials.password); await page.getByRole('button', { name: 'Send', exact: true }).click();

@@ -8,7 +8,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import type { DevicePairResult } from '../packages/shared/src/protocol';
 import { backgroundFixtureCredentials, startBackgroundLoginFixture } from './fixtures/background-login-site';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const owner = 'synthetic-routing-owner'; const agent = 'synthetic-routing-agent';
 const source = webpush.generateVAPIDKeys(); const otherSource = webpush.generateVAPIDKeys();
@@ -70,7 +70,7 @@ describe('notification routing with the registered service worker', () => {
       const target = await client.create({ agent: 'Target routing fixture', title: 'Exact notification request', url: site.loginUrl, ttlSeconds: 180 });
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: owner })}`);
       await page.getByRole('button', { name: /Current routing fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
-      await switchToLiveBrowser(page); await page.getByRole('button', { name: 'Type text', exact: true }).click();
+      await switchToLiveBrowser(page); await openMoreTools(page); await page.getByRole('button', { name: 'Type text', exact: true }).click();
       const text = page.getByLabel('Tap a field in the browser, then send text'); await text.fill('synthetic-preserved-notification-draft'); await page.getByLabel('Show text', { exact: true }).check();
       const notice = page.getByRole('status', { name: 'Notification notice', exact: true });
       for (const message of [notification(target.id, otherSource.publicKey), notification(randomUUID()), { type: 'open-request', requestId: target.id }, { type: 'notification-request', version: 1, requestId: target.id }]) {
@@ -91,7 +91,7 @@ describe('notification routing with the registered service worker', () => {
       await open.click(); await page.getByRole('dialog', { name: 'Browser request', exact: true }).getByRole('heading', { name: target.title, exact: true }).waitFor();
       expect((await client.get(target.id)).status).toBe('pending'); expect(watches).toEqual([current.id]);
       await page.getByRole('button', { name: 'Back to requests', exact: true }).click(); await page.getByRole('button', { name: /Current routing fixture/ }).click();
-      await switchToLiveBrowser(page); await page.getByRole('button', { name: 'Type text', exact: true }).click();
+      await switchToLiveBrowser(page); await openMoreTools(page); await page.getByRole('button', { name: 'Type text', exact: true }).click();
       expect(await text.inputValue()).toBe(''); expect(await text.getAttribute('type')).toBe('password');
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       const focus = async (name: string) => { await page.getByRole('button', { name: `Focus ${name}`, exact: true }).click(); await page.getByText(`Focus confirmed on ${name}.`, { exact: true }).waitFor(); };

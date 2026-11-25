@@ -56,6 +56,7 @@ export function ClassicSurface({ frame, screen, enabled, controlIdentity, alt, s
   const contacts = useRef({ ids: new Set<number>(), blocked: false });
   const pending = useRef<PendingScroll | null>(null);
   const lastScroll = useRef(-Infinity);
+  const lastTapAt = useRef(-Infinity);
 
   const valid = useCallback((owner: Scope) => current.current === owner && owner.enabled &&
     Number.isFinite(owner.width) && Number.isFinite(owner.height) && owner.width > 0 && owner.height > 0 &&
@@ -224,12 +225,20 @@ export function ClassicSurface({ frame, screen, enabled, controlIdentity, alt, s
       // Clear before normal capture release: lostpointercapture must not drop
       // this swipe's final coalesced delta, or turn it into a compatibility tap.
       gesture.current = null;
-      if (tap && location && sender.current({ type: "click", x: location.x, y: location.y })) tapped.current?.({ clientX: event.clientX, clientY: event.clientY });
+      if (tap && location && sender.current({ type: "click", x: location.x, y: location.y })) {
+        lastTapAt.current = performance.now();
+        tapped.current?.({ clientX: event.clientX, clientY: event.clientY });
+      }
       try { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Capture already ended. */ }
     }}
     onPointerCancel={cancel}
     onLostPointerCapture={event => { if (gesture.current?.pointerId === event.pointerId) cancel(); }}
     onContextMenu={event => { if (gesture.current || contacts.current.ids.size) { event.preventDefault(); cancel(); } }}
+    onTouchEnd={event => {
+      // Prevent Android Chrome from dispatching a compatibility mouse click after
+      // a tap that would immediately blur the primed LiveKeyboard input.
+      if (performance.now() - lastTapAt.current < 120) event.preventDefault();
+    }}
     onClick={event => {
       const native = event.nativeEvent as MouseEvent & { pointerId?: number; pointerType?: string; sourceCapabilities?: { firesTouchEvents?: boolean } | null };
       const touch = native.pointerType === "touch" || native.sourceCapabilities?.firesTouchEvents === true;

@@ -6,7 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { openBrowser, type BrowserFactory } from '../packages/bridge/src/browser';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startTouchLoginFixture, touchFixtureCredentials } from './fixtures/touch-login-site';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-touch-owner'; const agentToken = 'synthetic-touch-agent';
 type Point = { x: number; y: number };
@@ -66,12 +66,14 @@ describe('trusted touch scrolling through the phone interface', () => {
       expect(Math.abs(await page.locator('.detail-section').evaluate(element => element.scrollTop) - localBefore)).toBeLessThan(2);
       for (let index = 0; index < 2; index++) { box = await imageBox(page); await swipe(cdp, mapped(box, { x: 250, y: 620 }), mapped(box, { x: 250, y: 100 })); }
       await expect.poll(() => site.bodyScrolledCount).toBe(1); expect(site.tapCount).toBe(1); expect(site.loginCount).toBe(0);
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       const focus = async (name: string) => { await page.getByRole('button', { name: `Focus ${name}`, exact: true }).click(); await page.getByText(`Focus confirmed on ${name}.`, { exact: true }).waitFor(); };
       await focus('Touch email'); await page.getByRole('button', { name: 'Type text', exact: true }).click();
       const text = page.getByLabel('Tap a field in the browser, then send text'); await text.fill(touchFixtureCredentials.email); await page.getByRole('button', { name: 'Send', exact: true }).click();
       await focus('Synthetic touch password'); await text.fill(touchFixtureCredentials.password); await page.getByRole('button', { name: 'Send', exact: true }).click(); expect(await text.inputValue()).toBe('');
       await page.getByRole('button', { name: 'Page controls', exact: true }).click(); await page.getByRole('button', { name: 'Type text', exact: true }).click();
+      await page.getByRole('button', { name: 'More browser tools', exact: true }).click();
       box = await imageBox(page);
       if (process.env.KEEP_SAFE_QA_SCREENSHOTS) { await mkdir('.keep-safe/qa', { recursive: true }); await page.screenshot({ path: `.keep-safe/qa/touch-scroll-${width}.png`, fullPage: true }); }
       await tap(cdp, mapped(box, { x: 195, y: 680 })); await expect.poll(() => site.loginCount).toBe(1); await expect.poll(() => site.readyCount).toBe(1);
@@ -134,6 +136,7 @@ describe('trusted touch scrolling through the phone interface', () => {
     try {
       let box = await imageBox(page); await tap(cdp, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
       await appliedClicks(test, 1);
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Type text', exact: true }).click(); await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       await page.getByRole('button', { name: 'Focus Synthetic focus target', exact: true }).click(); await page.getByRole('alert').filter({ hasText: 'The requested action was not accepted' }).waitFor();
       const text = page.getByLabel('Tap a field in the browser, then send text'); expect(await text.isDisabled()).toBe(true);
@@ -195,6 +198,7 @@ describe('trusted touch scrolling through the phone interface', () => {
       await tap(cdp, point); await appliedClicks(test, 3);
       // The inspection reply drains every earlier action on this same socket,
       // including any erroneous stale-source click before the genuine tap.
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       await page.getByRole('button', { name: 'Focus Synthetic focus target', exact: true }).waitFor();
       expect(test.inputClicks).toBe(3);

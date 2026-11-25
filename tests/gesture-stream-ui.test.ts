@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { gestureFixtureValues, startGestureFixture } from './fixtures/gesture-site';
+import { openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-gesture-owner'; const agentToken = 'synthetic-gesture-agent';
 type Point = { x: number; y: number; id?: number };
@@ -154,6 +155,7 @@ describe('touching the live page as the website itself', () => {
       await expect.poll(() => page.locator('.window-tabs').count(), { timeout: 5000 }).toBe(0);
 
       // Select, drag a finger across two words, Copy: they are on this device's clipboard.
+      await openMoreTools(page);
       const select = page.getByRole('button', { name: 'Select text on the page by dragging', exact: true });
       await tall('Select text on the page by dragging');
       await select.click();

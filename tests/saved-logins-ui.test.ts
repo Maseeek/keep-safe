@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'saved-logins-owner'; const agentToken = 'saved-logins-agent';
 // Synthetic values for a local fixture only.
@@ -48,7 +48,7 @@ describe('logins saved on the phone', () => {
         await page.getByRole('button', { name: 'Back to requests', exact: true }).click();
       };
       const passwords = page.getByRole('button', { name: 'Passwords', exact: true });
-      const tab = () => page.getByTitle('Press Tab in browser').click();
+      const tab = async () => { await openMoreTools(page); await page.getByTitle('Press Tab in browser').click(); };
 
       await page.goto(`${app}/#${new URLSearchParams({ bridge: app, token: ownerToken })}`);
       await expect.poll(() => page.getByText('Bridge connected', { exact: true }).count()).toBeGreaterThan(0);

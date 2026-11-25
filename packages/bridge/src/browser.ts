@@ -50,6 +50,8 @@ export interface BrowserSession {
   inspectControls?(options?: { includeFrames?: boolean }): Promise<PageControlsSnapshot>;
   /** Value-free description of the current login/2FA step on the active page. */
   inspectForm?(): Promise<FormState>;
+  /** Pushes updated form state when focus or page form state changes asynchronously. */
+  onFormState?(listener: (state: FormState) => void): () => void;
   /** Fills and submits the current login/2FA step with trusted input. Never logs or returns values. */
   submitForm?(values: FormSubmitValue[], expectedOrigin?: string): Promise<{ ok: boolean; message?: string; state: FormState }>;
   navigate?(direction: NavigationDirection): Promise<void>;

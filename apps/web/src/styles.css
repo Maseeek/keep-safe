@@ -437,7 +437,7 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .more-browser-keys, .remote-text-form, .credential-form, .page-control-content { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-m); background: var(--surface); border: 1px solid var(--line); flex: none; }
 /* Open tools stack here, above the tool row, and scroll when they outgrow it. */
 .tool-tray { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.tool-tray:not(:has(.page-control-content, .more-browser-keys, .remote-text-form, .credential-form)) { display: none; }
+.tool-tray:not(:has(.page-control-content, .more-browser-keys, .remote-text-form, .credential-form, .more-tools-sheet)) { display: none; }
 .tool-slot { display: contents; }
 .more-browser-keys p, .remote-text-form small, .credential-form small, .credential-form p, .page-control-content p { font-size: 0.8125rem; color: var(--muted); }
 .more-key-grid { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -479,6 +479,7 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
   /* Messages float over the lower part of the page and let taps through, so
      they never cover the address bar or block the website. */
   .detail-section:has(.browser-panel.is-live) > .toast-inline, .detail-section:has(.browser-panel.is-live) > .notification-notice { position: absolute; top: auto; bottom: calc(var(--safe-bottom) + 132px); left: 8px; right: 8px; z-index: 6; margin: 0; pointer-events: none; box-shadow: var(--shadow); }
+  .detail-section:has(.browser-panel.is-live.has-tools) > .toast-inline, .detail-section:has(.browser-panel.is-live.has-tools) > .notification-notice { top: calc(var(--safe-top) + 56px); bottom: auto; }
   .detail-section:has(.browser-panel.is-live) > .toast-inline button, .detail-section:has(.browser-panel.is-live) > .notification-notice button { pointer-events: auto; }
   .detail-section:has(.browser-panel.is-live) > .notification-notice + .toast-inline, .detail-section:has(.browser-panel.is-live) > .toast-inline + .notification-notice { bottom: calc(var(--safe-bottom) + 208px); }
   .browser-panel.is-live { height: 100dvh; gap: 0; background: var(--bg); }
@@ -724,3 +725,23 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent);
 .guided-switch-link { margin-top: auto; width: 100%; font-size: 0.875rem; }
 .browser-panel.is-guided-form .browser-window { overflow: hidden; }
 .browser-panel.is-guided-form.is-tool-typing .session-actions { display: none; }
+
+/* Minimal Safari/Chrome-style mobile browser dock (#17) */
+.browser-dock { display: flex; align-items: center; justify-content: space-between; gap: 4px; overflow: visible !important; margin: 0 !important; padding: 2px 0 !important; }
+.dock-nav { display: flex; align-items: center; gap: 2px; flex: none; }
+.dock-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.dock-more { border: 1px solid var(--line-strong); background: var(--surface); }
+.dock-more.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.more-tools-sheet { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--r-m); background: var(--surface); border: 1px solid var(--line); }
+.more-tools-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Keep the single-row dock compact on phones without horizontal scrolling. */
+@media (max-width: 520px) {
+  .browser-dock .dock-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .browser-dock .button { min-width: 44px; padding: 0 10px; gap: 0; }
+  .browser-dock .live-keyboard.is-wanted .dock-label { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+  .browser-dock .live-keyboard.is-wanted .button { padding: 0 12px; gap: 6px; }
+}
+@media (max-width: 389px) {
+  .browser-dock .live-keyboard.is-wanted .dock-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .browser-dock .live-keyboard.is-wanted .button { min-width: 44px; padding: 0 10px; gap: 0; }
+}

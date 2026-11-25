@@ -3,6 +3,7 @@ import { chromium, type Browser } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
+import { openMoreTools } from './helpers/live-browser';
 
 describe('built live browser controls', () => {
   let browser: Browser;
@@ -98,6 +99,7 @@ describe('built live browser controls', () => {
       await page.getByRole('button', { name: /Controls test example.com/ }).click();
       await page.locator('.remote-screen img').waitFor({ state: 'visible' });
       // A key acknowledgement follows any erroneously queued scroll on the same socket.
+      await openMoreTools(page);
       await page.getByTitle('Press Tab in browser').click();
       await expect.poll(() => inputs.filter(input => input.type === 'key').length).toBe(1);
       expect(inputs.filter(input => input.type === 'scroll')).toHaveLength(1);
@@ -110,6 +112,7 @@ describe('built live browser controls', () => {
     const { page } = flow;
     try {
       const pairing = await page.evaluate(() => sessionStorage.getItem('keep-safe.connection.v1'));
+      await openMoreTools(page);
       await page.getByTitle('Press Tab in browser').evaluate(button => {
         for (let index = 0; index < 260; index++) (button as HTMLButtonElement).click();
       });

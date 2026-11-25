@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 describe('built mobile application', () => {
   let browser: Browser;
@@ -60,7 +60,8 @@ describe('built mobile application', () => {
       await frame.waitFor({ state: 'visible' });
       await expect.poll(async () => (await client.get(request.id)).status).toBe('active');
       expect((await client.get(request.id)).browser).toBeUndefined();
-      // Focus fields through the remote browser toolbar, then send synthetic text.
+      // Focus fields through the remote browser overflow tools, then send synthetic text.
+      await openMoreTools(page);
       await page.getByTitle('Press Tab in browser').click();
       await page.getByRole('button', { name: 'Type text', exact: true }).click();
       const input = page.getByLabel('Tap a field in the browser, then send text');

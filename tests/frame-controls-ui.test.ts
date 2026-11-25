@@ -7,6 +7,7 @@ import { BridgeClient } from '../packages/mcp/src/client';
 import type { PageControlsSnapshot } from '../packages/shared/src/protocol';
 import { startFrameLoginFixture } from './fixtures/frame-login-site';
 import { serverMessage } from './helpers/socket-frames';
+import { openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-frame-owner';
 const agentToken = 'synthetic-frame-agent';
@@ -57,6 +58,7 @@ describe('embedded login through the phone interface', () => {
       await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
       await page.locator('.remote-screen img').waitFor();
       await expect.poll(() => site.formReadyCount).toBe(1);
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       const email = page.getByRole('button', { name: 'Focus Embedded email', exact: true });
       await email.waitFor();
@@ -151,6 +153,7 @@ describe('embedded login through the phone interface', () => {
       await page.getByRole('button', { name: /Origin layout fixture/ }).click();
       await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
       await page.locator('.remote-screen img').waitFor();
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       const button = page.getByRole('button', { name: 'Focus Origin layout action', exact: true });
       await button.waitFor();

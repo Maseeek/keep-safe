@@ -10,7 +10,7 @@ import type { PageControlsSnapshot } from '../packages/shared/src/protocol';
 import type { Workspace } from '../apps/web/src/workspace';
 import { keyboardFixtureCredentials, startKeyboardLoginFixture } from './fixtures/keyboard-login-site';
 import { serverMessage } from './helpers/socket-frames';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-keys-owner';
 const agentToken = 'synthetic-keys-agent';
@@ -87,6 +87,7 @@ describe('native remote browser keys through the phone interface', () => {
       await page.getByRole('button', { name: /Keyboard login fixture/ }).click();
       await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
       await switchToLiveBrowser(page); await expect.poll(() => site.formReadyCount).toBe(1);
+      await openMoreTools(page);
       const more = page.getByRole('button', { name: 'More keys', exact: true });
       expect(await more.getAttribute('aria-expanded')).toBe('false');
       expect(await page.getByRole('group', { name: 'More browser keys', exact: true }).count()).toBe(0);
@@ -168,6 +169,7 @@ describe('native remote browser keys through the phone interface', () => {
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: ownerToken })}`);
       await page.getByRole('button', { name: /Blocked key fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
       await page.locator('.remote-screen img').waitFor();
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'More keys', exact: true }).click();
       await page.getByRole('button', { name: 'Type text', exact: true }).click();
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();

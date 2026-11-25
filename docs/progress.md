@@ -702,3 +702,14 @@ Tracked in GitHub issues #16–#23; implemented #16 first with Pixel 7 / Android
 
 Not verified: physical Pixel 7 password manager autofill popup / Gboard strip, physical WebAuthn PRF passkey unlock, and live Google desktop sign-in through the guided form.
 
+## Minimal mobile browser dock and immediate desktop Form-First, 25 November 2026 (0.9.1)
+
+Follow-up from the owner's live Pixel 7 test of `0.9.0` (which surfaced three issues: Form-First not appearing on Chrome/Xephyr desktop sign-in, too many buttons in the live browser bottom toolbar, and tapping fields in the live browser failing to raise the Android keyboard). Implements GitHub issue #17 and fixes the desktop Form-First + Android tap-focus gaps.
+
+- **Minimal mobile browser shell (#17):** Removed the permanent **Website navigation** row above the page and replaced the 13-button scrolling `.remote-toolbar` with a single-row `.browser-dock` (`Back`, `Forward`, `Reload`, `Keyboard`, `Passwords`, `⋯ More browser tools`). Rare controls (`Sign-in form`, `Paste`, `Type text`, `Select`, `Copy`, `More keys`, `Page controls`, `Tab`, `↵`, `⌫`, `↑`, `↓`) now live in the `⋯` `.more-tools-sheet` drawer (`apps/web/src/BrowserPanel.tsx`, `apps/web/src/LiveKeyboard.tsx`, `apps/web/src/styles.css`). Compacted dock button labels on narrow phones (`<= 520 px`) while preserving accessible names and `>= 44 × 44` touch targets, and moved floating notices above open tool drawers so they never cover controls.
+- **Immediate desktop Chrome/Xephyr Form-First:** Desktop sign-in (`packages/bridge/src/desktop.ts`, `packages/bridge/src/atspi.ts`, `packages/bridge/src/browser.ts`, `packages/bridge/src/server.ts`) now defaults immediately to `stage: 'credentials'` before the first submit instead of falling back to `stage: 'browser'` while Chrome is still loading, subscribes to live AT-SPI focus updates via `onFormState`, locates the first editable input if Chrome has not autofocused yet, and handles both single-step (`Tab` → password, e.g. GitHub) and two-step (`Enter` → wait for password, e.g. Google) sign-ins. Bumped bridge version to `0.9.1` so the CLI replaces older running bridges automatically.
+- **Pixel 7 tap-to-keyboard focus fix:** In `apps/web/src/ClassicSurface.tsx` and `apps/web/src/GestureSurface.tsx`, prevented the post-tap `touchend` compatibility click after touch taps so Android Chrome does not blur the primed `LiveKeyboard` input before the bridge's `editable` confirmation arrives.
+- **Verification:** `npm run build` (`tsc --noEmit` + `vite build`) and full `npm test` pass — 57 passed, 2 skipped (on-request Chrome desktop files), 466 tests passed, 7 skipped, 0 failed.
+
+Not verified: physical Pixel 7 re-test of the `0.9.1` dock, desktop Form-First submission, and tap-to-keyboard focus fix.
+

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { runRehearsal } from '../packages/bridge/src/rehearsal';
 import type { LoginRequest } from '../packages/shared/src/protocol';
+import { openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'a'.repeat(64);
 const agentToken = 'b'.repeat(64);
@@ -104,6 +105,7 @@ describe('real rehearsal through the built phone interface', () => {
       await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
       await page.locator('.remote-screen img').waitFor({ state: 'visible' });
 
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       const focusPhrase = page.getByRole('button', { name: 'Focus Practice phrase', exact: true });
       await focusPhrase.waitFor({ state: 'visible' });

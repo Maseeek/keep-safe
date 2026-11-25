@@ -42,18 +42,14 @@ While the keyboard is open the live view shrinks to the space above it and slide
 
 With a hardware keyboard, click a field and type. Tab, Shift+Tab, Enter, Escape, the arrow keys and paste all go to the page.
 
-## The tool row
+## The browser dock
 
-Swipe the row sideways to see everything.
+In **Live browser**, a single compact bottom row keeps the website front and centre:
 
+- **Back**, **Forward**, and **Reload** (in managed browsers).
 - **Keyboard**: live typing, described above.
-- **Passwords**: sits right beside **Keyboard** and highlights when you tap an email or password field on the page. Opening it focuses the matching username or password box straight away so your phone's password manager can fill it, and tapping another field on the page will not pull focus back to the hidden live keyboard while it is open. Because Keep Safe runs on its own address rather than the website's domain, search the website's hostname shown in the panel if your password manager does not suggest a match automatically. Tap a field on the page, then **Send** the matching box (or press Go/Enter). Each box is emptied as it is sent, and both are emptied when you close **Passwords** or leave the app.
-- **Paste**: sends the text on your phone's clipboard to the field you tapped on the page. Your browser may ask once for permission to read the clipboard. If it refuses, **Type text** opens so you can paste there.
-- **Type text**: a box for pasted or longer text, sent in one go with **Send**. **Show text** reveals what you entered before sending.
-- **Select** and **Copy**: with **Select** on, dragging a finger marks text on the page instead of scrolling it. **Copy** puts the marked text on your phone's clipboard, for example a recovery code. Text inside the page's form fields is never copied, so a password on the page cannot be read this way. **Select** turns itself off after a copy.
-- **More keys**: Space, Escape, Shift+Tab, arrow keys, Home, End, Page Up, Page Down, Delete and Select all.
-- **Page controls**: a list of the page's labelled fields and buttons. Choose one to focus it. This helps when a control is hard to tap. Field values and link addresses are never read. The list covers the main page, open web components and supported embedded pages, each with its origin.
-- **Tab**, **Enter**, **Backspace**, and scroll up and down.
+- **Passwords**: opens the password-manager boxes and passkey-locked **Saved logins** straight away, highlighting when you tap an email or password field. Because Keep Safe runs on its own address rather than the website's domain, search the website's hostname shown in the panel if your password manager does not suggest a match automatically. Tap a field on the page, then **Send** the matching box (or press Go/Enter). Each box is emptied as it is sent, and both are emptied when you close **Passwords** or leave the app.
+- **More (`⋯`)**: opens rare power-user tools when you need them — **Sign-in form**, **Paste**, **Type text**, **Select** and **Copy**, **More keys**, **Page controls**, plus **Tab**, **Enter**, **Backspace**, and scroll arrows.
 
 ## Windows
 

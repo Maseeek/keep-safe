@@ -2,6 +2,13 @@
 
 ## 25 November 2026
 
+### Minimal mobile browser dock, desktop Form-First, and Android tap keyboard fix (0.9.1)
+
+- Replaced the permanent `Website navigation` header and 13-button scrolling toolbar in the live browser with a compact single-row Safari/Chrome-style bottom dock (`Back`, `Forward`, `Reload`, `Keyboard`, `Passwords`, and `⋯` More), moving rare power-user controls (`Paste`, `Type text`, `Select`, `Copy`, `More keys`, `Page controls`, `Tab`, `Enter`, `Backspace`, scroll arrows) into the `⋯` overflow drawer (issue #17).
+- Floating toasts now move to the top while a tool drawer is open so they never cover controls.
+- Desktop sign-in (`desktop.ts`, Chrome without remote debugging) now opens straight into **Sign-in form** immediately on approval, pushes live AT-SPI focus updates as the page loads, and supports both single-step (`Tab`, e.g. GitHub) and two-step (`Enter`, e.g. Google) submissions.
+- Prevented Android Chrome's post-tap compatibility click from blurring the primed `LiveKeyboard` input before the bridge answers.
+
 ### Form-first sign-in and 2FA escalation (0.9.0)
 
 - When a requested page shows a login form, Keep Safe now opens **Sign-in form** first instead of dropping straight into remote-desktop controls, with a one-tap **Live browser** tab whenever you want the full page.

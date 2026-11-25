@@ -253,6 +253,8 @@ export interface FocusWatch {
   after<T>(action: () => Promise<T>, settleMs?: number): Promise<FocusState | undefined>;
   /** Returns the currently focused control's editable kind without performing an action. */
   current(): Promise<FocusState | undefined>;
+  /** Subscribes to focus changes as Chrome reports them (e.g. autofocus after page load). */
+  onChange(listener: (state: FocusState) => void): () => void;
   close(): Promise<void>;
 }
 
@@ -320,6 +322,7 @@ export async function startFocusWatch(tools: AccessibilityTools, folder: string,
     /** Counts focus moves, so a slow answer about an older object never wins. */
     let moves = 0;
     const waiters = new Set<() => void>();
+    const changeListeners = new Set<(state: FocusState) => void>();
     const describe = async (sender: string, path: string) => {
       const object = (member: string) => bridge.call(sender, path, 'org.a11y.atspi.Accessible', member);
       const [[role], [attributes], [states]] = await Promise.all([object('GetRoleName'), object('GetAttributes'), object('GetState')]);
@@ -354,7 +357,11 @@ export async function startFocusWatch(tools: AccessibilityTools, folder: string,
         while (latest) {
           const target = latest; latest = undefined;
           const state = await describe(target.sender, target.path).catch(() => undefined);
-          if (state && target.move === moves) { current = state; for (const waiter of waiters) waiter(); }
+          if (state && target.move === moves) {
+            current = state;
+            for (const waiter of waiters) waiter();
+            for (const listener of [...changeListeners]) { try { listener(state); } catch { /* Ignore listener errors. */ } }
+          }
         }
       } finally { describing = false; }
     };
@@ -401,6 +408,7 @@ export async function startFocusWatch(tools: AccessibilityTools, folder: string,
         if (moves === start) current = now;
         return now;
       },
+      onChange(listener) { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },
       close,
     };
   } catch { await close(); return undefined; }
