@@ -1,5 +1,15 @@
 # Change history
 
+## 25 November 2026
+
+### Form-first sign-in and 2FA escalation (0.9.0)
+
+- When a requested page shows a login form, Keep Safe now opens **Sign-in form** first instead of dropping straight into remote-desktop controls, with a one-tap **Live browser** tab whenever you want the full page.
+- Native `method="post"` form semantics with both `autocomplete="username"` and `autocomplete="current-password"` fields visible on screen (plus a **Copy site** button) so phone password managers—including Android / Pixel 7 Gboard autofill—surface reliably when inputting details.
+- Supports one-tap **Unlock with passkey & sign in** for logins saved in Keep Safe's encrypted phone vault, plus opt-in saving while signing in.
+- The local bridge types submitted values directly into the real browser with trusted, human-paced keystrokes (CDP keyboard events or XTEST in desktop sign-in), verifies the page origin before typing, refuses to type a password into a non-password field, and handles two-step Email → Password logins automatically.
+- Escalates automatically to a native `autocomplete="one-time-code"` card for OTP verification, or straight to the live browser with a challenge banner for push-2FA prompts and CAPTCHAs, and shows a confirmation card once signed in.
+
 ## 24 November 2026
 
 ### Smoother live view and the keyboard on tap (0.8.1)

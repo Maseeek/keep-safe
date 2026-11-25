@@ -66,5 +66,10 @@
 - [x] Saved logins on the phone, encrypted under a passkey (WebAuthn PRF), approved per use and filled only into a matching field on the saved site, modelled on Instinct's 1Password approach. Agents can name the fields a sign-in needs (`fields`). Agreed with the owner on 23 November 2026.
 - [ ] Verify saved logins on physical phones: passkey creation and PRF on Android Chrome and iOS Safari, and the fill in a real Google sign-in.
 - [ ] One-time codes (TOTP) in saved logins, and approvals that last longer than one opening of the panel, if the owner wants them.
+- [x] Form-first "Fill & Confirm" login with 2FA escalation (0.9.0, issue #16): detects login/OTP/push-challenge/signed-in stages, renders standard `method="post"` native login & OTP cards with Pixel 7 / Android Autofill semantics (`autocomplete="username"`, `current-password`, `one-time-code`, **Copy site**), 1-tap passkey vault sign-in, trusted human-paced typing (1-step & 2-step), origin binding, and a 1-tap **Live browser** switch.
+- [ ] Verify Form-first + Android / Pixel 7 Gboard password manager autofill strip on a physical Pixel 7 (issue #23).
+- [ ] Persistent site profiles and optional per-site auto-approve (issue #22).
+- [ ] Declutter live browser UI into a minimal mobile-browser shell (issue #17).
+- [ ] End-to-end encryption (E2EE) over WebSocket (issue #18) and adaptive JPEG / WebRTC streaming (issue #19).
 
 Prioritize the complete live login workflow and safety over cosmetic expansion. Keep this list current from evidence.

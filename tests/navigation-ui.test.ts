@@ -6,6 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { navigationFixtureCredentials, startNavigationLoginFixture } from './fixtures/navigation-login-site';
 import { serverMessage } from './helpers/socket-frames';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 async function usableTarget(button: Locator) {
   await button.scrollIntoViewIfNeeded();
@@ -49,6 +50,9 @@ describe('website navigation through the phone interface', () => {
       const before = frameEpoch; await button.click();
       await expect.poll(() => frameEpoch).not.toBe(before);
       await expect.poll(() => framePath).toBe(path);
+      const liveTab = page.getByRole('tab', { name: 'Live browser', exact: true });
+      await Promise.race([liveTab.waitFor({ state: 'visible' }), page.locator('.remote-screen img').waitFor({ state: 'visible' })]);
+      if (await liveTab.isVisible()) await switchToLiveBrowser(page);
       await expect.poll(() => button.isEnabled()).toBe(true);
       await page.locator('.remote-screen img').waitFor();
       expect((await client.get(request.id)).browser).toBeUndefined(); expect(completes).toBe(0);

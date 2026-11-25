@@ -51,9 +51,37 @@ export interface BridgeInfo {
   tabsAvailable?: boolean;
   /** The owner can copy text they selected on the page to their own device. */
   selectionAvailable?: boolean;
+  /** The bridge can detect login/2FA steps and fill them with trusted input. */
+  formFillAvailable?: boolean;
   /** Shown to the owner so several computers are easy to tell apart. */
   computerName?: string;
   deviceLifetimeDays?: number;
+}
+
+export type FormStage = 'credentials' | 'otp' | 'challenge' | 'signed-in' | 'browser';
+export type FormFieldKind = 'email' | 'username' | 'password' | 'otp' | 'text';
+
+export interface FormField {
+  kind: FormFieldKind;
+  label: string;
+  required?: boolean;
+}
+
+/** Value-free description of the login step currently visible in the browser. */
+export interface FormState {
+  stage: FormStage;
+  /** Exact web origin (scheme + host + port), or empty when the address is shown in the page image. */
+  origin: string;
+  /** Fillable fields visible on this step (never includes values). */
+  fields: FormField[];
+  /** Generic guidance for the current step (never raw page secrets). */
+  hint?: string;
+  canSubmit?: boolean;
+}
+
+export interface FormSubmitValue {
+  kind: FormFieldKind;
+  value: string;
 }
 
 /** The phone's usable screen area in CSS pixels. The bridge clamps every value. */
@@ -172,6 +200,8 @@ export type ClientMessage =
   | { type: 'resize'; width: number; height: number }
   | { type: 'unwatch' }
   | { type: 'inspect-controls'; inspectionId: string; includeFrames?: boolean }
+  | { type: 'inspect-form' }
+  | { type: 'form-submit'; submitId: string; values: FormSubmitValue[]; expectedOrigin?: string }
   | { type: 'focus'; snapshotId: string; controlId: string }
   | { type: 'navigate'; direction: NavigationDirection; navigationId: string }
   | { type: 'click'; x: number; y: number }
@@ -185,6 +215,8 @@ export type ServerMessage =
   | (FrameHeader & { data: string })
   | { type: 'navigated'; requestId: string; navigationId: string; frameEpoch: string; ok: boolean; message?: string }
   | { type: 'controls'; requestId: string; inspectionId: string; snapshot: PageControlsSnapshot }
+  | { type: 'form-state'; requestId: string; state: FormState }
+  | { type: 'form-result'; requestId: string; submitId: string; ok: boolean; message?: string; state: FormState }
   | { type: 'focused'; requestId: string; snapshotId: string; controlId: string }
   | { type: 'editable'; requestId: string; editable: boolean; kind?: EditableKind }
   | { type: 'tabs'; requestId: string; tabs: BrowserTab[] }

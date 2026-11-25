@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 const ownerToken = 'pairing-ui-owner-secret';
 const agentToken = 'pairing-ui-agent-secret';
@@ -250,6 +251,7 @@ describe('pairing and onboarding', () => {
       await page.getByRole('button', { name: 'Done', exact: true }).click();
       await page.getByRole('button', { name: /Live typing fixture/ }).click();
       await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
+      await switchToLiveBrowser(page);
       const image = page.locator('.remote-screen img');
       await image.waitFor();
       // The remote page is laid out for this screen: full width, sharp, and using nearly all of the height.

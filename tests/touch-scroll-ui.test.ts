@@ -6,6 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { openBrowser, type BrowserFactory } from '../packages/bridge/src/browser';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startTouchLoginFixture, touchFixtureCredentials } from './fixtures/touch-login-site';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-touch-owner'; const agentToken = 'synthetic-touch-agent';
 type Point = { x: number; y: number };
@@ -57,7 +58,7 @@ describe('trusted touch scrolling through the phone interface', () => {
       const request = await client.create({ agent: 'Touch login fixture', title: 'Synthetic touch sign-in', url: site.loginUrl, ttlSeconds: 120 });
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: ownerToken })}`);
       await page.getByRole('button', { name: /Touch login fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
-      await page.locator('.remote-screen img').waitFor(); await expect.poll(() => site.formReadyCount).toBe(1);
+      await switchToLiveBrowser(page); await expect.poll(() => site.formReadyCount).toBe(1);
       let box = await imageBox(page); await tap(cdp, mapped(box, { x: 195, y: 40 })); await expect.poll(() => site.tapCount).toBe(1);
       box = await imageBox(page); const localBefore = await page.locator('.detail-section').evaluate(element => element.scrollTop);
       await swipe(cdp, mapped(box, { x: 195, y: 280 }), mapped(box, { x: 195, y: 120 }));

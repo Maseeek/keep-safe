@@ -10,8 +10,8 @@ export interface X11Input {
   button(button: number, down: boolean): Promise<void>;
   /** Presses and releases one named key, such as `Return` or `Tab`, with modifiers held. */
   key(keysym: number, modifiers?: number[]): Promise<void>;
-  /** Types text character by character as real key presses. */
-  type(text: string): Promise<void>;
+  /** Types text character by character as real key presses. Optional `paceMs` adds slight human-like jitter. */
+  type(text: string, options?: { paceMs?: number }): Promise<void>;
   /** Waits until the display server has handled everything sent so far. */
   sync(): Promise<void>;
   close(): void;
@@ -177,7 +177,20 @@ export async function connectX11(display: number, cookie: Buffer, timeoutMs = 50
     async move(x, y) { fake(6, 0, Math.round(x), Math.round(y)); },
     async button(button, down) { fake(down ? 4 : 5, button); },
     async key(keysym, modifiers) { await press(keysym, modifiers); await sync(); },
-    async type(text) { for (const character of text) await press(keysymFor(character)); await sync(); },
+    async type(text, options) {
+      const chars = [...text];
+      const maxDelay = options?.paceMs && chars.length > 0 ? Math.min(options.paceMs, Math.max(4, Math.floor(600 / chars.length))) : 0;
+      const minDelay = maxDelay > 0 ? Math.max(2, Math.floor(maxDelay * 0.45)) : 0;
+      for (const character of chars) {
+        await press(keysymFor(character));
+        if (maxDelay > 0) {
+          await sync();
+          const wait = minDelay + Math.floor(Math.random() * Math.max(1, maxDelay - minDelay + 1));
+          await new Promise<void>(resolve => { setTimeout(resolve, wait); });
+        }
+      }
+      await sync();
+    },
     sync,
     close() { socket.destroy(); },
   };

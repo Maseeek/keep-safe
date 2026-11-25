@@ -8,7 +8,7 @@ import { createProfile, launchSignInChrome, recordOwner, removeProfile } from '.
 import { connectX11, keysyms, xauthority, type X11Input } from './x11';
 import { findAccessibilityTools, startFocusWatch, type AccessibilityTools, type FocusWatch } from './atspi';
 import type { BrowserFrame, BrowserSession, FocusState } from './browser';
-import type { NavigationDirection, ViewportRequest } from '../../shared/src/protocol';
+import type { FormState, FormSubmitValue, NavigationDirection, ViewportRequest } from '../../shared/src/protocol';
 
 /** The programs a desktop sign-in needs. Xvfb keeps the display hidden;
  * Xephyr shows it as a window on the computer's own screen. */
@@ -213,6 +213,18 @@ export async function openDesktopSession(input: {
     if (!focus) { await action(); return undefined; }
     return focus.after(action);
   };
+  const formFromFocus = (state: FocusState | undefined): FormState => {
+    if (!state?.editable) return { stage: 'browser', origin: '', fields: [] };
+    if (state.kind === 'password') return { stage: 'credentials', origin: '', fields: [{ kind: 'password', label: 'Password' }], canSubmit: true };
+    if (state.kind === 'numeric') return { stage: 'otp', origin: '', fields: [{ kind: 'otp', label: 'Verification code' }], hint: 'Enter the verification code sent to you.', canSubmit: true };
+    if (state.kind === 'email' || state.kind === 'text') return {
+      stage: 'credentials',
+      origin: '',
+      fields: [{ kind: 'email', label: 'Email or username' }, { kind: 'password', label: 'Password' }],
+      canSubmit: true,
+    };
+    return { stage: 'browser', origin: '', fields: [] };
+  };
 
   const session: BrowserSession = {
     get cdpUrl() { return managed?.cdpUrl; },
@@ -300,6 +312,53 @@ export async function openDesktopSession(input: {
       } else throw new Error('This browser takes taps, scrolling and typing.');
     },
     releasePointers() { if (managed) return managed.releasePointers?.(); return release(); },
+    async inspectForm() {
+      if (managed?.inspectForm) return managed.inspectForm();
+      signIn();
+      if (!focus) return { stage: 'browser', origin: '', fields: [] };
+      return formFromFocus(await focus.current());
+    },
+    async submitForm(values: FormSubmitValue[]) {
+      if (managed?.submitForm) return managed.submitForm(values);
+      const display = signIn();
+      if (!focus) return { ok: false, message: 'Switch to the live browser to sign in here.', state: { stage: 'browser', origin: '', fields: [] } };
+      await release();
+      const first = await focus.current();
+      if (!first?.editable) return { ok: false, message: 'No sign-in field is focused yet. Switch to the live browser to tap it.', state: formFromFocus(first) };
+      const pick = (...kinds: FormSubmitValue['kind'][]) => values.find(item => kinds.includes(item.kind) && item.value.length > 0)?.value;
+      const typeAndEnter = async (value: string) => {
+        await display.key(keysyms.a, [keysyms.ControlL]);
+        await display.key(keysyms.BackSpace);
+        await display.type(value, { paceMs: 24 });
+        return focusAfter(() => display.key(keysyms.Return), );
+      };
+      if (first.kind === 'password') {
+        const password = pick('password');
+        if (!password) return { ok: false, message: 'Enter your password first.', state: formFromFocus(first) };
+        const next = await typeAndEnter(password);
+        return { ok: true, state: formFromFocus(next) };
+      }
+      if (first.kind === 'numeric') {
+        const code = pick('otp', 'text');
+        if (!code) return { ok: false, message: 'Enter the verification code first.', state: formFromFocus(first) };
+        const next = await typeAndEnter(code);
+        return { ok: true, state: formFromFocus(next) };
+      }
+      const user = pick('email', 'username', 'text');
+      const password = pick('password');
+      if (!user) return { ok: false, message: 'Enter your email or username first.', state: formFromFocus(first) };
+      let next = await typeAndEnter(user);
+      // Two-step sign-in (e.g. Google): wait for focus to land on a confirmed password field before typing password.
+      if (password) {
+        const deadline = Date.now() + 3500;
+        while ((!next?.editable || next.kind !== 'password') && Date.now() < deadline && !closing && !managed) {
+          await new Promise<void>(resolve => { setTimeout(resolve, 250); });
+          next = await focus.current();
+        }
+        if (next?.editable && next.kind === 'password') next = await typeAndEnter(password);
+      }
+      return { ok: true, state: formFromFocus(next) };
+    },
     async navigate(direction: NavigationDirection) {
       if (managed) {
         if (!managed.navigate) throw new Error('Navigation is unavailable.');

@@ -6,6 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
 import { serverMessage } from './helpers/socket-frames';
+import { switchToLiveBrowser } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-controls-owner';
 const agentToken = 'synthetic-controls-agent';
@@ -29,7 +30,7 @@ describe('page controls in the mobile app', () => {
       await page.getByText('Bridge connected', { exact: true }).waitFor();
       await page.getByRole('button', { name: /Control navigation test/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
-      await page.locator('.remote-screen img').waitFor();
+      await switchToLiveBrowser(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       await page.getByRole('button', { name: 'Focus Email', exact: true }).click();
       await page.getByText('Focus confirmed on Email.', { exact: true }).waitFor();

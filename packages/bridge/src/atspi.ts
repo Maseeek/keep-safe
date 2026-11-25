@@ -251,6 +251,8 @@ export interface FocusWatch {
   /** Resolves with the focus after an action: once focus moves, or after
    * `settleMs` with focus unchanged, Chrome is asked which object has focus. */
   after<T>(action: () => Promise<T>, settleMs?: number): Promise<FocusState | undefined>;
+  /** Returns the currently focused control's editable kind without performing an action. */
+  current(): Promise<FocusState | undefined>;
   close(): Promise<void>;
 }
 
@@ -382,6 +384,15 @@ export async function startFocusWatch(tools: AccessibilityTools, folder: string,
         if (heard) return current;
         // No event: ask Chrome, but never hold the phone's input for long. On
         // a page with tens of thousands of elements the walk can take seconds.
+        const start = moves;
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        const now = await Promise.race([askOnce(), new Promise<undefined>(resolve => { deadline = setTimeout(() => resolve(undefined), 250); deadline.unref(); })]);
+        clearTimeout(deadline);
+        if (!now) return current;
+        if (moves === start) current = now;
+        return now;
+      },
+      async current() {
         const start = moves;
         let deadline: ReturnType<typeof setTimeout> | undefined;
         const now = await Promise.race([askOnce(), new Promise<undefined>(resolve => { deadline = setTimeout(() => resolve(undefined), 250); deadline.unref(); })]);

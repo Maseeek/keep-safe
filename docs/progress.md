@@ -686,3 +686,19 @@ The owner tested 0.7.1 on their phone: the keyboard did not open on Google's ema
 
 Not verified: any of this on the owner's phone.
 
+## Form-first "Fill & Confirm" login and 2FA escalation, 25 November 2026 (0.9.0)
+
+Tracked in GitHub issues #16–#23; implemented #16 first with Pixel 7 / Android Autofill semantics (#23) factored into the design.
+
+- Added value-free form detection and trusted form submission (`packages/bridge/src/login-form.ts`, `packages/shared/src/protocol.ts`, `packages/bridge/src/browser.ts`, `packages/bridge/src/desktop.ts`, `packages/bridge/src/x11.ts`, `packages/bridge/src/server.ts`). Version bumped to `0.9.0`.
+- The bridge detects `credentials`, `otp`, `challenge` (push 2FA), `signed-in`, and `browser` stages without reading input values or leaking raw page text. Submitted values are typed with real trusted keystrokes (`isTrusted: true`, slight randomized human-like cadence via CDP keyboard events or XTEST in desktop sign-in), verified against `expectedOrigin`, and restricted so password values only enter confirmed password inputs. Handles two-step Email → Next → Password flows automatically.
+- Added `apps/web/src/LoginFormCard.tsx` and wired it into `apps/web/src/BrowserPanel.tsx` and `apps/web/src/workspace.ts`:
+  - Opens **Sign-in form** first whenever a login form is detected, with a **Live browser** tab to switch anytime (without stealing vertical height or letterboxing the live browser view).
+  - Always mounts visible `<form method="post" autocomplete="on">` with `autocomplete="username"` and `autocomplete="current-password"` plus a **Copy site** chip so Android / Pixel 7 Gboard password manager autofill triggers reliably, and `autocomplete="one-time-code"` + `inputmode="numeric"` for OTP 2FA.
+  - Supports 1-tap **Unlock with passkey & sign in** for saved logins in the phone's WebAuthn PRF vault, and opt-in saving during sign-in.
+  - Push-2FA challenges open the live browser automatically with a status banner; signed-in transitions show a confirmation card before explicit handback.
+- Added bridge and built-app Playwright tests (`packages/bridge/test/login-form.test.ts`, `tests/form-first-ui.test.ts`) and updated live-browser UI tests to switch to **Live browser** when testing raw remote controls on login fixtures.
+- Verified: `npm run typecheck`, `npm run build:web`, and full `npm test` pass — 57 passed, 2 skipped (on-request Chrome desktop files), 466 tests passed, 7 skipped, 0 failed.
+
+Not verified: physical Pixel 7 password manager autofill popup / Gboard strip, physical WebAuthn PRF passkey unlock, and live Google desktop sign-in through the guided form.
+
