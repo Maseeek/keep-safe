@@ -211,7 +211,7 @@ export async function createBridge(options: BridgeOptions) {
   /** Where the owner signs in to that Chrome: on a private display with no remote debugging, or in the window itself. */
   const desktopSignIn = managedBrowser === 'chrome' ? await findDesktopTools() : undefined;
   const computerName = options.computerName?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
-  const info: BridgeInfo = { name: 'Keep Safe', version: '0.9.0', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, frameAcks: true, tabsAvailable: true, selectionAvailable: true, formFillAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
+  const info: BridgeInfo = { name: 'Keep Safe', version: '0.9.1', browserAvailable: available, pushEnabled: !!options.vapid, pushManagementAvailable: true, historyRetentionHours, pageControlsAvailable: true, navigationAvailable: true, pairingCodesAvailable: true, liveViewAvailable: true, streamAvailable: true, frameAcks: true, tabsAvailable: true, selectionAvailable: true, formFillAvailable: true, deviceLifetimeDays: DEVICE_LIFETIME_DAYS, ...(computerName ? { computerName } : {}), ...(options.vapid ? { vapidPublicKey: options.vapid.publicKey } : {}) };
   const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   for (const value of [options.appUrl, options.publicUrl, ...(options.extraOrigins ?? [])]) if (value) origins.add(new URL(value).origin);
   // One-time codes let a phone pair without ever seeing the owner token. They
@@ -455,7 +455,8 @@ export async function createBridge(options: BridgeOptions) {
   function startFrames(entry: Entry, client: Client): NonNullable<Client['frames']> {
     const feed = feedFrames(entry, client);
     const stopTabs = followTabs(entry, client);
-    return { get live() { return feed.live; }, stop() { stopTabs(); feed.stop(); } };
+    const stopForm = entry.browser?.onFormState?.(state => pushFormState(entry, client, state)) ?? (() => {});
+    return { get live() { return feed.live; }, stop() { stopForm(); stopTabs(); feed.stop(); } };
   }
   function feedFrames(entry: Entry, client: Client): NonNullable<Client['frames']> {
     client.idle = 0; client.tick = 0;

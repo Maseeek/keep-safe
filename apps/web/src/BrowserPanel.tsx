@@ -12,6 +12,7 @@ import {
   ClipboardPaste,
   Clock3,
   Copy,
+  Ellipsis,
   KeyRound,
   TextSelect,
   ExternalLink,
@@ -112,6 +113,7 @@ export function BrowserPanel({
   const [text, setText] = useState("");
   const [showKeyboard, setShowKeyboard] = useState(false);
   const [showMoreKeys, setShowMoreKeys] = useState(false);
+  const [showMoreTools, setShowMoreTools] = useState(false);
   const [demoStep, setDemoStep] = useState(0);
   const [denyOpen, setDenyOpen] = useState(false);
   const [showText, setShowText] = useState(false);
@@ -198,7 +200,7 @@ export function BrowserPanel({
       // The on-screen keyboard and rotation animate through many sizes.
       // Open tool panels and the window strip borrow space from the page; that
       // is not a new screen size, and resizing would re-lay out the website.
-      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form, .window-tabs, .view-mode-switch")) apply(); }, 250);
+      else timer = setTimeout(() => { if (!keyboard.current?.focused() && !panel.current?.querySelector(".tool-tray .page-control-content, .tool-tray .more-browser-keys, .tool-tray .remote-text-form, .tool-tray .credential-form, .tool-tray .more-tools-sheet, .window-tabs, .view-mode-switch")) apply(); }, 250);
     };
     measure(true);
     const observer = new ResizeObserver(() => measure(false));
@@ -253,6 +255,7 @@ export function BrowserPanel({
     setDemoStep(0);
     setShowKeyboard(false);
     setShowMoreKeys(false);
+    setShowMoreTools(false);
     setDenyOpen(false);
     setShowOrigin(false);
     setShowText(false);
@@ -295,6 +298,7 @@ export function BrowserPanel({
       setToolTyping(false);
       setShowKeyboard(false);
       setShowMoreKeys(false);
+      setShowMoreTools(false);
       setShowCredentials(false);
       setSelecting(false);
     };
@@ -468,7 +472,7 @@ export function BrowserPanel({
   };
 
   const liveNow = live && !finished && !expired;
-  const toolsOpen = showKeyboard || showMoreKeys || showCredentials;
+  const toolsOpen = showKeyboard || showMoreKeys || showCredentials || showMoreTools;
   const addressButton = (
           <button
       className={`address${active && liveFrame && !isDemo && moved ? " is-moved" : ""}`}
@@ -591,16 +595,6 @@ export function BrowserPanel({
                 <button className="window-tab-close" disabled={!canInput} aria-label={`Close ${name}`} onClick={() => workspace.send({ type: "close-tab", tabId: tab.id })}><X size={15} aria-hidden="true" /></button>
               </span>;
             })}
-          </div>
-        ) : null}
-        {active && !expired && !isDemo && !workspace.browserPaused && !showingForm && workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
-          <div className="website-navigation" role="group" aria-label="Website navigation">
-            <span>Website navigation</span>
-            <div>
-              <button aria-label="Back in the website" disabled={!canNavigate} onClick={() => navigate("back")}><ArrowLeft size={16} aria-hidden="true" /> Back</button>
-              <button aria-label="Forward in the website" disabled={!canNavigate} onClick={() => navigate("forward")}><ArrowRight size={16} aria-hidden="true" /> Forward</button>
-              <button aria-label="Reload website" disabled={!canNavigate} onClick={() => navigate("reload")}><RotateCw size={15} aria-hidden="true" /> Reload</button>
-            </div>
           </div>
         ) : null}
         {finished || expired ? (
@@ -764,6 +758,55 @@ export function BrowserPanel({
           ) : null}
           <div className="tool-tray">
             <div className="tool-slot" ref={setTray} />
+            {showMoreTools ? (
+              <div className="more-tools-sheet" id={`more-tools-${request.id}`} role="group" aria-label="More browser tools">
+                <div className="more-tools-row">
+                  {hasGuidedForm ? (
+                    <button type="button" className="button button-light button-small" onClick={() => { setShowMoreTools(false); setManualBrowser(false); setShowCredentials(false); setShowKeyboard(false); }}>
+                      <LockKeyhole size={15} aria-hidden="true" /> Sign-in form
+                    </button>
+                  ) : null}
+                  <button className="button button-light button-small" disabled={keyInputBlocked} onClick={() => { void paste(); }}
+                    aria-label="Paste this device's clipboard into the page">
+                    <ClipboardPaste size={16} aria-hidden="true" /> Paste
+                  </button>
+                  <button
+                    className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
+                    onClick={() => { if (!showKeyboard && showCredentials) { clearLocalInput(); setShowCredentials(false); } setShowKeyboard(!showKeyboard); }}
+                    aria-expanded={showKeyboard}
+                    aria-controls={showKeyboard ? "remote-text-form" : undefined}
+                  >
+                    <Keyboard size={16} />
+                    Type text
+                  </button>
+                  {canCopy ? <>
+                    <button className={`button button-light button-small ${selecting ? "selected" : ""}`} aria-pressed={selecting} disabled={!canInput}
+                      aria-label={selecting ? "Stop selecting text" : "Select text on the page by dragging"} onClick={() => { setSelecting(!selecting); setToolNotice(selecting ? "" : "Drag across text on the page to select it, then choose Copy."); }}>
+                      <TextSelect size={16} aria-hidden="true" /> Select
+                    </button>
+                    <button className="button button-light button-small" disabled={!canInput} onClick={() => { void copy(); }} aria-label="Copy the selected text to this device">
+                      <Copy size={16} aria-hidden="true" /> Copy
+                    </button>
+                  </> : null}
+                  <button
+                    className={`button button-light button-small ${showMoreKeys ? "selected" : ""}`}
+                    aria-expanded={showMoreKeys}
+                    aria-controls={showMoreKeys ? moreKeysId : undefined}
+                    onClick={() => setShowMoreKeys(!showMoreKeys)}
+                  >
+                    More keys <ChevronDown size={15} aria-hidden="true" className={showMoreKeys ? "more-keys-chevron expanded" : "more-keys-chevron"} />
+                  </button>
+                  {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} tray={tray} /> : null}
+                </div>
+                <div className="keyboard-keys" role="group" aria-label="Common browser controls">
+                  <button title="Press Tab in browser" aria-label="Press Tab in browser" onClick={() => workspace.send({ type: "key", key: "Tab" })} disabled={!canInput}>Tab</button>
+                  <button title="Press Enter in browser" aria-label="Press Enter in browser" onClick={() => workspace.send({ type: "key", key: "Enter" })} disabled={keyInputBlocked}>&#x21b5;</button>
+                  <button title="Press Backspace in browser" aria-label="Press Backspace in browser" onClick={() => workspace.send({ type: "key", key: "Backspace" })} disabled={keyInputBlocked}>&#x232b;</button>
+                  <button title="Scroll browser up" aria-label="Scroll browser up" onClick={() => workspace.send({ type: "scroll", deltaX: 0, deltaY: -400 })} disabled={!canInput}><ArrowUp size={15} /></button>
+                  <button title="Scroll browser down" aria-label="Scroll browser down" onClick={() => workspace.send({ type: "scroll", deltaX: 0, deltaY: 400 })} disabled={!canInput}><ArrowDown size={15} /></button>
+                </div>
+              </div>
+            ) : null}
           {showMoreKeys ? (
               <div className="more-browser-keys" id={moreKeysId} role="group" aria-label="More browser keys">
                 <p>Send a key to the browser’s selected control. The scroll buttons above move the page.</p>
@@ -917,100 +960,34 @@ export function BrowserPanel({
               </form>
             ) : null}
           </div>
-          <div className="remote-toolbar">
-            <div className="remote-toolbar-actions">
-              {hasGuidedForm ? (
-                <button type="button" className="button button-light button-small" onClick={() => { setManualBrowser(false); setShowCredentials(false); setShowKeyboard(false); }}>
-                  <LockKeyhole size={15} aria-hidden="true" /> Sign-in form
-                </button>
-              ) : null}
+          <div className="remote-toolbar browser-dock">
+            {workspace.info?.navigationAvailable && (workspace.navigationAvailable || (!liveFrame && !workspace.navigationBusy)) ? (
+              <div className="dock-nav" role="group" aria-label="Website navigation">
+                <button className="icon-button" aria-label="Back in the website" disabled={!canNavigate} onClick={() => navigate("back")}><ArrowLeft size={18} aria-hidden="true" /></button>
+                <button className="icon-button" aria-label="Forward in the website" disabled={!canNavigate} onClick={() => navigate("forward")}><ArrowRight size={18} aria-hidden="true" /></button>
+                <button className="icon-button" aria-label="Reload website" disabled={!canNavigate} onClick={() => navigate("reload")}><RotateCw size={16} aria-hidden="true" /></button>
+              </div>
+            ) : null}
+            <div className="remote-toolbar-actions dock-actions">
               <LiveKeyboard ref={keyboard} enabled={canInput && !workspace.focusBlocked} wanted={!!target?.editable && !showCredentials} kind={target?.kind}
                 send={workspace.send} onActive={setTyping} />
               <button ref={passwordsTrigger} className={`button button-light button-small ${showCredentials ? "selected" : credentialSuggested ? "is-suggested" : ""}`} aria-expanded={showCredentials}
                 aria-controls={showCredentials ? "credential-form" : undefined}
+                aria-label="Passwords"
                 // Keep focus steady on press so switching from LiveKeyboard does not drop the keyboard before click.
                 onMouseDown={event => event.preventDefault()}
                 onClick={toggleCredentials}>
-                <KeyRound size={16} aria-hidden="true" /> Passwords
-              </button>
-              <button className="button button-light button-small" disabled={keyInputBlocked} onClick={() => { void paste(); }}
-                aria-label="Paste this device's clipboard into the page">
-                <ClipboardPaste size={16} aria-hidden="true" /> Paste
+                <KeyRound size={16} aria-hidden="true" /> <span className="dock-label">Passwords</span>
               </button>
               <button
-                className={`button button-light button-small ${showKeyboard ? "selected" : ""}`}
-                onClick={() => { if (!showKeyboard && showCredentials) { clearLocalInput(); setShowCredentials(false); } setShowKeyboard(!showKeyboard); }}
-                aria-expanded={showKeyboard}
-                aria-controls={showKeyboard ? "remote-text-form" : undefined}
+                type="button"
+                className={`icon-button dock-more${showMoreTools ? " selected" : ""}`}
+                aria-label="More browser tools"
+                aria-expanded={showMoreTools}
+                aria-controls={showMoreTools ? `more-tools-${request.id}` : undefined}
+                onClick={() => setShowMoreTools(value => !value)}
               >
-                <Keyboard size={16} />
-                Type text
-              </button>
-              {canCopy ? <>
-                <button className={`button button-light button-small ${selecting ? "selected" : ""}`} aria-pressed={selecting} disabled={!canInput}
-                  aria-label={selecting ? "Stop selecting text" : "Select text on the page by dragging"} onClick={() => { setSelecting(!selecting); setToolNotice(selecting ? "" : "Drag across text on the page to select it, then choose Copy."); }}>
-                  <TextSelect size={16} aria-hidden="true" /> Select
-                </button>
-                <button className="button button-light button-small" disabled={!canInput} onClick={() => { void copy(); }} aria-label="Copy the selected text to this device">
-                  <Copy size={16} aria-hidden="true" /> Copy
-                </button>
-              </> : null}
-              <button
-                className={`button button-light button-small ${showMoreKeys ? "selected" : ""}`}
-                aria-expanded={showMoreKeys}
-                aria-controls={showMoreKeys ? moreKeysId : undefined}
-                onClick={() => setShowMoreKeys(!showMoreKeys)}
-              >
-                More keys <ChevronDown size={15} aria-hidden="true" className={showMoreKeys ? "more-keys-chevron expanded" : "more-keys-chevron"} />
-              </button>
-              {workspace.info?.pageControlsAvailable ? <ControlNavigator key={request.id} workspace={workspace} requestId={request.id} enabled={canInput && !workspace.focusBusy} onFocusRequested={() => setText("")} tray={tray} /> : null}
-            </div>
-            <div className="keyboard-keys" role="group" aria-label="Common browser controls">
-              <button
-                title="Press Tab in browser"
-                aria-label="Press Tab in browser"
-                onClick={() => workspace.send({ type: "key", key: "Tab" })}
-                disabled={!canInput}
-              >
-                Tab
-              </button>
-              <button
-                title="Press Enter in browser"
-                aria-label="Press Enter in browser"
-                onClick={() => workspace.send({ type: "key", key: "Enter" })}
-                disabled={keyInputBlocked}
-              >
-                &#x21b5;
-              </button>
-              <button
-                title="Press Backspace in browser"
-                aria-label="Press Backspace in browser"
-                onClick={() =>
-                  workspace.send({ type: "key", key: "Backspace" })
-                }
-                disabled={keyInputBlocked}
-              >
-                &#x232b;
-              </button>
-              <button
-                title="Scroll browser up"
-                aria-label="Scroll browser up"
-                onClick={() =>
-                  workspace.send({ type: "scroll", deltaX: 0, deltaY: -400 })
-                }
-                disabled={!canInput}
-              >
-                <ArrowUp size={15} />
-              </button>
-              <button
-                title="Scroll browser down"
-                aria-label="Scroll browser down"
-                onClick={() =>
-                  workspace.send({ type: "scroll", deltaX: 0, deltaY: 400 })
-                }
-                disabled={!canInput}
-              >
-                <ArrowDown size={15} />
+                <Ellipsis size={19} aria-hidden="true" />
               </button>
             </div>
           </div>

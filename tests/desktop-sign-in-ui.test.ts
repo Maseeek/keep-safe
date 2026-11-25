@@ -5,7 +5,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { findDesktopTools } from '../packages/bridge/src/desktop';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const tools = await findDesktopTools();
 // The owner's sign-in on a private display, from the built phone app. Opens
@@ -50,6 +50,7 @@ describe.skipIf(process.env.KEEP_SAFE_BROWSER !== 'chrome' || !tools)('desktop s
       }, { timeout: 20_000, interval: 500 }).toBe(true);
       expect(await keyboard.getAttribute('inputmode')).toBe('email');
       await page.keyboard.type('fixture@example.invalid');
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Press Tab in browser' }).click();
       await page.getByRole('button', { name: /Passwords/ }).click();
       await page.locator('#credential-password').fill('synthetic-test-only');

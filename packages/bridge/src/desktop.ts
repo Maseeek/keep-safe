@@ -208,22 +208,25 @@ export async function openDesktopSession(input: {
    * moved instead of a full step for every few pixels. */
   const carry = { x: 0, y: 0, at: 0, direction: { x: 0, y: 0 }, moved: { x: false, y: false } };
   const restart = () => { carry.x = carry.y = 0; carry.moved.x = carry.moved.y = false; };
+  /** Set once the owner submits credentials in guided form mode. */
+  let formSubmitted = false;
   /** Clicks and keys that can move focus report it, so the phone raises its keyboard for a text field. */
-  const focusAfter = async (action: () => Promise<void>): Promise<FocusState | undefined> => {
+  const focusAfter = async (action: () => Promise<void>, settleMs?: number): Promise<FocusState | undefined> => {
     if (!focus) { await action(); return undefined; }
-    return focus.after(action);
+    return focus.after(action, settleMs);
   };
+  const initialCredentialsState = (): FormState => ({
+    stage: 'credentials',
+    origin: '',
+    fields: [{ kind: 'email', label: 'Email or username' }, { kind: 'password', label: 'Password' }],
+    canSubmit: true,
+  });
   const formFromFocus = (state: FocusState | undefined): FormState => {
-    if (!state?.editable) return { stage: 'browser', origin: '', fields: [] };
+    if (!state?.editable) return formSubmitted ? { stage: 'browser', origin: '', fields: [] } : initialCredentialsState();
     if (state.kind === 'password') return { stage: 'credentials', origin: '', fields: [{ kind: 'password', label: 'Password' }], canSubmit: true };
     if (state.kind === 'numeric') return { stage: 'otp', origin: '', fields: [{ kind: 'otp', label: 'Verification code' }], hint: 'Enter the verification code sent to you.', canSubmit: true };
-    if (state.kind === 'email' || state.kind === 'text') return {
-      stage: 'credentials',
-      origin: '',
-      fields: [{ kind: 'email', label: 'Email or username' }, { kind: 'password', label: 'Password' }],
-      canSubmit: true,
-    };
-    return { stage: 'browser', origin: '', fields: [] };
+    if (state.kind === 'email' || state.kind === 'text') return initialCredentialsState();
+    return formSubmitted ? { stage: 'browser', origin: '', fields: [] } : initialCredentialsState();
   };
 
   const session: BrowserSession = {
@@ -315,49 +318,91 @@ export async function openDesktopSession(input: {
     async inspectForm() {
       if (managed?.inspectForm) return managed.inspectForm();
       signIn();
-      if (!focus) return { stage: 'browser', origin: '', fields: [] };
+      if (!focus) return formSubmitted ? { stage: 'browser', origin: '', fields: [] } : initialCredentialsState();
       return formFromFocus(await focus.current());
+    },
+    onFormState(listener) {
+      if (managed?.onFormState) return managed.onFormState(listener);
+      if (!focus) return () => {};
+      return focus.onChange(state => listener(formFromFocus(state)));
     },
     async submitForm(values: FormSubmitValue[]) {
       if (managed?.submitForm) return managed.submitForm(values);
       const display = signIn();
-      if (!focus) return { ok: false, message: 'Switch to the live browser to sign in here.', state: { stage: 'browser', origin: '', fields: [] } };
+      const watch = focus;
+      if (!watch) return { ok: false, message: 'Switch to the live browser to sign in here.', state: { stage: 'browser', origin: '', fields: [] } };
       await release();
-      const first = await focus.current();
-      if (!first?.editable) return { ok: false, message: 'No sign-in field is focused yet. Switch to the live browser to tap it.', state: formFromFocus(first) };
+      // Give Chrome a moment to finish loading & autofocusing; if still unfocused, click into the page and Tab to the first field.
+      let first = await watch.current();
+      const waitDeadline = Date.now() + 2000;
+      while (!first?.editable && Date.now() < waitDeadline && !closing && !managed) {
+        await new Promise<void>(resolve => { setTimeout(resolve, 200); });
+        first = await watch.current();
+      }
+      if (!first?.editable) {
+        for (let step = 0; step < 6 && !first?.editable && !closing && !managed; step++) {
+          first = await focusAfter(() => display.key(keysyms.Tab), 250);
+        }
+      }
+      if (!first?.editable) {
+        formSubmitted = true;
+        return { ok: false, message: 'Tap the first field in the live browser, then try again or type there.', state: { stage: 'browser', origin: '', fields: [] } };
+      }
       const pick = (...kinds: FormSubmitValue['kind'][]) => values.find(item => kinds.includes(item.kind) && item.value.length > 0)?.value;
-      const typeAndEnter = async (value: string) => {
+      const typeValue = async (value: string) => {
         await display.key(keysyms.a, [keysyms.ControlL]);
         await display.key(keysyms.BackSpace);
         await display.type(value, { paceMs: 24 });
-        return focusAfter(() => display.key(keysyms.Return), );
+      };
+      const typeAndEnter = async (value: string) => {
+        await typeValue(value);
+        return focusAfter(() => display.key(keysyms.Return), 350);
+      };
+      const settleAfterSubmit = async (latest: FocusState | undefined) => {
+        formSubmitted = true;
+        await new Promise<void>(resolve => { setTimeout(resolve, 900); });
+        const after = (await watch.current()) ?? latest;
+        if (after?.editable && after.kind === 'numeric') return { stage: 'otp' as const, origin: '', fields: [{ kind: 'otp' as const, label: 'Verification code' }], hint: 'Enter the verification code sent to you.', canSubmit: true };
+        if (after?.editable && after.kind === 'password') return { stage: 'credentials' as const, origin: '', fields: [{ kind: 'password' as const, label: 'Password' }], canSubmit: true };
+        return { stage: 'browser' as const, origin: '', fields: [] };
       };
       if (first.kind === 'password') {
         const password = pick('password');
         if (!password) return { ok: false, message: 'Enter your password first.', state: formFromFocus(first) };
         const next = await typeAndEnter(password);
-        return { ok: true, state: formFromFocus(next) };
+        return { ok: true, state: await settleAfterSubmit(next) };
       }
       if (first.kind === 'numeric') {
         const code = pick('otp', 'text');
         if (!code) return { ok: false, message: 'Enter the verification code first.', state: formFromFocus(first) };
         const next = await typeAndEnter(code);
-        return { ok: true, state: formFromFocus(next) };
+        return { ok: true, state: await settleAfterSubmit(next) };
       }
       const user = pick('email', 'username', 'text');
       const password = pick('password');
       if (!user) return { ok: false, message: 'Enter your email or username first.', state: formFromFocus(first) };
-      let next = await typeAndEnter(user);
-      // Two-step sign-in (e.g. Google): wait for focus to land on a confirmed password field before typing password.
-      if (password) {
-        const deadline = Date.now() + 3500;
-        while ((!next?.editable || next.kind !== 'password') && Date.now() < deadline && !closing && !managed) {
-          await new Promise<void>(resolve => { setTimeout(resolve, 250); });
-          next = await focus.current();
-        }
-        if (next?.editable && next.kind === 'password') next = await typeAndEnter(password);
+      if (!password) {
+        const next = await typeAndEnter(user);
+        return { ok: true, state: await settleAfterSubmit(next) };
       }
-      return { ok: true, state: formFromFocus(next) };
+      // Handle both single-step (Username + Tab -> Password, e.g. GitHub) and
+      // two-step (Email + Enter -> wait for Password, e.g. Google) sign-ins.
+      await typeValue(user);
+      let next = await focusAfter(() => display.key(keysyms.Tab));
+      if (next?.editable && next.kind === 'password') {
+        next = await typeAndEnter(password);
+        return { ok: true, state: await settleAfterSubmit(next) };
+      }
+      // Not a password field on Tab: step back to the username field and submit Step 1.
+      await focusAfter(() => display.key(keysyms.Tab, [keysyms.ShiftL]));
+      next = await focusAfter(() => display.key(keysyms.Return), 350);
+      const deadline = Date.now() + 3500;
+      while ((!next?.editable || next.kind !== 'password') && Date.now() < deadline && !closing && !managed) {
+        await new Promise<void>(resolve => { setTimeout(resolve, 250); });
+        next = await watch.current();
+      }
+      if (next?.editable && next.kind === 'password') next = await typeAndEnter(password);
+      return { ok: true, state: await settleAfterSubmit(next) };
     },
     async navigate(direction: NavigationDirection) {
       if (managed) {

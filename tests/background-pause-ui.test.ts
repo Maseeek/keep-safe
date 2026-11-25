@@ -11,7 +11,7 @@ import { BridgeClient } from '../packages/mcp/src/client';
 import type { DevicePairResult, PageControlsSnapshot, ServerMessage } from '../packages/shared/src/protocol';
 import type { Workspace } from '../apps/web/src/workspace';
 import { backgroundFixtureCredentials, startBackgroundLoginFixture } from './fixtures/background-login-site';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const owner = 'synthetic-background-owner'; const agent = 'synthetic-background-agent';
 type HarnessWindow = Window & { backgroundWorkspace: Workspace; backgroundSockets: globalThis.WebSocket[] };
@@ -76,6 +76,7 @@ describe('explicit browser resume after mobile background pause', () => {
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: owner })}`);
       await page.getByRole('button', { name: /Background login fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open', exact: true }).click();
       await switchToLiveBrowser(page); await expect.poll(() => site.formReadyCount).toBe(1);
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Type text', exact: true }).click();
       const text = page.getByLabel('Tap a field in the browser, then send text'); await text.fill('synthetic-unsent-draft'); await page.getByLabel('Show text', { exact: true }).check();
       const beforePause = watches; expect(await visibility(page, true, width === 390)).toEqual({ empty: true, masked: true });
@@ -88,6 +89,7 @@ describe('explicit browser resume after mobile background pause', () => {
       expect(await page.locator('.remote-screen img').count()).toBe(0); expect(watches).toBe(beforePause);
       if (process.env.KEEP_SAFE_QA_SCREENSHOTS) { await mkdir('.keep-safe/qa', { recursive: true }); await page.screenshot({ path: `.keep-safe/qa/background-pause-${width}.png`, fullPage: true }); }
       await page.getByRole('button', { name: 'Resume browser', exact: true }).click(); await page.locator('.remote-screen img').waitFor();
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Type text', exact: true }).click();
       expect(watches).toBe(beforePause + 1); expect(await text.inputValue()).toBe(''); expect(await text.getAttribute('type')).toBe('password'); expect(await page.getByLabel('Show text', { exact: true }).isChecked()).toBe(false);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();

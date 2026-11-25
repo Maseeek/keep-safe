@@ -6,7 +6,7 @@ import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
 import { startLoginFixture } from './fixtures/login-site';
 import { serverMessage } from './helpers/socket-frames';
-import { switchToLiveBrowser } from './helpers/live-browser';
+import { switchToLiveBrowser, openMoreTools } from './helpers/live-browser';
 
 const ownerToken = 'synthetic-controls-owner';
 const agentToken = 'synthetic-controls-agent';
@@ -31,6 +31,7 @@ describe('page controls in the mobile app', () => {
       await page.getByRole('button', { name: /Control navigation test/ }).click();
       await page.getByRole('button', { name: 'Approve & open' }).click();
       await switchToLiveBrowser(page);
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();
       await page.getByRole('button', { name: 'Focus Email', exact: true }).click();
       await page.getByText('Focus confirmed on Email.', { exact: true }).waitFor();
@@ -97,6 +98,7 @@ describe('page controls in the mobile app', () => {
       await page.goto(`${bridge.url}/#${new URLSearchParams({ bridge: bridge.url, token: ownerToken })}`);
       await page.getByRole('button', { name: /Focus fixture/ }).click(); await page.getByRole('button', { name: 'Approve & open' }).click();
       await page.locator('.remote-screen img').waitFor();
+      await openMoreTools(page);
       await page.getByRole('button', { name: 'Type text', exact: true }).click();
       const input = page.getByLabel('Tap a field in the browser, then send text'); await input.fill('discard-before-focus');
       await page.getByRole('button', { name: 'Page controls', exact: true }).click();

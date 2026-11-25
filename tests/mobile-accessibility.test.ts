@@ -4,6 +4,7 @@ import { chromium, type Browser, type Locator } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBridge } from '../packages/bridge/src/server';
 import { BridgeClient } from '../packages/mcp/src/client';
+import { openMoreTools } from './helpers/live-browser';
 
 async function touchTarget(target: Locator) {
   await target.scrollIntoViewIfNeeded();
@@ -105,6 +106,8 @@ describe('mobile readability and keyboard access', () => {
       expect(await notice.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       expect((await notice.boundingBox())!.width).toBeLessThanOrEqual(320);
       await touchTarget(notice.getByRole('button', { name: 'Dismiss notification' }));
+      await touchTarget(page.getByRole('button', { name: 'More browser tools', exact: true }));
+      await openMoreTools(page);
       for (const name of ['Type text', 'Press Tab in browser', 'Press Enter in browser', 'Press Backspace in browser', 'Scroll browser up', 'Scroll browser down']) {
         await touchTarget(page.getByRole('button', { name, exact: true }));
       }
